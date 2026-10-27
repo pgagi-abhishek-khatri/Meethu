@@ -231,6 +231,7 @@ function useSettingsInternal() {
     parakeetModel,
     cohereModel,
     preferredLanguage,
+    keepLocalModelLoaded,
   } = store;
   // Every window runs this sync, and the main process stops the shared
   // llama-server from it, so it must see every scope's resolved local model.
@@ -266,6 +267,7 @@ function useSettingsInternal() {
         model: model || undefined,
         language: preferredLanguage || undefined,
         ...localServerPrefs,
+        keepLocalModelLoaded,
         policySettled,
       })
       .catch((err) =>
@@ -283,6 +285,7 @@ function useSettingsInternal() {
     cohereModel,
     preferredLanguage,
     localServerPrefs,
+    keepLocalModelLoaded,
     policySettled,
     signOuts,
   ]);

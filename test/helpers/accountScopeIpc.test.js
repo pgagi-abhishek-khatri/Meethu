@@ -66,6 +66,10 @@ Module._load = function loadWithMocks(request, parent, isMain) {
       return {
         get: () => tokenState.token,
         getState: () => ({ ...tokenState }),
+        clear: () => {
+          tokenState = { token: null, generation: tokenState.generation + 1 };
+          return { success: true, ...tokenState };
+        },
         subscribe: () => () => {},
       };
     }
@@ -125,6 +129,7 @@ test.before(() => {
 });
 
 test.after(() => {
+  fakeThis.metaActivation?.dispose?.();
   Module._load = originalLoad;
   fs.rmSync(userDataDirectory, { recursive: true, force: true });
 });
@@ -205,4 +210,42 @@ test("a sign-out in main stops connects without waiting for the renderer", async
     ["active-account-scope-changed", null],
     ["auth-token-state-changed", { generation: 8, hasToken: false }],
   ]);
+});
+
+test("meeting prompt retirement precedes scope mutation and skips a true no-op", async () => {
+  tokenState = { token: "meeting-test-token", generation: 20 };
+  const originalManager = fakeThis.windowManager;
+  const calls = [];
+  fakeThis.windowManager = {
+    retireMeetingNotificationScope: () => calls.push(databaseManager.activeAccountId),
+  };
+  databaseManager.activeAccountId = "old-account";
+  await setScope("meeting-account", 20);
+  assert.deepEqual(calls, ["old-account"]);
+  databaseManager.activeAccountId = "meeting-account";
+  await setScope("meeting-account", 20);
+  assert.deepEqual(calls, ["old-account"]);
+  handleAuthTokenChange({ token: "rotated", generation: 21 });
+  assert.deepEqual(calls, ["old-account", "meeting-account"]);
+  handleAuthTokenChange({ token: null, generation: 22 });
+  assert.deepEqual(calls, ["old-account", "meeting-account", "meeting-account"]);
+  fakeThis.windowManager = originalManager;
+});
+
+test("activation storage failure cannot prevent clearing the local bearer", async () => {
+  const manager = fakeThis.metaActivation;
+  fakeThis.metaActivation = {
+    close: async () => {
+      throw new Error("disk full");
+    },
+  };
+  tokenState = { token: "must-clear", generation: 30 };
+  try {
+    const result = await handlers.get("auth-clear-session")({ sender: {} });
+    assert.equal(result.success, true);
+    assert.equal(tokenState.token, null);
+    assert.equal(tokenState.generation, 31);
+  } finally {
+    fakeThis.metaActivation = manager;
+  }
 });

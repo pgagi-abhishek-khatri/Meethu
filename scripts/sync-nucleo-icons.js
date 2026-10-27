@@ -89,14 +89,20 @@ import * as Nucleo from "./nucleo";
 export type { IconComponent, IconProps } from "./createIcon";
 export {
   Bold,
+  ChevronsUpDown,
   Circle,
+  CopyRounded,
+  FolderRounded,
   Heading,
   Italic,
   List,
   ListChecks,
+  ListEnd,
   ListOrdered,
   Quote,
   Square,
+  SquareSlash,
+  SquareSparkle,
   Strikethrough,
   Table,
 } from "./primitives";

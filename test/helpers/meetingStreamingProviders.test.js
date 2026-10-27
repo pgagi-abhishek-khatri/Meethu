@@ -149,3 +149,35 @@ test("soniox-realtime resolves to the Soniox client and is allowed for meetings"
   assert.equal(STREAMING_CLIENT_BY_PROVIDER["soniox-realtime"], SonioxStreaming);
   assert.equal(ALLOWED_MEETING_PROVIDERS.has("soniox-realtime"), true);
 });
+
+test("connection identity follows key saves exactly when the token comes from a saved key", async () => {
+  const { STREAMING_CLIENT_BY_PROVIDER, getMeetingConnectionKey } = await load();
+  const { fetchRealtimeTokenForProvider } =
+    await import("../../src/helpers/realtimeTokenProviders.js");
+
+  for (const provider of Object.keys(STREAMING_CLIENT_BY_PROVIDER)) {
+    for (const mode of ["byok", "openwhispr"]) {
+      let readsSavedKey = false;
+      const savedKey = () => {
+        readsSavedKey = true;
+        return "key";
+      };
+      const options = { provider, mode };
+      await fetchRealtimeTokenForProvider(
+        provider,
+        {
+          environmentManager: new Proxy({}, { get: () => savedKey }),
+          proxyFetch: async () => ({ ok: true, json: async () => ({ token: "token" }) }),
+          postServerToken: async () => ({ token: "token", clientSecret: "token" }),
+          mintCortiToken: async () => ({ token: savedKey() }),
+        },
+        options
+      );
+      assert.equal(
+        getMeetingConnectionKey(options, 1) !== getMeetingConnectionKey(options, 2),
+        readsSavedKey,
+        `${provider} (${mode})`
+      );
+    }
+  }
+});

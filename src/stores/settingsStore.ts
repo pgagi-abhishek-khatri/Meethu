@@ -14,9 +14,13 @@ import type {
 } from "../types/electron";
 import type { CalendarAccount, MicrosoftCalendarAccount } from "../types/calendar";
 import { normalizeEmailDraftTarget, type EmailDraftTargetSetting } from "../utils/emailDraftTarget";
+import { normalizeToneStyles, type ToneStyles } from "../config/toneStyle";
 import { PROMPT_KIND_LIST, type PromptKind } from "../config/prompts/registry";
 import { sweepRetiredPromptOverrides } from "../config/retiredPrompts";
-import { sweepRetiredCloudModelSelections } from "../config/retiredCloudModels";
+import {
+  sweepRetiredCloudModelSelections,
+  type RetiredModelProvider,
+} from "../config/retiredCloudModels";
 import {
   deriveReasoningMode,
   buildReasoningScopePatches,
@@ -28,15 +32,17 @@ import {
   type InferenceScope,
   type InferenceScopeDefinition,
   type InferenceScopeStoreKeys,
+  usesCloudModelCatalog,
 } from "../config/inferenceScopes";
 import { normalizeChineseScriptPreference } from "../utils/chineseScript";
 import { adjustBedrockModelForRegion } from "../utils/bedrockRegions";
 import modelRegistryData from "../models/modelRegistryData.json";
 import { pickDefaultModelId } from "../models/providerDefaultModel";
 // Both are leaves: tinfoilModelCache imports only a type from ModelRegistry and
-// the switch store only zustand, so neither reopens the ModelRegistry cycle.
+// the switch store only zustand and a type, so neither reopens the ModelRegistry
+// cycle.
 import { readCachedTinfoilModels } from "../models/tinfoilModelCache";
-import { recordTinfoilModelSwitch } from "./tinfoilModelSwitchStore";
+import { recordRetiredModelSwitch } from "./retiredModelSwitchStore";
 import { MEETING_STREAMING_PROVIDER_IDS } from "../helpers/meetingTranscriptionRouting";
 import { STREAMING_ONLY_PROVIDERS } from "../helpers/transcriptionRoute";
 import {
@@ -149,7 +155,7 @@ function canonicalTranscriptionBaseUrl(providerId: string): string | null {
   );
 }
 
-function reasoningModelBelongsToProvider(providerId: string, modelId: string): boolean {
+export function reasoningModelBelongsToProvider(providerId: string, modelId: string): boolean {
   if (!modelId) return false;
   // Custom and OpenRouter ids are free-form; any remembered id is valid.
   // Tinfoil's registry entry is refreshed in place from its live catalog.
@@ -274,7 +280,9 @@ const BOOLEAN_SETTINGS = new Set([
   "assemblyAiStreaming",
   "autoGenerateNoteTitle",
   "useCleanupModel",
+  "toneStyleEnabled",
   "useDictationAgent",
+  "keepLocalModelLoaded",
   "voiceAgentScreenContext",
   "useDictationAgentVisionModel",
   "useDictationTranslation",
@@ -833,14 +841,15 @@ if (Object.keys(healedMeetingFollowModes).length > 0) {
   );
 }
 
-// Resolved offline, so a retired model's name survives only in the user's own
-// catalog cache and a replacement's only if we seed it. The raw-id fallback is
-// what the live-catalog reconcile shows too.
-function tinfoilModelName(modelId: string): string {
+// Resolved offline, so a retired model's name survives only in Tinfoil's
+// catalog cache, and a replacement's only if the registry lists it. The raw-id
+// fallback is what the live-catalog reconcile shows too.
+function sweptModelName(providerId: RetiredModelProvider, modelId: string): string {
+  const cached = providerId === "tinfoil" ? readCachedTinfoilModels().models : [];
   const named =
-    readCachedTinfoilModels().models.find((model) => model.id === modelId) ??
+    cached.find((model) => model.id === modelId) ??
     modelRegistryData.cloudProviders
-      .find((provider) => provider.id === "tinfoil")
+      .find((provider) => provider.id === providerId)
       ?.models.find((model) => model.id === modelId);
   return named?.name ?? modelId;
 }
@@ -853,23 +862,35 @@ function migrateRetiredCloudModels() {
   if (!isBrowser) return;
   const swept = sweepRetiredCloudModelSelections(
     localStorage,
-    Object.values(INFERENCE_SCOPES).map(({ storeKeys }) => storeKeys)
+    Object.values(INFERENCE_SCOPES)
+      .map(({ storeKeys }) => storeKeys)
+      .filter(({ mode }) => {
+        const storedMode = localStorage.getItem(mode);
+        // An unset mode loads as the default, openwhispr.
+        return !storedMode || usesCloudModelCatalog(storedMode);
+      })
   );
   if (swept.length === 0) return;
 
   logger.info(
     "Repointed retired cloud model selections",
-    { scopes: swept.map(({ storeKey }) => storeKey) },
+    { swept: swept.map(({ storeKey, from, to }) => ({ storeKey, from, to })) },
     "settings"
   );
 
-  // Tinfoil is the one provider that tells the user their model was switched
-  // out, and getting here first means reconcileSelectedModels no longer will.
+  // Tell the user their model was switched out; for Tinfoil, getting here
+  // first means reconcileSelectedModels no longer will. Several scopes can
+  // share a retired model, so say so once per model.
   const announced = new Set<string>();
   for (const { provider, from, to } of swept) {
-    if (provider !== "tinfoil" || announced.has(from)) continue;
-    announced.add(from);
-    recordTinfoilModelSwitch({ from: tinfoilModelName(from), to: tinfoilModelName(to) });
+    const key = `${provider}:${from}`;
+    if (announced.has(key)) continue;
+    announced.add(key);
+    recordRetiredModelSwitch({
+      provider,
+      from: sweptModelName(provider, from),
+      to: sweptModelName(provider, to),
+    });
   }
 }
 
@@ -929,6 +950,7 @@ export interface SettingsState
   remoteTranscriptionModel: string;
   cleanupMode: InferenceMode;
   cleanupRemoteUrl: string;
+  keepLocalModelLoaded: boolean;
 
   meetingTranscriptionMode: InferenceMode;
   meetingUseLocalWhisper: boolean;
@@ -978,6 +1000,7 @@ export interface SettingsState
   translationRemoteUrl: string;
   translationCustomApiKey: string;
   translationDisableThinking: boolean;
+  translationReasoningEffort: string;
   useDictationTranslation: boolean;
   translationSourceLanguage: string;
   translationTargetLanguage: string;
@@ -995,6 +1018,8 @@ export interface SettingsState
   // dedicated model used only when a screenshot is attached.
   voiceAgentScreenContext: boolean;
   emailDraftTarget: EmailDraftTargetSetting;
+  toneStyleEnabled: boolean;
+  toneStyles: ToneStyles;
   useDictationAgentVisionModel: boolean;
   dictationAgentVisionMode: InferenceMode;
   dictationAgentVisionProvider: string;
@@ -1008,6 +1033,11 @@ export interface SettingsState
   dictationAgentVisionDisableThinking: boolean;
   noteFormattingDisableThinking: boolean;
   chatAgentDisableThinking: boolean;
+  cleanupReasoningEffort: string;
+  dictationAgentReasoningEffort: string;
+  dictationAgentVisionReasoningEffort: string;
+  noteFormattingReasoningEffort: string;
+  chatAgentReasoningEffort: string;
 
   customPrompts: Record<PromptKind, string>;
   setCustomPrompt: (kind: PromptKind, value: string) => void;
@@ -1021,6 +1051,8 @@ export interface SettingsState
   setDictationAgentCustomApiKey: (key: string) => void;
 
   setVoiceAgentScreenContext: (value: boolean) => void;
+  setToneStyleEnabled: (value: boolean) => void;
+  setToneStyles: (styles: ToneStyles) => void;
   setEmailDraftTarget: (value: EmailDraftTargetSetting) => void;
   setUseDictationAgentVisionModel: (value: boolean) => void;
   setDictationAgentVisionProvider: (value: string) => void;
@@ -1036,6 +1068,7 @@ export interface SettingsState
   setRemoteTranscriptionModel: (model: string) => void;
   setCleanupMode: (mode: InferenceMode) => void;
   setCleanupRemoteUrl: (url: string) => void;
+  setKeepLocalModelLoaded: (value: boolean) => void;
 
   setMeetingTranscriptionMode: (mode: InferenceMode) => void;
   setMeetingUseLocalWhisper: (value: boolean) => void;
@@ -1404,6 +1437,7 @@ type SecretProvider = keyof typeof SECRET_IPC_SAVERS;
 const secretSaveTimers: Partial<Record<SecretProvider, ReturnType<typeof setTimeout>>> = {};
 function debouncedSaveSecret(provider: SecretProvider, key: string) {
   if (!isBrowser) return;
+  debouncedPersistToEnv();
   const timer = secretSaveTimers[provider];
   if (timer) clearTimeout(timer);
   secretSaveTimers[provider] = setTimeout(() => {
@@ -1462,25 +1496,21 @@ function invalidateApiKeyCaches(
     | "openrouter"
     | "corti"
 ) {
-  if (provider) {
-    if (_ReasoningService) {
-      _ReasoningService.clearApiKeyCache(provider);
-    } else {
-      import("../services/ReasoningService")
-        .then((mod) => {
-          _ReasoningService = mod.default;
-          _ReasoningService.clearApiKeyCache(provider);
-        })
-        .catch(() => {});
-    }
+  if (_ReasoningService) {
+    _ReasoningService.clearApiKeyCache(provider);
+  } else {
+    import("../services/ReasoningService")
+      .then((mod) => {
+        _ReasoningService = mod.default;
+        _ReasoningService.clearApiKeyCache(provider);
+      })
+      .catch(() => {});
   }
   if (isBrowser) window.dispatchEvent(new Event("api-key-changed"));
-  debouncedPersistToEnv();
 }
 
 // Uniform BYOK key setter: persist to the secure store (debounced) and clear
-// the provider's cached key. cacheProvider is omitted where there is no scoped
-// cache to clear (xai), preserving prior behavior.
+// the provider's cached key, or all caches when no scoped provider is given.
 function createSecretSetter(
   storeKey: string,
   saver: SecretProvider,
@@ -1739,6 +1769,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     return "openwhispr" as InferenceMode;
   })(),
   cleanupRemoteUrl: readString("cleanupRemoteUrl", ""),
+  keepLocalModelLoaded: readBoolean("keepLocalModelLoaded", false),
 
   meetingTranscriptionMode: (() => {
     const v = readString("meetingTranscriptionMode", "openwhispr");
@@ -1815,6 +1846,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   translationRemoteUrl: readString("translationRemoteUrl", ""),
   translationCustomApiKey: readString("translationCustomApiKey", ""),
   translationDisableThinking: readBoolean("translationDisableThinking", true),
+  translationReasoningEffort: readString("translationReasoningEffort", ""),
   useDictationTranslation: readBoolean("useDictationTranslation", false),
   translationSourceLanguage: readString("translationSourceLanguage", "auto"),
   translationTargetLanguage: readString("translationTargetLanguage", ""),
@@ -1834,6 +1866,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   setRemoteTranscriptionModel: createStringSetter("remoteTranscriptionModel"),
   setCleanupMode: createStringSetter("cleanupMode") as (mode: InferenceMode) => void,
   setCleanupRemoteUrl: createStringSetter("cleanupRemoteUrl"),
+  setKeepLocalModelLoaded: createBooleanSetter("keepLocalModelLoaded"),
 
   setMeetingTranscriptionMode: createStringSetter("meetingTranscriptionMode") as (
     mode: InferenceMode
@@ -1948,6 +1981,8 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
 
   voiceAgentScreenContext: readBoolean("voiceAgentScreenContext", false),
   emailDraftTarget: normalizeEmailDraftTarget(readString("emailDraftTarget", "auto")),
+  toneStyleEnabled: readBoolean("toneStyleEnabled", false),
+  toneStyles: normalizeToneStyles(readString("toneStyles", "")),
   useDictationAgentVisionModel: readBoolean("useDictationAgentVisionModel", false),
   // Cloud already vision-routes screenshot commands, so the override is BYOK-only.
   dictationAgentVisionMode: "providers" as InferenceMode,
@@ -1962,6 +1997,11 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   dictationAgentVisionDisableThinking: readBoolean("dictationAgentVisionDisableThinking", true),
   noteFormattingDisableThinking: readBoolean("noteFormattingDisableThinking", true),
   chatAgentDisableThinking: readBoolean("chatAgentDisableThinking", true),
+  cleanupReasoningEffort: readString("cleanupReasoningEffort", ""),
+  dictationAgentReasoningEffort: readString("dictationAgentReasoningEffort", ""),
+  dictationAgentVisionReasoningEffort: readString("dictationAgentVisionReasoningEffort", ""),
+  noteFormattingReasoningEffort: readString("noteFormattingReasoningEffort", ""),
+  chatAgentReasoningEffort: readString("chatAgentReasoningEffort", ""),
 
   customPrompts: PROMPT_KIND_LIST.reduce(
     (acc, kind) => ({ ...acc, [kind]: readString(`customPrompt.${kind}`, "") }),
@@ -1988,6 +2028,11 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
 
   setVoiceAgentScreenContext: createBooleanSetter("voiceAgentScreenContext"),
   setEmailDraftTarget: createStringSetter("emailDraftTarget"),
+  setToneStyleEnabled: createBooleanSetter("toneStyleEnabled"),
+  setToneStyles: (styles) => {
+    if (isBrowser) localStorage.setItem("toneStyles", JSON.stringify(styles));
+    useSettingsStore.setState({ toneStyles: styles });
+  },
   setUseDictationAgentVisionModel: createBooleanSetter("useDictationAgentVisionModel"),
   setDictationAgentVisionProvider: createStringSetter("dictationAgentVisionProvider"),
   setDictationAgentVisionModel: createStringSetter("dictationAgentVisionModel"),
@@ -2255,17 +2300,14 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   setBedrockAccessKeyId: (key: string) => {
     set({ bedrockAccessKeyId: key });
     debouncedSaveSecret("bedrockAccessKeyId", key);
-    debouncedPersistToEnv();
   },
   setBedrockSecretAccessKey: (key: string) => {
     set({ bedrockSecretAccessKey: key });
     debouncedSaveSecret("bedrockSecretAccessKey", key);
-    debouncedPersistToEnv();
   },
   setBedrockSessionToken: (key: string) => {
     set({ bedrockSessionToken: key });
     debouncedSaveSecret("bedrockSessionToken", key);
-    debouncedPersistToEnv();
   },
   setAzureEndpoint: (value: string) => {
     if (isBrowser) localStorage.setItem("azureEndpoint", value);
@@ -2276,7 +2318,6 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   setAzureApiKey: (key: string) => {
     set({ azureApiKey: key });
     debouncedSaveSecret("azureApiKey", key);
-    debouncedPersistToEnv();
   },
   setAzureDeploymentName: (value: string) => {
     if (isBrowser) localStorage.setItem("azureDeploymentName", value);
@@ -2309,7 +2350,6 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   setVertexApiKey: (key: string) => {
     set({ vertexApiKey: key });
     debouncedSaveSecret("vertexApiKey", key);
-    debouncedPersistToEnv();
   },
 
   setDictationKey: (key: string) => {
@@ -2741,6 +2781,8 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
 
 // --- Selectors (derived state, not stored) ---
 
+// Route cleanup to Cloud on this, never on cleanupCloudMode alone: picking a local
+// model or the notes onboarding mode toggle sets cleanupMode and leaves that field stale.
 export const selectIsCloudCleanupMode = (state: SettingsState) =>
   state.isSignedIn && state.cleanupMode === "openwhispr" && state.cleanupCloudMode === "openwhispr";
 
@@ -2895,6 +2937,7 @@ export interface ResolvedLLMConfig {
   remoteUrl?: string;
   customApiKey?: string;
   disableThinking: boolean;
+  reasoningEffort?: string;
 }
 
 export const selectResolvedLLMConfig = (
@@ -2928,6 +2971,7 @@ export const selectResolvedLLMConfig = (
     // belongs on the request path — see selectResolvedNoteFormatting.
     customApiKey: read("customApiKey"),
     disableThinking,
+    reasoningEffort: read("reasoningEffort"),
   };
   const managed = getManagedScopeResolution(scope, state.enterpriseSetupMode);
   if (managed.kind === "error") {
@@ -3229,6 +3273,7 @@ export async function reconcileLocalModelSelections(): Promise<void> {
 export function reconcileRetiredCloudModelSelections(): void {
   const state = useSettingsStore.getState() as unknown as Record<string, unknown>;
   for (const scope of Object.values(INFERENCE_SCOPES)) {
+    if (!usesCloudModelCatalog(state[scope.storeKeys.mode])) continue;
     const provider = state[scope.storeKeys.provider] as string;
     const model = state[scope.storeKeys.model] as string;
     if (!provider || !model || provider === "tinfoil") continue;
@@ -3300,6 +3345,34 @@ export async function initializeSettings(): Promise<void> {
   if (!isBrowser) return;
 
   const state = useSettingsStore.getState();
+  let hydratingSecrets = true;
+  const pendingSecretUpdates = new Set<string>();
+
+  // Queue updates until hydration can no longer overwrite them.
+  const refreshApiKey = async (storeKey: string) => {
+    if (!STALE_SECRET_LOCALSTORAGE_KEYS.some((key) => key === storeKey)) return;
+    if (hydratingSecrets) {
+      pendingSecretUpdates.add(storeKey);
+      return;
+    }
+    const saver =
+      SECRET_IPC_SAVERS[storeKey as SecretProvider] ||
+      SECRET_IPC_SAVERS[storeKey.replace(/ApiKey$/, "") as SecretProvider];
+    if (!saver) return;
+    const getter = window.electronAPI?.[
+      saver.replace(/^save/, "get") as keyof typeof window.electronAPI
+    ] as (() => Promise<string | null>) | undefined;
+    if (!getter) return;
+    try {
+      const key = await getter();
+      if (key !== null && typeof key !== "string") return;
+      useSettingsStore.setState({ [storeKey]: key || "" });
+      invalidateApiKeyCaches();
+    } catch {
+      logger.warn("Failed to refresh API key", { storeKey }, "settings");
+    }
+  };
+  window.electronAPI?.onApiKeyUpdated?.(refreshApiKey);
 
   if (window.electronAPI) {
     // Preferences are already in localStorage; do not wait for secret or provider hydration.
@@ -3462,6 +3535,10 @@ export async function initializeSettings(): Promise<void> {
         { error: (err as Error).message },
         "settings"
       );
+    } finally {
+      hydratingSecrets = false;
+      await Promise.all([...pendingSecretUpdates].map(refreshApiKey));
+      pendingSecretUpdates.clear();
     }
 
     // Sync dictation key from main process.
@@ -3773,6 +3850,8 @@ export async function initializeSettings(): Promise<void> {
       }
     } else if (key === "emailDraftTarget") {
       value = normalizeEmailDraftTarget(newValue);
+    } else if (key === "toneStyles") {
+      value = normalizeToneStyles(newValue);
     } else {
       value = newValue;
     }

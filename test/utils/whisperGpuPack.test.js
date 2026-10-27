@@ -73,3 +73,28 @@ test("a card below the CUDA kernel floor is never offered the CUDA pack", async 
   assert.equal(pickWhisperGpuBackend(cuda(BELOW_FLOOR, OUTDATED), vulkan(true)), "vulkan");
   assert.equal(pickWhisperGpuBackend(cuda(BELOW_FLOOR, OUTDATED), vulkan(false)), null);
 });
+
+test("the pack main reports in use wins over every other rule (#1736)", async () => {
+  const { pickWhisperGpuBackend } = await load();
+  const IN_USE = { downloaded: true, inUse: true };
+  // Both packs installed and CUDA failed: the server runs Vulkan
+  assert.equal(pickWhisperGpuBackend(cuda(NVIDIA, DOWNLOADED), vulkan(true, IN_USE)), "vulkan");
+  // A CUDA-only install below the kernel floor still describes the CUDA pack
+  assert.equal(pickWhisperGpuBackend(cuda(BELOW_FLOOR, IN_USE), vulkan(true)), "cuda");
+  // A Vulkan pack on a GPU detection doesn't recognize
+  assert.equal(pickWhisperGpuBackend(cuda(NO_NVIDIA), vulkan(false, IN_USE)), "vulkan");
+});
+
+test("no first-time offer while the bundled whisper-server already runs on the GPU (#2168)", async () => {
+  const { pickWhisperGpuBackend } = await load();
+  const BUNDLED = { bundledGpu: true };
+  assert.equal(pickWhisperGpuBackend(cuda(NVIDIA, BUNDLED), vulkan(true, BUNDLED)), null);
+  assert.equal(pickWhisperGpuBackend(cuda(NO_NVIDIA, BUNDLED), vulkan(true, BUNDLED)), null);
+  // A pack that is installed, failed or outdated keeps its card
+  const installed = { ...BUNDLED, ...DOWNLOADED };
+  assert.equal(pickWhisperGpuBackend(cuda(NVIDIA, installed), vulkan(true, BUNDLED)), "cuda");
+  const failed = { ...BUNDLED, ...DOWNLOADED, inUse: true, gpuFailed: true };
+  assert.equal(pickWhisperGpuBackend(cuda(NVIDIA, failed), vulkan(true, BUNDLED)), "cuda");
+  const outdated = { ...BUNDLED, ...OUTDATED };
+  assert.equal(pickWhisperGpuBackend(cuda(NVIDIA, BUNDLED), vulkan(true, outdated)), "vulkan");
+});
