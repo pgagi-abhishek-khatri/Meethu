@@ -1,0 +1,81 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Copilot window test</title>
+<style>
+  body {
+    font: 13px system-ui;
+    margin: 10px;
+    background: #1e1e24;
+    color: #eee;
+  }
+  #clock {
+    font: 34px monospace;
+  }
+  button,
+  input {
+    margin: 2px;
+  }
+  #log {
+    height: 170px;
+    overflow: auto;
+    background: #111;
+    padding: 6px;
+    font: 11px monospace;
+    white-space: pre-wrap;
+  }
+  .row {
+    margin: 6px 0;
+  }
+</style>
+<div id="clock">--:--:--.---</div>
+<div>max tick gap: <b id="gap">0</b> ms (timer every 250 ms; big = throttled)</div>
+<div id="env"></div>
+<div class="row">
+  <button onclick="send('always-on-top', true, 'screen-saver')">top: screen-saver</button>
+  <button onclick="send('always-on-top', true, 'floating')">top: floating</button>
+  <button onclick="send('always-on-top', false)">top: off</button>
+</div>
+<div class="row">
+  opacity
+  <input type="range" min="20" max="100" value="100" oninput="send('opacity', this.value / 100)" />
+  <button onclick="send('protect', true)">protect on</button
+  ><button onclick="send('protect', false)">off</button>
+</div>
+<div class="row">
+  <button onclick="send('minimize-cycle')">minimize 8s then restore</button>
+  <button onclick="send('show-inactive')">hide, then showInactive</button>
+  <button onclick="send('focusable', false)">focusable off</button
+  ><button onclick="send('focusable', true)">on</button>
+</div>
+<div class="row">
+  <button onclick="send('portal-screenshot')">portal screenshot (g)</button>
+  <input placeholder="type here: focus test (f)" />
+</div>
+<div id="log"></div>
+<script>
+  const { ipcRenderer } = require("electron");
+  const send = (...a) => ipcRenderer.send(...a);
+  const log = (t) => {
+    const l = document.getElementById("log");
+    l.textContent += new Date().toISOString().slice(11, 23) + " " + t + "\n";
+    l.scrollTop = l.scrollHeight;
+  };
+  ipcRenderer.on("log", (_e, t) => log(t));
+  ipcRenderer.on("env", (_e, env) => {
+    document.getElementById("env").textContent = JSON.stringify(env);
+    log("env " + JSON.stringify(env));
+  });
+  let last = performance.now(),
+    max = 0;
+  setInterval(() => {
+    const now = performance.now();
+    const gap = now - last;
+    last = now;
+    if (gap > max) {
+      max = gap;
+      document.getElementById("gap").textContent = Math.round(max);
+    }
+    if (gap > 1000) log("timer gap " + Math.round(gap) + " ms (throttled while hidden/minimized?)");
+    document.getElementById("clock").textContent = new Date().toISOString().slice(11, 23);
+  }, 250);
+</script>

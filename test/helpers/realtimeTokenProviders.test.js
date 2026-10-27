@@ -248,3 +248,26 @@ test('wire bodies: dictation posts the bare {"streams":1}; meetings post model+l
     { path: "/api/gemini-live-token", json: "{}" },
   ]);
 });
+
+test("soniox byok returns the stored key for one or both streams; no key fails", async () => {
+  const { fetchRealtimeTokenForProvider } = await load();
+  const soniox = deps({ environmentManager: { getSonioxKey: () => "sx-key" } });
+  assert.equal(
+    await fetchRealtimeTokenForProvider("soniox-realtime", soniox, { mode: "byok" }),
+    "sx-key"
+  );
+  assert.deepEqual(
+    await fetchRealtimeTokenForProvider(
+      "soniox-realtime",
+      soniox,
+      { mode: "byok" },
+      { streams: 2 }
+    ),
+    ["sx-key", "sx-key"]
+  );
+  const noKey = deps({ environmentManager: { getSonioxKey: () => "" } });
+  await assert.rejects(
+    fetchRealtimeTokenForProvider("soniox-realtime", noKey, { mode: "byok" }),
+    /No Soniox API key/
+  );
+});

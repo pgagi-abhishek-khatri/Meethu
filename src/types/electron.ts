@@ -2217,6 +2217,8 @@ declare global {
       saveDeepgramKey?: (key: string) => Promise<void>;
       getAssemblyAIKey?: () => Promise<string | null>;
       saveAssemblyAIKey?: (key: string) => Promise<void>;
+      getSonioxKey?: () => Promise<string | null>;
+      saveSonioxKey?: (key: string) => Promise<void>;
 
       // Custom endpoint API keys
       getCustomTranscriptionKey?: () => Promise<string | null>;
@@ -2651,6 +2653,24 @@ declare global {
       onAssemblyAiFinalTranscript?: (callback: (text: string) => void) => () => void;
       onAssemblyAiError?: (callback: (error: string) => void) => () => void;
       onAssemblyAiSessionEnd?: (
+        callback: (data: { audioDuration?: number; text?: string }) => void
+      ) => () => void;
+
+      // Soniox Streaming
+      sonioxStreamingWarmup?: (options?: object) => Promise<{ success: boolean }>;
+      sonioxStreamingStart?: (options?: {
+        sampleRate?: number;
+        language?: string;
+        keyterms?: string[];
+      }) => Promise<{ success: boolean } & PolicyFailureMetadata>;
+      sonioxStreamingSend?: (audioBuffer: ArrayBuffer) => void;
+      sonioxStreamingFinalize?: () => void;
+      sonioxStreamingStop?: () => Promise<{ success: boolean; text?: string; error?: string }>;
+      sonioxStreamingStatus?: () => Promise<{ isConnected: boolean; sessionId: string | null }>;
+      onSonioxPartialTranscript?: (callback: (text: string) => void) => () => void;
+      onSonioxFinalTranscript?: (callback: (text: string) => void) => () => void;
+      onSonioxError?: (callback: (error: string) => void) => () => void;
+      onSonioxSessionEnd?: (
         callback: (data: { audioDuration?: number; text?: string }) => void
       ) => () => void;
 

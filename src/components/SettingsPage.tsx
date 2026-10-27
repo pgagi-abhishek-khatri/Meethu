@@ -74,6 +74,7 @@ import { useUpdater } from "../hooks/useUpdater";
 
 import PromptStudio from "./ui/PromptStudio";
 import { ProviderTabs } from "./ui/ProviderTabs";
+import CopilotSettingsTab from "./copilot/CopilotSettingsTab";
 import { HotkeyListInput } from "./ui/HotkeyListInput";
 import { useHotkeyRegistration } from "../hooks/useHotkeyRegistration";
 import { useHotkeyModeInfo } from "../hooks/useHotkeyModeInfo";
@@ -906,7 +907,8 @@ type LlmTab =
   | "dictationAgent"
   | "dictationTranslation"
   | "noteFormatting"
-  | "chatIntelligence";
+  | "chatIntelligence"
+  | "copilot";
 
 const SPEECH_TABS: SpeechTab[] = ["dictation", "noteRecording", "upload"];
 const LLM_TABS: LlmTab[] = [
@@ -915,6 +917,7 @@ const LLM_TABS: LlmTab[] = [
   "dictationTranslation",
   "noteFormatting",
   "chatIntelligence",
+  "copilot",
 ];
 const AGENT_LLM_TABS = new Set<LlmTab>(["dictationAgent", "chatIntelligence"]);
 
@@ -1046,6 +1049,7 @@ function LlmsTabs({
   renderDictationTranslation,
   renderNoteFormatting,
   renderChatIntelligence,
+  renderCopilot,
 }: {
   initialTab?: LlmTab;
   renderDictationCleanup: () => React.ReactNode;
@@ -1053,6 +1057,7 @@ function LlmsTabs({
   renderDictationTranslation: () => React.ReactNode;
   renderNoteFormatting: () => React.ReactNode;
   renderChatIntelligence: () => React.ReactNode;
+  renderCopilot: () => React.ReactNode;
 }) {
   const { t } = useTranslation();
   const agentAllowed = usePolicyStore(isAgentAllowed);
@@ -1067,6 +1072,7 @@ function LlmsTabs({
     { id: "dictationTranslation", name: t("settingsPage.llms.tabs.dictationTranslation") },
     { id: "noteFormatting", name: t("settingsPage.llms.tabs.noteFormatting") },
     { id: "chatIntelligence", name: t("settingsPage.llms.tabs.chatIntelligence") },
+    { id: "copilot", name: "Copilot" },
   ].filter((item) => visibleTabIds.includes(item.id as LlmTab));
 
   return (
@@ -1093,6 +1099,7 @@ function LlmsTabs({
       )}
       <TabPanel active={tab === "dictationTranslation"}>{renderDictationTranslation()}</TabPanel>
       <TabPanel active={tab === "noteFormatting"}>{renderNoteFormatting()}</TabPanel>
+      <TabPanel active={tab === "copilot"}>{renderCopilot()}</TabPanel>
       {agentAllowed && (
         <TabPanel active={tab === "chatIntelligence"}>{renderChatIntelligence()}</TabPanel>
       )}
@@ -5002,6 +5009,7 @@ EOF`,
               activeSection === "llms" ? (initialSubTab as LlmTab | undefined) : undefined
             }
             renderChatIntelligence={() => <ChatAgentSettings />}
+            renderCopilot={() => <CopilotSettingsTab />}
             renderDictationCleanup={() => (
               <div className="space-y-6">
                 <AiModelsSection

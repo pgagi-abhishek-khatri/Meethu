@@ -141,3 +141,11 @@ test("connection identity includes every provider-specific option", async () => 
     getMeetingConnectionKey({ ...options, tenant: "tenant-b" })
   );
 });
+
+test("soniox-realtime resolves to the Soniox client and is allowed for meetings", async () => {
+  const { STREAMING_CLIENT_BY_PROVIDER, ALLOWED_MEETING_PROVIDERS } = await load();
+  const SonioxStreaming = (await import("../../src/helpers/sonioxStreaming.js")).default;
+
+  assert.equal(STREAMING_CLIENT_BY_PROVIDER["soniox-realtime"], SonioxStreaming);
+  assert.equal(ALLOWED_MEETING_PROVIDERS.has("soniox-realtime"), true);
+});

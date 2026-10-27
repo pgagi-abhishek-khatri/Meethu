@@ -417,6 +417,20 @@ const STREAMING_PROVIDERS = {
     onError: (cb) => window.electronAPI.onAssemblyAiError(cb),
     onSessionEnd: (cb) => window.electronAPI.onAssemblyAiSessionEnd(cb),
   },
+  soniox: {
+    // stop() sends end-of-stream and waits for the server's flush, so the final
+    // tail is already in the result by the time it returns.
+    warmup: (opts) => window.electronAPI.sonioxStreamingWarmup(opts),
+    start: (opts) => window.electronAPI.sonioxStreamingStart(opts),
+    send: (buf) => window.electronAPI.sonioxStreamingSend(buf),
+    finalize: () => window.electronAPI.sonioxStreamingFinalize(),
+    stop: () => window.electronAPI.sonioxStreamingStop(),
+    status: () => window.electronAPI.sonioxStreamingStatus(),
+    onPartial: (cb) => window.electronAPI.onSonioxPartialTranscript(cb),
+    onFinal: (cb) => window.electronAPI.onSonioxFinalTranscript(cb),
+    onError: (cb) => window.electronAPI.onSonioxError(cb),
+    onSessionEnd: (cb) => window.electronAPI.onSonioxSessionEnd(cb),
+  },
   "openai-realtime": makeDictationRealtimeProvider("openai-realtime"),
   orukeet: {
     ...makeDictationRealtimeProvider("orukeet"),
@@ -4801,7 +4815,11 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
       }
       this.isRecording = true;
       this.recordingStartTime = Date.now();
-      this.onStateChange?.({ isRecording: true, isProcessing: false, isStreaming: true });
+      // The recording UI waits for the provider to be ready (below), so a cold
+      // connect shows the preparing state instead of a recording that hears
+      // nothing yet. Audio is already buffered meanwhile.
+      const announceRecording = () =>
+        this.onStateChange?.({ isRecording: true, isProcessing: false, isStreaming: true });
       await this.beginMicRecovery(stream);
 
       // 4. Connect WebSocket — audio is already flowing from the pipeline above,
@@ -4836,6 +4854,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
           { reason: this._streamingFailoverReason },
           "streaming"
         );
+        announceRecording();
         if (this.stopRequestedDuringStreamingStart) {
           this.stopRequestedDuringStreamingStart = false;
           return this.stopStreamingRecording();
@@ -4854,6 +4873,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         return this.startRecording();
       }
 
+      announceRecording();
       logger.info(
         "Streaming start timing",
         {

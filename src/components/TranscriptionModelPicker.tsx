@@ -251,6 +251,7 @@ const CLOUD_PROVIDER_TABS = [
   { id: "tinfoil", name: "Tinfoil" },
   { id: "deepgram", name: "Deepgram" },
   { id: "assemblyai", name: "AssemblyAI" },
+  { id: "soniox", name: "Soniox" },
   { id: "custom", name: "Custom" },
 ];
 
@@ -267,7 +268,8 @@ interface ProviderCredentialField {
     | "cortiTenant"
     | "tinfoilApiKey"
     | "deepgramApiKey"
-    | "assemblyaiApiKey";
+    | "assemblyaiApiKey"
+    | "sonioxApiKey";
   input: "secret" | "text" | "select";
   labelKey?: string;
   placeholder?: string;
@@ -331,6 +333,10 @@ const PROVIDER_CREDENTIALS: Record<
   assemblyai: {
     consoleUrl: "https://www.assemblyai.com/dashboard/api-keys",
     fields: [{ key: "assemblyaiApiKey", input: "secret" }],
+  },
+  soniox: {
+    consoleUrl: "https://console.soniox.com/",
+    fields: [{ key: "sonioxApiKey", input: "secret" }],
   },
 };
 
@@ -463,6 +469,8 @@ export default function TranscriptionModelPicker({
   const deepgramApiKey = useSettingsStore((s) => s.deepgramApiKey);
   const setDeepgramApiKey = useSettingsStore((s) => s.setDeepgramApiKey);
   const assemblyaiApiKey = useSettingsStore((s) => s.assemblyaiApiKey);
+  const sonioxApiKey = useSettingsStore((s) => s.sonioxApiKey);
+  const setSonioxApiKey = useSettingsStore((s) => s.setSonioxApiKey);
   const setAssemblyaiApiKey = useSettingsStore((s) => s.setAssemblyaiApiKey);
   const customTranscriptionApiKey = useSettingsStore((s) => s.customTranscriptionApiKey);
   const setCustomTranscriptionApiKey = useSettingsStore((s) => s.setCustomTranscriptionApiKey);
@@ -560,7 +568,10 @@ export default function TranscriptionModelPicker({
     if (streamingOnly) return getMeetingStreamingTranscriptionProviders();
     const providers = getTranscriptionProviders();
     if (transcriptionContext !== "upload") return providers;
-    return providers.filter((provider) => !STREAMING_ONLY_PROVIDERS.has(provider.id));
+    // Soniox is realtime-only for dictation but batches uploads through its async API.
+    return providers.filter(
+      (provider) => provider.id === "soniox" || !STREAMING_ONLY_PROVIDERS.has(provider.id)
+    );
   }, [streamingOnly, transcriptionContext]);
   const cloudProviders = useMemo(
     () => filterByokProviderOptionsByPolicy(availableCloudProviders, "transcription", policyState),
@@ -1057,6 +1068,7 @@ export default function TranscriptionModelPicker({
     tinfoilApiKey,
     deepgramApiKey,
     assemblyaiApiKey,
+    sonioxApiKey,
   };
   const credentialSetters: Record<ProviderCredentialField["key"], (value: string) => void> = {
     openaiApiKey: setOpenaiApiKey,
@@ -1071,6 +1083,7 @@ export default function TranscriptionModelPicker({
     tinfoilApiKey: setTinfoilApiKey,
     deepgramApiKey: setDeepgramApiKey,
     assemblyaiApiKey: setAssemblyaiApiKey,
+    sonioxApiKey: setSonioxApiKey,
   };
 
   const cloudModelOptions = useMemo(() => {

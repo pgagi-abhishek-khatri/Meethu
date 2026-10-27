@@ -16,6 +16,7 @@ const BYOK_KEY_BRIDGES = [
   { base: "corti", get: "getCortiKey", save: "saveCortiKey" },
   { base: "deepgram", get: "getDeepgramKey", save: "saveDeepgramKey" },
   { base: "assemblyai", get: "getAssemblyAIKey", save: "saveAssemblyAIKey" },
+  { base: "soniox", get: "getSonioxKey", save: "saveSonioxKey" },
   {
     base: "note-formatting-custom",
     get: "getNoteFormattingCustomKey",
@@ -61,6 +62,38 @@ const registerListener = (channel, handlerFactory) => {
     };
   };
 };
+
+// Live Meeting Copilot management bridge (same channels as src/copilot/main/preload.js, invoke-only).
+const copilotCall = (channel, ...args) => ipcRenderer.invoke(`copilot:${channel}`, ...args);
+contextBridge.exposeInMainWorld("copilot", {
+  ask: (q) => copilotCall("ask", q),
+  rerun: (id) => copilotCall("rerun", id),
+  cancel: (id) => copilotCall("cancel", id),
+  getSettings: () => copilotCall("settings-get"),
+  updateSettings: (patch) => copilotCall("settings-update", patch),
+  projects: {
+    list: () => copilotCall("projects-list"),
+    create: (name) => copilotCall("project-create", name),
+    rename: (id, name) => copilotCall("project-rename", id, name),
+    update: (id, patch) => copilotCall("project-update", id, patch),
+    addRule: (id, kind, pattern) => copilotCall("project-rule-add", id, kind, pattern),
+    removeRule: (id) => copilotCall("project-rule-remove", id),
+    remove: (id) => copilotCall("project-remove", id),
+    setActive: (id, active) => copilotCall("project-active", id, active),
+    addFiles: (id) => copilotCall("project-add-files", id),
+    removeFile: (id) => copilotCall("project-remove-file", id),
+    reindex: (id) => copilotCall("project-reindex", id), // index a file again (after a failure or a change)
+  },
+  sessionProject: {
+    get: () => copilotCall("session-project-get"),
+    set: (id, remember) => copilotCall("session-project", id, remember),
+  },
+  sessions: {
+    list: () => copilotCall("sessions-list"),
+    get: (id) => copilotCall("sessions-get", id),
+    remove: (id) => copilotCall("sessions-remove", id),
+  },
+});
 
 contextBridge.exposeInMainWorld("electronAPI", {
   setOnboardingWindowMode: (mode) => ipcRenderer.invoke("onboarding-set-window-mode", mode),
@@ -836,6 +869,27 @@ contextBridge.exposeInMainWorld("electronAPI", {
   ),
   onAssemblyAiSessionEnd: registerListener(
     "assemblyai-session-end",
+    (callback) => (_event, data) => callback(data)
+  ),
+
+  // Soniox Streaming
+  sonioxStreamingWarmup: (options) => ipcRenderer.invoke("soniox-streaming-warmup", options),
+  sonioxStreamingStart: (options) => ipcRenderer.invoke("soniox-streaming-start", options),
+  sonioxStreamingSend: (audioBuffer) => ipcRenderer.send("soniox-streaming-send", audioBuffer),
+  sonioxStreamingFinalize: () => ipcRenderer.send("soniox-streaming-finalize"),
+  sonioxStreamingStop: () => ipcRenderer.invoke("soniox-streaming-stop"),
+  sonioxStreamingStatus: () => ipcRenderer.invoke("soniox-streaming-status"),
+  onSonioxPartialTranscript: registerListener(
+    "soniox-partial-transcript",
+    (callback) => (_event, text) => callback(text)
+  ),
+  onSonioxFinalTranscript: registerListener(
+    "soniox-final-transcript",
+    (callback) => (_event, text) => callback(text)
+  ),
+  onSonioxError: registerListener("soniox-error", (callback) => (_event, error) => callback(error)),
+  onSonioxSessionEnd: registerListener(
+    "soniox-session-end",
     (callback) => (_event, data) => callback(data)
   ),
 

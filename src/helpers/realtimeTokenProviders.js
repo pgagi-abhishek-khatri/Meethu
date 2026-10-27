@@ -80,6 +80,14 @@ const REALTIME_TOKEN_PROVIDERS = {
     return duplicate(streams, token);
   },
 
+  // BYOK only: there is no managed Soniox token service. The key stays in main
+  // and goes in the first WebSocket message, so both streams share it.
+  "soniox-realtime": async ({ environmentManager }, options, streams) => {
+    const apiKey = environmentManager.getSonioxKey();
+    if (!apiKey) throw new Error("No Soniox API key configured. Add your key in Settings.");
+    return duplicate(streams, apiKey);
+  },
+
   "tinfoil-realtime": async ({ environmentManager }, options, streams) => {
     const apiKey = environmentManager.getTinfoilKey();
     if (!apiKey) {

@@ -1294,6 +1294,25 @@ async function startApp() {
     hotkeyManager.notifyRestoreFailures(savedMeetingKey, result);
   }
 
+  // Copilot window toggle: the key lives in the copilot's own settings (src/copilot/main/service.js).
+  if (ipcHandlers.copilot) {
+    const copilotHotkeyCallback = createHotkeyRepeatGate();
+    ipcHandlers.copilot.setHotkeyRegistrar(async (hotkey) => {
+      if (!hotkey) {
+        await hotkeyManager.unregisterSlot("copilot");
+        return { success: true };
+      }
+      const result = await hotkeyManager.registerSlot(
+        "copilot",
+        hotkey,
+        () => copilotHotkeyCallback() && ipcHandlers.copilot.toggleWindow(),
+        { atomic: true }
+      );
+      windowManager.reconcileNativeKeyListeners();
+      return result;
+    });
+  }
+
   ipcMain.handle("register-meeting-hotkey", async (_event, hotkey) => {
     if (hotkey) {
       const result = await hotkeyManager.registerSlot("meeting", hotkey, meetingHotkeyCallback, {

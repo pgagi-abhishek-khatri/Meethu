@@ -58,7 +58,7 @@ const PROVIDER_KEY_MISSING_MESSAGE_KEY =
 // realtime too, yet it batches through the proxy. Every other "realtime-only"
 // decision (dictationStreamingRouting, audioManager.shouldUseStreaming, the
 // upload picker and selector) derives from this set.
-export const STREAMING_ONLY_PROVIDERS = new Set(["deepgram", "assemblyai"]);
+export const STREAMING_ONLY_PROVIDERS = new Set(["deepgram", "assemblyai", "soniox"]);
 
 export interface TranscriptionRouteSettings {
   transcriptionMode?: string;
@@ -192,7 +192,8 @@ export function resolveByokModel(provider: string, configuredModel?: string): st
       (provider === "gemini" && trimmed.startsWith("gemini-")) ||
       (provider === "deepgram" && (trimmed.startsWith("nova-") || trimmed.startsWith("flux-"))) ||
       (provider === "assemblyai" &&
-        (trimmed.startsWith("universal-") || trimmed.startsWith("slam-")));
+        (trimmed.startsWith("universal-") || trimmed.startsWith("slam-"))) ||
+      (provider === "soniox" && trimmed.startsWith("stt-rt-"));
     if (matchesProvider) return trimmed;
   }
   if (provider === "groq") return "whisper-large-v3-turbo";
@@ -202,6 +203,7 @@ export function resolveByokModel(provider: string, configuredModel?: string): st
   if (provider === "gemini") return "gemini-3.5-transcribe";
   if (provider === "deepgram") return "nova-3";
   if (provider === "assemblyai") return "universal-3-5-pro";
+  if (provider === "soniox") return "stt-rt-v5";
   return "gpt-transcribe";
 }
 

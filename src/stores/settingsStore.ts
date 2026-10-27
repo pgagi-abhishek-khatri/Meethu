@@ -293,6 +293,7 @@ const BOOLEAN_SETTINGS = new Set([
   "noteRecordingSileroEnabled",
   "meetingSileroEnabled",
   "meetingAecEnabled",
+  "meetingDenoiseEnabled",
   "isSignedIn",
   "autoPasteEnabled",
   "keepTranscriptionInClipboard",
@@ -908,6 +909,7 @@ export interface SettingsState
   noteRecordingSileroEnabled: boolean;
   meetingSileroEnabled: boolean;
   meetingAecEnabled: boolean;
+  meetingDenoiseEnabled: boolean;
   whisperVadThreshold: number;
   whisperVadMinSpeechDurationMs: number;
   whisperVadMinSilenceDurationMs: number;
@@ -1138,6 +1140,7 @@ export interface SettingsState
   setTinfoilApiKey: (key: string) => void;
   setDeepgramApiKey: (key: string) => void;
   setAssemblyaiApiKey: (key: string) => void;
+  setSonioxApiKey: (key: string) => void;
   setCustomTranscriptionApiKey: (key: string) => void;
   setCleanupCustomApiKey: (key: string) => void;
 
@@ -1224,6 +1227,7 @@ export interface SettingsState
   setNoteRecordingSileroEnabled: (value: boolean) => void;
   setMeetingSileroEnabled: (value: boolean) => void;
   setMeetingAecEnabled: (value: boolean) => void;
+  setMeetingDenoiseEnabled: (value: boolean) => void;
   setWhisperVadThreshold: (value: number) => void;
   setWhisperVadMinSpeechDurationMs: (value: number) => void;
   setWhisperVadMinSilenceDurationMs: (value: number) => void;
@@ -1380,6 +1384,7 @@ const SECRET_IPC_SAVERS = {
   tinfoil: "saveTinfoilKey",
   deepgram: "saveDeepgramKey",
   assemblyai: "saveAssemblyAIKey",
+  soniox: "saveSonioxKey",
   customTranscription: "saveCustomTranscriptionKey",
   cleanupCustom: "saveCleanupCustomKey",
   noteFormattingCustom: "saveNoteFormattingCustomKey",
@@ -1429,6 +1434,7 @@ const STALE_SECRET_LOCALSTORAGE_KEYS = [
   "tinfoilApiKey",
   "deepgramApiKey",
   "assemblyaiApiKey",
+  "sonioxApiKey",
   "customTranscriptionApiKey",
   "customReasoningApiKey",
   "cleanupCustomApiKey",
@@ -1561,6 +1567,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   tinfoilApiKey: "",
   deepgramApiKey: "",
   assemblyaiApiKey: "",
+  sonioxApiKey: "",
   customTranscriptionApiKey: "",
   cleanupCustomApiKey: "",
 
@@ -1675,6 +1682,9 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   // Acoustic echo cancellation for meetings is opt-in: on headsets there's no
   // echo to cancel and it can suppress the mic entirely. See ipcHandlers AEC gate.
   meetingAecEnabled: readBoolean("meetingAecEnabled", false),
+  // Speech enhancement + noise gate on the mic before it is sent to the meeting transcriber (src/audio/meetingDenoise.ts).
+  // Skipped while the native echo canceller is on: it needs the raw mic.
+  meetingDenoiseEnabled: readBoolean("meetingDenoiseEnabled", true),
   whisperVadThreshold: clampVadValue("threshold", readString("whisperVadThreshold", "0.5")),
   whisperVadMinSpeechDurationMs: clampVadValue(
     "minSpeechDurationMs",
@@ -2207,6 +2217,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   // STT-only, so there is no ReasoningService key cache to invalidate.
   setDeepgramApiKey: createSecretSetter("deepgramApiKey", "deepgram"),
   setAssemblyaiApiKey: createSecretSetter("assemblyaiApiKey", "assemblyai"),
+  setSonioxApiKey: createSecretSetter("sonioxApiKey", "soniox"),
   setCustomTranscriptionApiKey: (key: string) => {
     set({ customTranscriptionApiKey: key });
     debouncedSaveSecret("customTranscription", key);
@@ -2487,6 +2498,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     }
   },
   setMeetingAecEnabled: createBooleanSetter("meetingAecEnabled"),
+  setMeetingDenoiseEnabled: createBooleanSetter("meetingDenoiseEnabled"),
   setWhisperVadThreshold: (value: number) => {
     const next = clampVadValue("threshold", value);
     if (isBrowser) localStorage.setItem("whisperVadThreshold", String(next));
@@ -2711,6 +2723,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     if (keys.tinfoilApiKey !== undefined) s.setTinfoilApiKey(keys.tinfoilApiKey);
     if (keys.deepgramApiKey !== undefined) s.setDeepgramApiKey(keys.deepgramApiKey);
     if (keys.assemblyaiApiKey !== undefined) s.setAssemblyaiApiKey(keys.assemblyaiApiKey);
+    if (keys.sonioxApiKey !== undefined) s.setSonioxApiKey(keys.sonioxApiKey);
     if (keys.customTranscriptionApiKey !== undefined)
       s.setCustomTranscriptionApiKey(keys.customTranscriptionApiKey);
     if (keys.cleanupCustomApiKey !== undefined) s.setCleanupCustomApiKey(keys.cleanupCustomApiKey);
@@ -3332,6 +3345,7 @@ export async function initializeSettings(): Promise<void> {
         vertexApiKey,
         deepgram,
         assemblyai,
+        soniox,
       ] = await Promise.all([
         window.electronAPI.getOpenAIKey?.(),
         window.electronAPI.getAnthropicKey?.(),
@@ -3358,6 +3372,7 @@ export async function initializeSettings(): Promise<void> {
         window.electronAPI.getVertexApiKey?.(),
         window.electronAPI.getDeepgramKey?.(),
         window.electronAPI.getAssemblyAIKey?.(),
+        window.electronAPI.getSonioxKey?.(),
       ]);
 
       useSettingsStore.setState({
@@ -3392,6 +3407,7 @@ export async function initializeSettings(): Promise<void> {
         vertexApiKey: vertexApiKey || "",
         deepgramApiKey: deepgram || "",
         assemblyaiApiKey: assemblyai || "",
+        sonioxApiKey: soniox || "",
       });
 
       if (localStorage.getItem("_dictationAgentSeeded") === "key-pending") {

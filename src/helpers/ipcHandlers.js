@@ -91,6 +91,7 @@ const autoStart = require("./autoStart");
 const { getRelaunchOptions, getRelaunchWaiter } = require("./autoStartPolicy");
 const HyprlandShortcutManager = require("./hyprlandShortcut");
 const AssemblyAiStreaming = require("./assemblyAiStreaming");
+const SonioxStreaming = require("./sonioxStreaming");
 const { i18nMain, changeLanguage } = require("./i18nMain");
 const DeepgramStreaming = require("./deepgramStreaming");
 const { GeminiLiveStreaming, GEMINI_LIVE_MODEL } = require("./geminiLiveStreaming");
@@ -639,6 +640,18 @@ class IPCHandlers {
     // webContents id -> its release listener, for renderers holding the mic open.
     this._micHoldSenders = new Map();
     this.assemblyAiStreaming = null;
+    this.sonioxStreaming = null;
+    // Live meeting copilot (src/copilot): listens to the meeting transcript through the hooks below.
+    this.copilot = (() => {
+      try {
+        return require("../copilot/main").startCopilot({
+          getActiveEvents: () => this.databaseManager?.getActiveEvents?.() ?? [],
+        });
+      } catch (error) {
+        debugLogger.error("Copilot failed to start", { error: error?.message }, "copilot");
+        return null;
+      }
+    })();
     this.deepgramStreaming = null;
     this.geminiStreaming = null;
     this.cortiStreaming = null;
@@ -6839,6 +6852,7 @@ class IPCHandlers {
       micSuppression = null,
       send = null,
       includeInLocalTranscript = false,
+      providerSpeaker = null,
     }) => {
       if (includeInLocalTranscript) {
         appendMeetingLocalTranscript(text);
@@ -6847,11 +6861,15 @@ class IPCHandlers {
       storeMeetingDiarizationSegment(text, source, timestamp, micSuppression);
 
       if (send) {
+        this.copilot?.onFinal({ text, source, timestamp, speaker: providerSpeaker });
         send("meeting-transcription-segment", {
           text,
           source,
           type: "final",
           timestamp,
+          // Provider diarization label (Soniox only, e.g. "system:2"), kept apart
+          // from the note's own speaker ids; the renderer ignores it today.
+          ...(providerSpeaker ? { providerSpeaker } : {}),
         });
       }
     };
@@ -7013,11 +7031,13 @@ class IPCHandlers {
           return;
         }
 
+        this.copilot?.onPartial({ source, text });
         send("meeting-transcription-segment", { text, source, type: "partial" });
       };
       streaming.onFinalTranscript = (text, timestamp) => {
         const segments = streaming.completedSegments;
         const latestSegment = segments.length > 0 ? segments[segments.length - 1] : text;
+        const providerSpeaker = streaming.completedSpeakers?.at(-1) ?? null;
         let micSuppression = null;
         if (source === "mic") {
           micSuppression = shouldSuppressMicTranscriptSegment(timestamp, Date.now());
@@ -7093,6 +7113,7 @@ class IPCHandlers {
                 timestamp,
                 micSuppression,
                 send,
+                providerSpeaker,
               }),
           });
           return;
@@ -7104,6 +7125,7 @@ class IPCHandlers {
           timestamp,
           micSuppression,
           send,
+          providerSpeaker,
         });
       };
       streaming.onError = (error) => {
@@ -7714,6 +7736,7 @@ class IPCHandlers {
         }
       }
 
+      if (!synthetic) this.copilot?.onLevel?.(outbound);
       queueMeetingReconnectAudio(source, outbound, capturedAt);
       const sent = sendMeetingStreamingAudio(streaming, outbound, capturedAt);
       if (synthetic) return;
@@ -8315,6 +8338,7 @@ class IPCHandlers {
     };
 
     const resetMeetingStreamingState = () => {
+      this.copilot?.endSession();
       this._meetingMicStreaming = null;
       this._meetingSystemStreaming = null;
       meetingSendCounts = { mic: 0, system: 0 };
@@ -9181,6 +9205,10 @@ class IPCHandlers {
       } catch (error) {
         debugLogger.error("Meeting transcription stop error", { error: error.message });
         return { success: false, error: error.message };
+      } finally {
+        // Every way out of a stop ends the copilot's meeting (the local mode and a failed teardown skip
+        // resetMeetingStreamingState), or its window would wait for a meeting that is over.
+        this.copilot?.endSession();
       }
     };
 
@@ -9198,6 +9226,7 @@ class IPCHandlers {
     });
 
     ipcMain.handle("meeting-transcription-start", (event, options = {}) => {
+      this.copilot?.begin();
       const sessionId =
         typeof options.sessionId === "string" && options.sessionId.length > 0
           ? options.sessionId
@@ -10117,6 +10146,23 @@ class IPCHandlers {
           const sourcePath = resolveAllowedAudioPath(filePath);
           if (!sourcePath) return { success: false, error: "File path not allowed" };
 
+          // Soniox is realtime-only for dictation (the route fails it closed) but
+          // has an async API for files, so uploads bypass the route.
+          if (provider === "soniox" && transcriptionMode !== "self-hosted") {
+            const sonioxKey = apiKey || this.environmentManager.getSonioxKey();
+            const upload = await prepareProviderUpload(sourcePath);
+            cleanupUpload = upload.cleanup;
+            const { transcribeAudio } = require("./sonioxTranscription");
+            const { text } = await transcribeAudio({
+              apiKey: sonioxKey,
+              audioBuffer: fs.readFileSync(upload.path),
+              fileName: path.basename(upload.path),
+              language,
+              diarize,
+            });
+            return { success: true, text };
+          }
+
           const { resolveTranscriptionRoute } = await import("./transcriptionRoute.ts");
           const route = resolveTranscriptionRoute({
             settings: {
@@ -10845,6 +10891,91 @@ class IPCHandlers {
       }
       return this.assemblyAiStreaming.getStatus();
     });
+
+    // Soniox authenticates with the API key inside its first WebSocket message,
+    // so there is no token to mint: the key never leaves main. The instance only
+    // holds state. A dictation's socket closes the moment it stops, and the idle
+    // warm socket that makes the next start instant expires after a few minutes.
+    const getSoniox = () => (this.sonioxStreaming ??= new SonioxStreaming());
+
+    ipcMain.handle("soniox-streaming-warmup", async (event, options = {}) => {
+      try {
+        const apiKey = this.environmentManager.getSonioxKey();
+        if (!apiKey) return { success: false, error: "No Soniox API key configured." };
+        await getSoniox().warmup({ ...options, apiKey });
+        return { success: true };
+      } catch (error) {
+        debugLogger.error("Soniox warmup error", { error: error.message }, "streaming");
+        return { success: false, error: error.message };
+      }
+    });
+
+    let sonioxStartInProgress = false;
+
+    ipcMain.handle("soniox-streaming-start", async (event, options = {}) => {
+      if (sonioxStartInProgress) return { success: false, error: "Operation in progress" };
+      sonioxStartInProgress = true;
+      try {
+        const apiKey = this.environmentManager.getSonioxKey();
+        if (!apiKey) {
+          return {
+            success: false,
+            error: "No Soniox API key configured. Add your key in Settings.",
+          };
+        }
+
+        const win = BrowserWindow.fromWebContents(event.sender);
+        const soniox = getSoniox();
+        if (soniox.isConnected) await soniox.disconnect(false);
+
+        const forward = (channel) => (payload) => {
+          if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+        };
+        soniox.onPartialTranscript = forward("soniox-partial-transcript");
+        soniox.onFinalTranscript = forward("soniox-final-transcript");
+        soniox.onError = (error) => forward("soniox-error")(error.message);
+        soniox.onSessionEnd = forward("soniox-session-end");
+
+        const usedWarmConnection = soniox.hasWarmConnection();
+        await soniox.connect({ ...options, apiKey });
+        return { success: true, usedWarmConnection };
+      } catch (error) {
+        debugLogger.error("Soniox streaming start error", { error: error.message }, "streaming");
+        return streamingStartFailure(error);
+      } finally {
+        sonioxStartInProgress = false;
+      }
+    });
+
+    ipcMain.on("soniox-streaming-send", (event, audioBuffer) => {
+      try {
+        this.sonioxStreaming?.sendAudio(Buffer.from(audioBuffer));
+      } catch (error) {
+        debugLogger.error("Soniox streaming send error", { error: error.message }, "streaming");
+      }
+    });
+
+    ipcMain.on("soniox-streaming-finalize", () => {
+      this.sonioxStreaming?.finalize();
+    });
+
+    ipcMain.handle("soniox-streaming-stop", async () => {
+      try {
+        const result = this.sonioxStreaming
+          ? await this.sonioxStreaming.disconnect(true)
+          : { text: "" };
+        return { success: true, text: result?.text || "" };
+      } catch (error) {
+        debugLogger.error("Soniox streaming stop error", { error: error.message }, "streaming");
+        return { success: false, error: error.message };
+      }
+    });
+
+    ipcMain.handle("soniox-streaming-status", async () =>
+      this.sonioxStreaming
+        ? this.sonioxStreaming.getStatus()
+        : { isConnected: false, sessionId: null }
+    );
 
     let deepgramTokenWindowId = null;
 

@@ -7,6 +7,7 @@ import { followsSystemDefaultMic } from "../helpers/micSelectionRecovery";
 import { resolvePreferredMicrophone } from "../helpers/microphoneSelection";
 import { ActiveMicRecoveryController } from "../helpers/activeMicRecovery";
 import { getBaseLanguageCode } from "../utils/languageSupport";
+import { createMicDenoiser, DENOISE_SAMPLE_RATE, type MicDenoiser } from "../audio/meetingDenoise";
 import {
   resolveInitialSpeakerCountOverride,
   resolveParticipantSpeakerCountSync,
@@ -285,8 +286,12 @@ class MeetingPCMProcessor extends AudioWorkletProcessor {
     if (this._stopped) return false;
     const input = inputs[0]?.[0];
     if (!input) return true;
-    for (let i = 0; i < input.length; i++) {
-      const s = Math.max(-1, Math.min(1, input[i]));
+    // The denoised mic runs at 48 kHz; the transcribers take 24 kHz: average each pair of samples.
+    const step = Math.max(1, Math.round(sampleRate / 24000));
+    for (let i = 0; i + step <= input.length; i += step) {
+      let sum = 0;
+      for (let k = 0; k < step; k++) sum += input[i + k];
+      const s = Math.max(-1, Math.min(1, sum / step));
       this._buffer[this._offset++] = s < 0 ? s * 0x8000 : s * 0x7fff;
       if (this._offset >= BUFFER_SIZE) {
         this.port.postMessage(this._buffer.buffer, [this._buffer.buffer]);
@@ -345,10 +350,12 @@ const createAudioPipeline = async ({
   stream,
   context,
   onChunk,
+  denoiser = null,
 }: {
   stream: MediaStream;
   context: AudioContext;
   onChunk: (chunk: ArrayBuffer) => void;
+  denoiser?: MicDenoiser | null;
 }) => {
   if (context.state === "suspended") {
     await context.resume();
@@ -367,7 +374,12 @@ const createAudioPipeline = async ({
     onChunk(chunk);
   };
 
-  source.connect(processor);
+  if (denoiser) {
+    source.connect(denoiser.input);
+    denoiser.output.connect(processor);
+  } else {
+    source.connect(processor);
+  }
   processor.connect(silentGain);
   silentGain.connect(context.destination);
 
@@ -405,6 +417,7 @@ let segmentCounter = 0;
 // Pipeline lives in module scope — not on React refs — so it survives
 // view changes and re-mounts of the consumer view.
 let micContext: AudioContext | null = null;
+let micDenoiser: MicDenoiser | null = null; // sits between the mic source and the PCM processor while on
 let micSource: MediaStreamAudioSourceNode | null = null;
 let micProcessor: AudioWorkletNode | null = null;
 let micStream: MediaStream | null = null;
@@ -694,6 +707,9 @@ async function cleanup(): Promise<void> {
 
   micAnalyser?.disconnect();
   micAnalyser = null;
+
+  micDenoiser?.destroy();
+  micDenoiser = null;
 
   try {
     micStream?.getTracks().forEach((t) => t.stop());
@@ -1282,9 +1298,17 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
       if (micResult) {
         micStream = micResult;
         setupMicResult = null;
-        const ctx = new AudioContext({ sampleRate: 24000 });
+        // The denoiser's models run at 48 kHz (the PCM worklet brings the audio back to 24 kHz). It is off while
+        // the native echo canceller is on, which needs the raw mic, and when the setting is off.
+        const denoiseWanted =
+          getSettings().meetingDenoiseEnabled && !getSettings().meetingAecEnabled;
+        const ctx = new AudioContext({ sampleRate: denoiseWanted ? DENOISE_SAMPLE_RATE : 24000 });
         micContext = ctx;
         await detachFromOutputDevice(ctx);
+        if (denoiseWanted) {
+          micDenoiser = await createMicDenoiser(ctx);
+          logger.info("Meeting mic denoiser", { active: !!micDenoiser }, "meeting");
+        }
         if (!isCurrentStart()) {
           await teardownStart();
           return;
@@ -1293,6 +1317,7 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
         micPipelinePromise = createAudioPipeline({
           stream: micResult,
           context: ctx,
+          denoiser: micDenoiser,
           onChunk: (chunk) => {
             if (!isRecordingFlag || activeRecordingSessionId !== sessionId) return;
             if (socketReady) {
@@ -1372,7 +1397,7 @@ export async function startRecording(args: StartRecordingArgs): Promise<boolean>
               throw new Error("Meeting recording is no longer active");
             }
             const nextSource = micContext.createMediaStreamSource(replacement);
-            nextSource.connect(micProcessor);
+            nextSource.connect(micDenoiser ? micDenoiser.input : micProcessor);
             if (micAnalyser) nextSource.connect(micAnalyser);
             micSource?.disconnect();
             previous?.getTracks().forEach((track) => track.stop());

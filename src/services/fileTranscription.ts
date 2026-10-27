@@ -67,6 +67,7 @@ export interface TranscriptionApiKeys {
   tinfoilApiKey: string;
   deepgramApiKey: string;
   assemblyaiApiKey: string;
+  sonioxApiKey?: string;
   customTranscriptionApiKey?: string;
 }
 
@@ -88,6 +89,8 @@ export function getTranscriptionApiKey(provider: string, keys: TranscriptionApiK
       return keys.deepgramApiKey;
     case "assemblyai":
       return keys.assemblyaiApiKey;
+    case "soniox":
+      return keys.sonioxApiKey || "";
     case "custom":
       return keys.customTranscriptionApiKey || "";
     default:
@@ -169,8 +172,10 @@ export async function transcribeFile(
     });
   }
 
-  const route = resolveFileTranscriptionRoute(cfg, managed);
-  if (route.transport === "error") {
+  // Soniox batches through its own async API (handled in main), not the route table.
+  const isSoniox = cfg.cloudTranscriptionProvider === "soniox" && !managed;
+  const route = isSoniox ? null : resolveFileTranscriptionRoute(cfg, managed);
+  if (route?.transport === "error") {
     return {
       success: false,
       error: route.message,

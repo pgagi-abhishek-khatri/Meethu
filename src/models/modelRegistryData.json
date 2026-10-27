@@ -419,6 +419,19 @@
           "streaming": true
         }
       ]
+    },
+    {
+      "id": "soniox",
+      "name": "Soniox",
+      "baseUrl": "https://api.soniox.com",
+      "models": [
+        {
+          "id": "stt-rt-v5",
+          "name": "Soniox Realtime v5",
+          "description": "Realtime multilingual speech-to-text with automatic language detection",
+          "streaming": true
+        }
+      ]
     }
   ],
   "cloudProviders": [

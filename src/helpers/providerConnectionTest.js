@@ -11,11 +11,13 @@ const ENDPOINTS = {
   deepgram: "https://api.deepgram.com/v1/models",
   // AssemblyAI exposes no model list; listing transcripts is its 200-vs-401 probe.
   assemblyai: "https://api.assemblyai.com/v2/transcript?limit=1",
+  // Soniox exposes no model list either; listing files is its 200-vs-401 probe (Bearer auth).
+  soniox: "https://api.soniox.com/v1/files?limit=1",
 };
 
 // Neither response is OpenAI-shaped — Deepgram's /v1/models is {stt,tts}-keyed
 // and AssemblyAI returns transcripts — so a 200 is the whole credential signal.
-const MODEL_LIST_UNVERIFIABLE = new Set(["deepgram", "assemblyai"]);
+const MODEL_LIST_UNVERIFIABLE = new Set(["deepgram", "assemblyai", "soniox"]);
 
 // Renderers translate errorCode via onboarding.rehaul.provider.errors.*; the
 // English `error` string stays for logs and older callers.

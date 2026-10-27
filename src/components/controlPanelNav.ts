@@ -1,11 +1,27 @@
 import type React from "react";
 import { useTranslation } from "react-i18next";
-import { Home, BarChart3, MessageSquare, NotebookPen, BookOpen, Upload, Blocks } from "./icons";
+import {
+  Home,
+  BarChart3,
+  MessageSquare,
+  NotebookPen,
+  BookOpen,
+  Upload,
+  Blocks,
+  Sparkles,
+} from "./icons";
 import { isAgentAllowed, isPolicyActionAllowed } from "../stores/policyRules";
 import { usePolicyStore } from "../stores/policyStore";
 
 export type ControlPanelView =
-  "home" | "insights" | "chat" | "personal-notes" | "dictionary" | "upload" | "integrations";
+  | "home"
+  | "insights"
+  | "chat"
+  | "personal-notes"
+  | "dictionary"
+  | "upload"
+  | "integrations"
+  | "copilot";
 
 export interface ControlPanelNavItem {
   id: ControlPanelView;
@@ -35,5 +51,6 @@ export function useControlPanelNavItems(): ControlPanelNavItem[] {
       : []),
     { id: "dictionary", label: t("sidebar.dictionary"), icon: BookOpen },
     { id: "integrations", label: t("sidebar.integrations"), icon: Blocks },
+    { id: "copilot", label: "Copilot", icon: Sparkles },
   ];
 }

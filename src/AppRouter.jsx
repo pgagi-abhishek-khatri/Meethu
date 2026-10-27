@@ -24,6 +24,7 @@ const isOnboardingInProgress = () =>
 
 const ControlPanel = React.lazy(() => import("./components/ControlPanel.tsx"));
 const OnboardingFlow = React.lazy(() => import("./components/OnboardingFlow.tsx"));
+const CopilotApp = React.lazy(() => import("./components/copilot/CopilotApp.tsx"));
 
 export default function AppRouter() {
   useTheme();
@@ -33,6 +34,14 @@ export default function AppRouter() {
 
   if (params.includes("meeting-notification=true")) {
     return <MeetingNotificationOverlay />;
+  }
+
+  if (params.includes("copilot=true")) {
+    return (
+      <Suspense fallback={null}>
+        <CopilotApp />
+      </Suspense>
+    );
   }
 
   if (params.includes("agent-dictation-pill=true")) {
@@ -92,6 +101,11 @@ function MainApp() {
 
   useEffect(() => {
     if (!authLoaded) return;
+
+    // Local dev shortcut: VITE_SKIP_ONBOARDING=true in .env skips the setup wizard.
+    if (import.meta.env.VITE_SKIP_ONBOARDING === "true") {
+      localStorage.setItem("onboardingCompleted", "true");
+    }
 
     const onboardingCompleted = localStorage.getItem("onboardingCompleted") === "true";
     const authSkipped =

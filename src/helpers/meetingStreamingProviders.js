@@ -2,6 +2,7 @@ const OpenAIRealtimeStreaming = require("./openaiRealtimeStreaming");
 const AssemblyAiStreaming = require("./assemblyAiStreaming");
 const DeepgramStreaming = require("./deepgramStreaming");
 const CortiStreaming = require("./cortiStreaming");
+const SonioxStreaming = require("./sonioxStreaming");
 const { TinfoilRealtimeStreaming } = require("./tinfoilRealtimeStreaming");
 
 const STREAMING_CLIENT_BY_PROVIDER = {
@@ -9,6 +10,7 @@ const STREAMING_CLIENT_BY_PROVIDER = {
   "assemblyai-realtime": AssemblyAiStreaming,
   "deepgram-realtime": DeepgramStreaming,
   "corti-realtime": CortiStreaming,
+  "soniox-realtime": SonioxStreaming,
   "tinfoil-realtime": TinfoilRealtimeStreaming,
 };
 

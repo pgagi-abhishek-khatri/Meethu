@@ -951,9 +951,11 @@ export const useAudioRecording = (toast, options = {}) => {
     window.electronAPI.getSttConfig?.().then((config) => {
       if (config?.success && audioManagerRef.current) {
         audioManagerRef.current.setSttConfig(config);
-        if (audioManagerRef.current.shouldUseStreaming()) {
-          audioManagerRef.current.warmupStreamingConnection();
-        }
+      }
+      // BYOK realtime providers need no managed config, so warm them even when
+      // the config fetch failed (no OpenWhispr API configured).
+      if (audioManagerRef.current?.shouldUseStreaming()) {
+        audioManagerRef.current.warmupStreamingConnection();
       }
     });
 

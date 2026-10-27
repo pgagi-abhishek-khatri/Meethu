@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Soniox Realtime Lab</title>
+    <style>
+      :root {
+        --bg: #0f1115;
+        --panel: #171a21;
+        --line: #262b36;
+        --fg: #e6e8ee;
+        --mute: #8b93a5;
+        --acc: #5b8cff;
+        --ok: #3ecf8e;
+        --bad: #ff5d5d;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #f6f7f9;
+          --panel: #fff;
+          --line: #e2e5ec;
+          --fg: #14171f;
+          --mute: #6a7283;
+          --acc: #2f5bff;
+          --ok: #12a36a;
+          --bad: #d62e2e;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          15px/1.5 system-ui,
+          sans-serif;
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 20px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        min-height: 100vh;
+      }
+      h1 {
+        font-size: 16px;
+        margin: 0;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: end;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px 14px;
+      }
+      .f {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        font-size: 12px;
+        color: var(--mute);
+      }
+      input,
+      select {
+        background: var(--bg);
+        color: var(--fg);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 7px 9px;
+        font: inherit;
+        font-size: 14px;
+      }
+      input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+        accent-color: var(--acc);
+        margin: 6px 0;
+      }
+      button {
+        background: var(--acc);
+        color: #fff;
+        border: 0;
+        border-radius: 8px;
+        padding: 9px 22px;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button.stop {
+        background: var(--bad);
+      }
+      button.sec {
+        background: transparent;
+        color: var(--fg);
+        border: 1px solid var(--line);
+        font-weight: 400;
+        padding: 9px 14px;
+      }
+      #st {
+        margin-left: auto;
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        color: var(--mute);
+        font-size: 13px;
+      }
+      #dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--mute);
+      }
+      .on #dot {
+        background: var(--ok);
+        box-shadow: 0 0 8px var(--ok);
+      }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+      }
+      .stat {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 8px 12px;
+      }
+      .stat b {
+        display: block;
+        font-size: 22px;
+        font-variant-numeric: tabular-nums;
+      }
+      .stat small {
+        color: var(--mute);
+        font-size: 11px;
+      }
+      #out {
+        flex: 1;
+        min-height: 260px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 16px 18px;
+        font-size: 20px;
+        line-height: 1.7;
+        overflow: auto;
+      }
+      .nf {
+        color: var(--mute);
+      }
+      .tag {
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        color: var(--acc);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 4px;
+        margin: 0 6px 0 4px;
+        vertical-align: middle;
+      }
+      #log {
+        font:
+          12px ui-monospace,
+          monospace;
+        color: var(--mute);
+        max-height: 70px;
+        overflow: auto;
+      }
+      #log .e {
+        color: var(--bad);
+      }
+      @media (max-width: 600px) {
+        .stats {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Soniox Realtime Lab</h1>
+
+    <div class="row">
+      <label class="f"
+        >API key<input id="key" type="password" placeholder="paste key" autocomplete="off"
+      /></label>
+      <label class="f"
+        >Language
+        <select id="lang">
+          <option value="en">English</option>
+          <option value="hi">Hindi</option>
+          <option value="mr">Marathi</option>
+          <option value="auto3" selected>Auto: English + Hindi + Marathi</option>
+          <option value="auto">Auto: detect any language</option>
+        </select>
+      </label>
+      <label class="f"
+        >Speed
+        <select id="speed">
+          <option value="fast">Fastest (cuts off sooner)</option>
+          <option value="bal" selected>Balanced</option>
+          <option value="acc">Accurate (waits longer)</option>
+        </select>
+      </label>
+      <label class="f"
+        >Mic<select id="mic">
+          <option value="">default</option>
+        </select></label
+      >
+      <label class="f">Speakers<input id="diar" type="checkbox" /></label>
+      <label class="f"
+        >Custom words<input id="terms" placeholder="OpenWhispr, Soniox" style="width: 180px"
+      /></label>
+    </div>
+
+    <div class="row">
+      <button id="go">Start</button>
+      <button id="clr" class="sec">Clear</button>
+      <div id="st"><span id="dot"></span><span id="stt">idle</span></div>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><b id="s-first">–</b><small>first word (ms)</small></div>
+      <div class="stat"><b id="s-lag">–</b><small>server backlog (ms)</small></div>
+      <div class="stat"><b id="s-fin">–</b><small>final lag (ms)</small></div>
+      <div class="stat"><b id="s-sent">0.0</b><small>audio sent (s)</small></div>
+    </div>
+
+    <div id="out"></div>
+    <div id="log"></div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const URL_WS = "wss://stt-rt.soniox.com/transcribe-websocket";
+      const SR = 16000;
+      // speed presets: audio chunk size + endpointing (max wait for end of utterance, sensitivity, latency level)
+      const SPEED = {
+        fast: { chunk: 40, delay: 500, sens: 0.5, lat: 3 },
+        bal: { chunk: 60, delay: 1500, sens: 0, lat: 1 },
+        acc: { chunk: 100, delay: 3000, sens: -0.5, lat: 0 },
+      };
+      const LANG = {
+        // hints + whether to turn on language ID
+        en: ["en"],
+        hi: ["hi"],
+        mr: ["mr"],
+        auto3: ["en", "hi", "mr"],
+        auto: null,
+      };
+      let ws,
+        ctx,
+        stream,
+        node,
+        running = false,
+        restartT,
+        keepT;
+      let sentMs = 0,
+        t0 = 0,
+        firstSeen = false,
+        finals = [],
+        nonFinals = [];
+
+      $("key").value = localStorage.getItem("soniox_key") || "";
+      $("go").onclick = () => (running ? stop() : start());
+      $("clr").onclick = () => {
+        finals = [];
+        nonFinals = [];
+        render();
+      };
+      // settings only apply at session start: auto-restart when changed mid-run
+      document.querySelectorAll("select,#diar,#terms").forEach((el) =>
+        el.addEventListener("change", () => {
+          if (!running) return;
+          clearTimeout(restartT);
+          restartT = setTimeout(async () => {
+            await stop();
+            start();
+          }, 250);
+        })
+      );
+      navigator.mediaDevices?.enumerateDevices().then((ds) => {
+        $("mic").innerHTML += ds
+          .filter((d) => d.kind === "audioinput" && d.deviceId !== "default")
+          .map((d) => `<option value="${d.deviceId}">${d.label || d.deviceId.slice(0, 8)}</option>`)
+          .join("");
+      });
+
+      function log(m, err) {
+        const d = document.createElement("div");
+        if (err) d.className = "e";
+        d.textContent = new Date().toLocaleTimeString() + "  " + m;
+        $("log").append(d);
+        $("log").scrollTop = 1e9;
+      }
+      function setSt(t, on) {
+        $("stt").textContent = t;
+        document.body.classList.toggle("on", !!on);
+      }
+
+      function buildConfig() {
+        const sp = SPEED[$("speed").value],
+          hints = LANG[$("lang").value];
+        const c = {
+          api_key: $("key").value.trim(),
+          model: "stt-rt-v5",
+          audio_format: "pcm_s16le",
+          sample_rate: SR,
+          num_channels: 1,
+          enable_endpoint_detection: true,
+          max_endpoint_delay_ms: sp.delay,
+          endpoint_sensitivity: sp.sens,
+          endpoint_latency_adjustment_level: sp.lat,
+          enable_language_identification: true, // tags each word with its language (lets Auto switch mid-sentence)
+          enable_speaker_diarization: $("diar").checked,
+        };
+        if (hints) {
+          c.language_hints = hints;
+          if (hints.length === 1) c.language_hints_strict = true;
+        }
+        const terms = $("terms")
+          .value.split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        if (terms.length) c.context = { terms };
+        return c;
+      }
+
+      async function start() {
+        if (running) return;
+        const cfg = buildConfig();
+        if (!cfg.api_key) return log("API key missing", 1);
+        localStorage.setItem("soniox_key", cfg.api_key);
+        running = true;
+        $("go").textContent = "Stop";
+        $("go").className = "stop";
+        sentMs = 0;
+        firstSeen = false;
+        $("s-first").textContent = "–";
+        setSt("connecting…");
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              deviceId: $("mic").value ? { exact: $("mic").value } : undefined,
+              channelCount: 1,
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+            },
+          });
+          ctx = new AudioContext({ sampleRate: SR });
+          // ScriptProcessor, not AudioWorklet: worklet modules fail to load from file:// pages (null origin)
+          node = ctx.createScriptProcessor(512, 1, 1); // 512 samples = 32 ms
+          ctx.createMediaStreamSource(stream).connect(node);
+          node.connect(ctx.destination); // required for onaudioprocess to fire; output stays silent
+          ws = new WebSocket(URL_WS);
+          const buf = [],
+            need = Math.round((SR * SPEED[$("speed").value].chunk) / 1000);
+          let have = 0;
+          node.onaudioprocess = (e) => {
+            const d = e.inputBuffer.getChannelData(0).slice();
+            buf.push(d);
+            have += d.length; // audio captured before WS opens is buffered, not lost
+            if (ws.readyState !== 1 || have < need) return;
+            const all = new Float32Array(have);
+            let o = 0;
+            for (const b of buf) {
+              all.set(b, o);
+              o += b.length;
+            }
+            buf.length = 0;
+            have = 0;
+            const pcm = new Int16Array(all.length);
+            for (let i = 0; i < all.length; i++) {
+              const s = Math.max(-1, Math.min(1, all[i]));
+              pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+            }
+            if (!sentMs) t0 = performance.now();
+            ws.send(pcm.buffer);
+            sentMs += (all.length / SR) * 1000;
+            $("s-sent").textContent = (sentMs / 1000).toFixed(1);
+          };
+          ws.onopen = () => {
+            ws.send(JSON.stringify(cfg));
+            setSt("listening", true);
+            log("connected · " + JSON.stringify({ ...cfg, api_key: "***" }));
+            keepT = setInterval(
+              () => ws.readyState === 1 && ws.send(JSON.stringify({ type: "keepalive" })),
+              15000
+            );
+          };
+          ws.onmessage = (e) => onMsg(JSON.parse(e.data));
+          ws.onerror = () => log("websocket error", 1);
+          ws.onclose = (ev) => {
+            log(`closed ${ev.code} ${ev.reason}`);
+            if (running) stop(true);
+          };
+        } catch (err) {
+          log(err.message, 1);
+          stop(true);
+        }
+      }
+
+      async function stop(skipEos) {
+        running = false;
+        clearInterval(keepT);
+        $("go").textContent = "Start";
+        $("go").className = "";
+        if (!skipEos && ws?.readyState === 1)
+          try {
+            ws.send("");
+          } catch {}
+        node?.disconnect();
+        stream?.getTracks().forEach((t) => t.stop());
+        await ctx?.close().catch(() => {});
+        const w = ws;
+        setTimeout(() => w?.close(), 1500); // let server flush last tokens
+        finals.push(...nonFinals);
+        nonFinals = [];
+        render();
+        setSt("idle");
+      }
+
+      function onMsg(m) {
+        if (m.error_code) {
+          log(`${m.error_code}: ${m.error_message}`, 1);
+          return;
+        }
+        if (m.tokens?.length && !firstSeen) {
+          firstSeen = true;
+          $("s-first").textContent = Math.round(performance.now() - t0);
+        }
+        $("s-lag").textContent = Math.max(0, Math.round(sentMs - m.total_audio_proc_ms));
+        $("s-fin").textContent = Math.max(0, Math.round(sentMs - m.final_audio_proc_ms));
+        nonFinals = [];
+        for (const t of m.tokens || []) (t.is_final ? finals : nonFinals).push(t);
+        render();
+      }
+
+      function render() {
+        const frag = document.createDocumentFragment();
+        let spk = null,
+          lang = null;
+        for (const t of finals.concat(nonFinals)) {
+          if (t.text === "<end>" || t.text === "<fin>") {
+            if (t.text === "<end>") {
+              frag.append(document.createElement("br"));
+              spk = lang = null;
+            }
+            continue;
+          }
+          const showSpk = $("diar").checked && t.speaker != null && t.speaker !== spk;
+          const showLang = t.language && t.language !== lang && $("lang").value.startsWith("auto");
+          if (showSpk || showLang) {
+            if (showSpk) frag.append(Object.assign(document.createElement("br")));
+            const g = document.createElement("span");
+            g.className = "tag";
+            g.textContent = (showSpk ? `S${t.speaker} ` : "") + (t.language || "");
+            frag.append(g);
+            spk = t.speaker;
+            lang = t.language;
+          }
+          const s = document.createElement("span");
+          s.textContent = t.text;
+          if (!t.is_final) s.className = "nf";
+          frag.append(s);
+        }
+        $("out").replaceChildren(frag);
+        $("out").scrollTop = 1e9;
+      }
+    </script>
+  </body>
+</html>

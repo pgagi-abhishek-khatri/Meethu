@@ -270,3 +270,17 @@ test("gpt-live-transcribe is never offered for Note Recording", async () => {
     );
   }
 });
+
+test("BYOK Soniox routes to its realtime client", async () => {
+  const { resolveMeetingTranscriptionOptions } = await load();
+
+  assert.deepEqual(
+    resolveMeetingTranscriptionOptions({
+      ...baseOptions,
+      byokProviders: [...byokProviders, { id: "soniox", models: [{ id: "stt-rt-v5" }] }],
+      selectedProvider: "soniox",
+      selectedModel: "stt-rt-v5",
+    }),
+    { provider: "soniox-realtime", model: "stt-rt-v5", mode: "byok", language: "en" }
+  );
+});
