@@ -3,15 +3,15 @@
 // so thresholds must be tuned on replayed meetings (Phase 15 eval) before trust.
 const DEFAULT_DECISION_CONFIG = {
   // Policy on D1's answers (all unvalidated defaults: tune on replayed meetings, scripts/copilot/replay-fast.mjs)
-  actThreshold: { quiet: 0.7, normal: 0.5, chatty: 0.4 }, // act x (1 - chatter) must reach this; 0.5 balances recall and precision on 15 labelled meetings
+  actThreshold: { quiet: 0.5, normal: 0.3, chatty: 0.15 }, // act x (1 - chatter) must reach this; low on purpose: most topics get a card, the behaviour guide learns what to leave out
   explicitThreshold: 0.8, // "the USER asked the copilot" (judged by D1 on the USER's own words) bypasses quiet level, cooldown, already-handled
-  alreadyHandledThreshold: 0.75, // "covered by a card or running analysis" at this probability skips
+  alreadyHandledThreshold: 0.85, // "covered by a card or running analysis" at this probability skips
   replaceMin: 0.6, // "changes a running analysis" at this probability redoes it
   textCompleteThreshold: 0.5,
   maxWaitForCompleteMs: 2500, // never defer longer than this for an unfinished sentence
   recheckAfterMs: 800,
   recheckBarFactor: 0.6, // an unfinished sentence is rechecked if it already scores this share of the bar
-  cooldownMs: 8000, // min gap between proactive cards
+  cooldownMs: 4000, // min gap between proactive cards
   holdWhileUserSpeaking: true,
   holdMaxMs: 4000, // never hold others' words longer than this while the user speaks (they would starve)
   weakCardBelow: 0.7, // proactive card with less confidence than this ...
@@ -33,7 +33,7 @@ const DEFAULT_DECISION_CONFIG = {
   // OpenRouter serves Liquid's D1 at /systemone (same typed request and answers as
   // Liquid's own API, which is https://api.liquid.ai/decisions/v1/systemone).
   url: "https://openrouter.ai/api/v1/systemone",
-  model: "perplexity/pplx-decider-v1.1-27b", // was liquid/d1: same answers on our eval and podcast replay, half the price, lower latency
+  model: "perplexity/pplx-decider-v1.2", // v1.1-27b was withdrawn from OpenRouter (404); liquid/d1 also works
   timeoutMs: 2500,
 };
 

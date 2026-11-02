@@ -1,8 +1,7 @@
 // The questions asked of D1: ONE call per decision, a handful of questions. Everything else (how to
 // answer, what to look up) is the main model's job once a card is worth making.
 //   act                 does new_text carry substance about the subject?
-//   chatter             is it only small talk or running the meeting?
-//   help                is someone asking, unsure, or claiming something worth checking? (card score = act x (1 - chatter) x help)
+//   chatter             is it only small talk or running the meeting? (card score = act x (1 - chatter))
 //   asked_of_assistant  did the USER ask the assistant outright?
 //   complete            is the last utterance a finished thought?
 //   relation            (only with cards or running analyses) new need / already covered / replaces a job
@@ -78,12 +77,6 @@ function buildQuestions(ctx) {
   );
   questions.chatter = noul(
     "Is new_text only small talk, greetings, thanks, acknowledgements, filler, or running the meeting itself (introductions, agenda, screen sharing, audio checks)?"
-  );
-  // Measured on 120 written snippets (62 want a card, 58 should stay silent): act x (1 - chatter) alone separates them
-  // with AUC 0.83 (speakers using terms they know, decisions and scheduling all look "substantive"); times this
-  // question 0.94, and at the bar every wanted card still runs while false runs fall from 33 to 7 of 58.
-  questions.help = noul(
-    "Is someone in new_text asking a question, unsure about something, or stating a fact, number or claim that is worth checking? NO if the speakers are simply using terms they clearly know, announcing decisions, planning, scheduling or giving updates."
   );
   questions.asked_of_assistant = ASKED;
   questions.complete = noul("Is the last utterance a finished thought, not cut off mid-sentence?");

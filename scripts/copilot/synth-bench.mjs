@@ -25,10 +25,8 @@ const [inFile, outFile] = process.argv.slice(2);
 const e = getDecisionEnv();
 const d1 = createLiquidClient({ apiKey: e.apiKey, url: e.url, model: e.model, timeoutMs: 30000 });
 const ai = getCopilotAiConfig();
-const { createCardVerifier } = require(path.join(root, "src/copilot/core/answer/verify"));
 const runner = createAnswerRunner({
   model: createMainModel({ apiKey: ai.apiKey, model: ai.model }),
-  verify: process.env.NOVERIFY ? null : createCardVerifier({ client: d1 }),
 });
 
 const seg = (line, id) => {

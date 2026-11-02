@@ -27,9 +27,16 @@ function createCopilotWindow({
   let mode = "full";
   let orbAt = null; // top-left of the orb; peek grows from its corner
 
-  const areaOf = (b) => screen.getDisplayMatching(b).workArea;
+  // Electron needs a whole rectangle of integers; the saved orb spot is only { x, y }.
+  const areaOf = (b) =>
+    screen.getDisplayMatching({
+      x: Math.round(Number(b.x)) || 0,
+      y: Math.round(Number(b.y)) || 0,
+      width: Math.max(1, Math.round(Number(b.width)) || 1),
+      height: Math.max(1, Math.round(Number(b.height)) || 1),
+    }).workArea;
   const clampToScreen = (b) => {
-    if (!b || b.x == null) return b;
+    if (!b || !Number.isFinite(b.x) || !Number.isFinite(b.y)) return b;
     const area = areaOf(b);
     const x = Math.min(Math.max(b.x, area.x), area.x + area.width - 120);
     const y = Math.min(Math.max(b.y, area.y), area.y + area.height - 80);
@@ -57,7 +64,8 @@ function createCopilotWindow({
     const saved = clampToScreen(expanded ? state.expandedBounds : state.compact);
     const size = expanded ? SIZES.expanded : SIZES.compact;
     const display = screen.getPrimaryDisplay().workArea;
-    orbAt = clampToScreen(state.orb) ?? defaultOrbAt();
+    const orb = clampToScreen(state.orb);
+    orbAt = Number.isFinite(orb?.x) && Number.isFinite(orb?.y) ? orb : defaultOrbAt();
     mode = MODES.has(startMode) ? startMode : "full";
     const fullBounds = {
       width: saved?.width ?? size.width,

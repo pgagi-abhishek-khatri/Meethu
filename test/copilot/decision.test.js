@@ -56,7 +56,6 @@ const KINDS = ["quick_answer", "explanation", "talking_points", "diagram", "docu
 const answers = ({ act = 0.9, kind = "quick_answer", kp = 0.9, ...over } = {}) => ({
   act: N(act),
   chatter: N(0),
-  help: N(1),
   asked_of_assistant: N(0.05),
   complete: N(0.95),
   kind: C(kind, KINDS, kp),
@@ -82,7 +81,6 @@ test("one call asks few questions; relation only when a card or analysis could c
     "asked_of_assistant",
     "chatter",
     "complete",
-    "help",
     "kind",
     "needs_web",
   ]);
@@ -120,15 +118,12 @@ test("a clear need runs; small talk waits", () => {
 });
 
 test("the quiet level moves the bar", () => {
-  const a = answers({ act: 0.65 });
+  const a = answers({ act: 0.4 });
   assert.equal(run(a, ctx({ settings: { ...d.DEFAULT_SETTINGS, quiet: "normal" } })).kind, "run");
   assert.equal(run(a, ctx({ settings: { ...d.DEFAULT_SETTINGS, quiet: "quiet" } })).kind, "wait");
-  // chatter discounts substance: 0.9 x (1 - 0.5) is under the normal bar
-  assert.equal(run(answers({ act: 0.9, chatter: N(0.5) })).kind, "wait");
-  // help multiplies too: substance that nobody asked about or doubted (fluent jargon, decisions) stays quiet
-  assert.equal(run(answers({ act: 0.9, help: N(0.3) })).kind, "wait");
-  assert.equal(run(answers({ act: 0.9, help: N(0.9) })).kind, "run");
-  const low = answers({ act: 0.5 });
+  // chatter discounts substance: 0.9 x (1 - 0.8) is under the normal bar
+  assert.equal(run(answers({ act: 0.9, chatter: N(0.8) })).kind, "wait");
+  const low = answers({ act: 0.2 });
   assert.equal(run(low, ctx({ settings: { ...d.DEFAULT_SETTINGS, quiet: "chatty" } })).kind, "run");
 });
 
@@ -240,12 +235,13 @@ test("decide: exactly one call, with the whole state, run decision carries laten
   assert.ok(client.calls[0].state.new_text.length);
 });
 
-test("decide: failures stay quiet", async () => {
+test("decide: a failed decision still makes a card", async () => {
   const out = await d.decide({
     input: input(),
     client: one(Object.assign(new Error("x"), { code: "timeout" })),
   });
-  assert.equal(out.kind, "wait");
+  assert.equal(out.kind, "run");
+  assert.equal(out.trigger, "proactive");
   assert.match(out.reasons[0], /decision_unavailable:timeout/);
   assert.equal(d.fallbackDecision(true, "http").trigger, "explicit");
 });

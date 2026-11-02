@@ -19,7 +19,6 @@ const DEFAULT_TRIGGER_CONFIG = {
   turnGapMs: 1500, // quiet time (no partial or final from that voice) that ends a turn
   questionTurnGapMs: 300, // a question mark means they handed over: a shorter wait
   maxTurnWaitMs: 20000, // a long monologue is still looked at this often
-  quietFactor: 3, // after a long run of calls that found nothing to do, calls are spaced this much wider (a real question still goes at once)
 };
 
 const FILLER =
@@ -32,7 +31,6 @@ function createScheduler({
   now = Date.now,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
-  getQuiet = () => false, // true while the conversation has been giving the decider nothing to act on
 }) {
   const stats = {
     fired: 0,
@@ -92,10 +90,7 @@ function createScheduler({
         return arm(quiet, false);
       }
     }
-    const gap =
-      lastStartedAt +
-      (questionPending ? cfg.questionMinGapMs : cfg.minGapMs * (getQuiet() ? cfg.quietFactor : 1)) -
-      now();
+    const gap = lastStartedAt + (questionPending ? cfg.questionMinGapMs : cfg.minGapMs) - now();
     if (gap > 0 && !recheckPending) return arm(gap, false); // uncapped: a gap longer than the batch cap would spin
 
     running = true;
@@ -152,7 +147,7 @@ function createScheduler({
       lastActivityAt = now();
       pendingSince ??= now();
       questionPending ||= questionish(seg.text);
-      arm(questionish(seg.text) ? cfg.questionDebounceMs : cfg.debounceMs * (getQuiet() ? 2 : 1));
+      arm(questionish(seg.text) ? cfg.questionDebounceMs : cfg.debounceMs);
       return c;
     },
     // Words still being spoken never call D1, but they show whether the pending speaker has finished.

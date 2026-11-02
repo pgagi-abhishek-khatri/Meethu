@@ -1,8 +1,12 @@
+import { useState } from "react";
+import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { Toggle } from "../ui/toggle";
+import { cn } from "../lib/utils";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { SettingsGroup, SettingsRow, SettingsSection } from "../ui/SettingsSection";
 import { useSettingsStore } from "../../stores/settingsStore";
-import { BlurField, useCopilotSettings } from "./CopilotFields";
+import { BlurField, HotkeyField, useCopilotSettings } from "./CopilotFields";
 
 function Pick({
   value,
@@ -31,31 +35,14 @@ function Pick({
 
 const num = (v: string, min: number) => Math.max(min, Math.round(Number(v)) || min);
 
-export default function CopilotSettingsTab() {
+// `embedded`: shown inside the Copilot page, whose Audio & keys section has the key and the mic rows.
+export default function CopilotSettingsTab({ embedded = false }: { embedded?: boolean }) {
   const { settings: s, update } = useCopilotSettings();
-  const denoise = useSettingsStore((st) => st.meetingDenoiseEnabled);
-  const setDenoise = useSettingsStore((st) => st.setMeetingDenoiseEnabled);
   if (!s) return null;
 
   return (
     <div className="space-y-6">
-      <SettingsSection
-        title="OpenRouter"
-        description={
-          s.keyFromEnv
-            ? "Using the key from the environment."
-            : s.hasKey
-              ? "A key is saved. Enter a new one to replace it."
-              : "The copilot needs an OpenRouter API key."
-        }
-      >
-        <BlurField
-          type="password"
-          value=""
-          placeholder={s.hasKey ? "••••••••" : "sk-or-…"}
-          onSave={(apiKey) => apiKey && update({ apiKey })}
-        />
-      </SettingsSection>
+      {!embedded && <OpenRouterKeySection />}
 
       <SettingsSection title="Models">
         <SettingsGroup>
@@ -149,10 +136,11 @@ export default function CopilotSettingsTab() {
               onChange={(onEnd) => update({ onEnd: onEnd as typeof s.onEnd })}
             />
           </SettingsRow>
-          <SettingsRow label="Hotkey" description={s.hotkeyError}>
-            <div className="w-44">
-              <BlurField value={s.hotkey} onSave={(hotkey) => update({ hotkey })} />
-            </div>
+          <SettingsRow
+            label="Show / hide hotkey"
+            description={s.hotkeyError || "Click, then press the keys. Backspace clears."}
+          >
+            <HotkeyField value={s.hotkey} onChange={(hotkey) => update({ hotkey })} />
           </SettingsRow>
         </SettingsGroup>
       </SettingsSection>
@@ -180,7 +168,7 @@ export default function CopilotSettingsTab() {
         </SettingsGroup>
       </SettingsSection>
 
-      <SettingsSection title="Data and audio">
+      <SettingsSection title={embedded ? "Data" : "Data and audio"}>
         <SettingsGroup>
           <SettingsRow label="Keep past meetings for (days)">
             <div className="w-20">
@@ -191,14 +179,74 @@ export default function CopilotSettingsTab() {
               />
             </div>
           </SettingsRow>
-          <SettingsRow
-            label="Reduce background noise on my mic during meetings"
-            description="Ignored while echo cancellation is on."
-          >
-            <Toggle checked={denoise} onChange={setDenoise} />
-          </SettingsRow>
+          {!embedded && <DenoiseRow />}
         </SettingsGroup>
       </SettingsSection>
     </div>
+  );
+}
+
+export function DenoiseRow() {
+  const denoise = useSettingsStore((st) => st.meetingDenoiseEnabled);
+  const setDenoise = useSettingsStore((st) => st.setMeetingDenoiseEnabled);
+  return (
+    <SettingsRow
+      label="Reduce background noise on my mic during meetings"
+      description="Ignored while echo cancellation is on."
+    >
+      <Toggle checked={denoise} onChange={setDenoise} />
+    </SettingsRow>
+  );
+}
+
+// The OpenRouter key that runs every copilot model call.
+export function OpenRouterKeySection() {
+  const { settings: s, update } = useCopilotSettings();
+  const [key, setKey] = useState("");
+  if (!s) return null;
+  const save = () => {
+    if (!key.trim()) return;
+    update({ apiKey: key.trim() });
+    setKey("");
+  };
+  return (
+    <SettingsSection
+      title="OpenRouter key"
+      description="One key runs every copilot model: deciding, answering, summaries and reading project files. Stored encrypted on this computer."
+    >
+      <SettingsGroup>
+        <div className="flex items-center gap-2">
+          <span
+            className={cn(
+              "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium",
+              s.hasKey ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"
+            )}
+          >
+            <span
+              className={cn("h-1.5 w-1.5 rounded-full", s.hasKey ? "bg-success" : "bg-destructive")}
+            />
+            {s.keyFromEnv ? "From .env" : s.hasKey ? "Saved" : "Missing"}
+          </span>
+          <Input
+            type="password"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && save()}
+            placeholder={s.hasKey ? "Paste a new key to replace it" : "sk-or-…"}
+            className="h-8"
+          />
+          <Button size="sm" disabled={!key.trim()} onClick={save}>
+            Save
+          </Button>
+        </div>
+        <button
+          type="button"
+          onClick={() => window.electronAPI?.openExternal?.("https://openrouter.ai/keys")}
+          className="text-xs text-primary/80 hover:text-primary"
+        >
+          Get a key at openrouter.ai
+        </button>
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

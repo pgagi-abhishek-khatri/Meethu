@@ -35,7 +35,6 @@ function fakeD1() {
       if ("act" in questions) {
         answers.act = N(text.includes("?") ? 0.9 : 0.02);
         answers.chatter = N(0);
-        answers.help = N(1);
         answers.complete = N(0.95);
         answers.kind = {
           type: "choice",
@@ -175,7 +174,7 @@ test("during the card cooldown nothing is judged and the text is kept for the ne
   await clock.advance(1500);
   const calls = client.calls.length;
   say(service, "system", "And what about the quarter before that one?");
-  await clock.advance(3000); // inside the 8 s cooldown
+  await clock.advance(2000); // inside the 4 s cooldown
   assert.equal(client.calls.length, calls, "no D1 call during the cooldown");
   assert.equal(service.stats().scheduler.deferrals >= 1, true);
   await clock.advance(10_000);
@@ -234,7 +233,7 @@ test("while an analysis runs, new text is judged against it even inside the cool
   await clock.advance(1500);
   const before = client.calls.length;
   say(service, "system", "Sorry, I meant the revenue for the whole year?");
-  await clock.advance(3000); // inside the 8 s cooldown, simulated job still running
+  await clock.advance(2000); // inside the 4 s cooldown, simulated job still running
   const check = client.calls
     .slice(before)
     .find((c) => "relation" in c.questions && !("act" in c.questions));
@@ -282,7 +281,6 @@ test("a weak proactive card stops counting as handled after the short memory, a 
       const out = await orig(req);
       if (req.questions.act) out.answers.act = N(conf);
       if (req.questions.chatter) out.answers.chatter = N(0);
-      if (req.questions.help) out.answers.help = N(1);
       return out;
     };
     say(service, "system", "What was the revenue for the last quarter?");
@@ -587,13 +585,12 @@ test("a refused key or empty account is reported once, and cleared when a call w
 });
 
 // D1 that finds every moment only mildly interesting: below the bar, so nothing runs by itself.
-const lukewarmD1 = (act = 0.3) => ({
+const lukewarmD1 = (act = 0.2) => ({
   async systemOne({ questions }) {
     const answers = { asked_of_assistant: N(0.05) };
     if ("act" in questions) {
       answers.act = N(act);
       answers.chatter = N(0);
-      answers.help = N(1);
       answers.complete = N(0.95);
       answers.kind = {
         type: "choice",

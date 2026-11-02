@@ -81,6 +81,13 @@ contextBridge.exposeInMainWorld("copilot", {
     remove: (id) => copilotCall("project-remove", id),
     setActive: (id, active) => copilotCall("project-active", id, active),
     addFiles: (id) => copilotCall("project-add-files", id),
+    // Files dropped on the page, as local paths.
+    addDropped: (id, files) =>
+      copilotCall(
+        "project-add-paths",
+        id,
+        Array.from(files, (f) => webUtils.getPathForFile(f)).filter(Boolean)
+      ),
     removeFile: (id) => copilotCall("project-remove-file", id),
     reindex: (id) => copilotCall("project-reindex", id), // index a file again (after a failure or a change)
   },
@@ -93,6 +100,7 @@ contextBridge.exposeInMainWorld("copilot", {
     get: (id) => copilotCall("sessions-get", id),
     remove: (id) => copilotCall("sessions-remove", id),
   },
+  openWindow: () => copilotCall("window", "open"),
 });
 
 contextBridge.exposeInMainWorld("electronAPI", {

@@ -1,6 +1,7 @@
 // Wires the copilot together inside the app: engine (decisions + cards), storage, settings, the window
 // and the IPC the window uses. The app calls only the hooks returned here (see src/copilot/main/index.js).
 const crypto = require("crypto");
+const fs = require("fs");
 const path = require("path");
 const { createEngine } = require("./engine");
 const { createSettings } = require("./settings");
@@ -92,7 +93,13 @@ function createCopilot({
   const sink = {
     open() {
       const s = settings.view();
-      if (s.enabled && s.hasKey && s.autoOpen) win.open({ focus: false, startMode: s.idleMode });
+      if (!(s.enabled && s.hasKey && s.autoOpen)) return;
+      // A window that fails to open must never break the meeting itself.
+      try {
+        win.open({ focus: false, startMode: s.idleMode });
+      } catch (error) {
+        console.error("Copilot window failed to open", error);
+      }
     },
     send(e) {
       const started = e.type === "session" && e.state === "start";
@@ -404,12 +411,27 @@ function createCopilot({
       }
     );
     if (r.canceled) return 0;
-    for (const p of r.filePaths) {
+    return addPaths(id, r.filePaths);
+  });
+  // Files dropped on the Copilot page: only existing regular files are taken.
+  const addPaths = (id, paths) => {
+    const files = (Array.isArray(paths) ? paths : [])
+      .filter((p) => typeof p === "string" && path.isAbsolute(p))
+      .filter((p) => {
+        try {
+          return fs.statSync(p).isFile();
+        } catch {
+          return false;
+        }
+      })
+      .slice(0, 50);
+    for (const p of files) {
       const f = store.projects.addFileRow(Number(id), p, path.basename(p));
       ingestor.ingest(f).catch(() => {}); // reads, splits, embeds and summarises in the background; the page shows its progress
     }
-    return r.filePaths.length;
-  });
+    return files.length;
+  };
+  handle("project-add-paths", addPaths);
   // Try a failed (or changed) file again.
   handle("project-reindex", (fileId) => {
     const f = store.rag.file(Number(fileId));
@@ -426,6 +448,7 @@ function createCopilot({
     else if (action === "opacity") win.setOpacity(value);
     else if (action === "hide") win.hide();
     else if (action === "close") win.close();
+    else if (action === "open") win.open({ focus: true });
   });
 
   const probe = startMemProbe({
@@ -450,7 +473,14 @@ function createCopilot({
     // hooks for the meeting pipeline (same shape as the engine)
     onFinal: (x) => settings.view().enabled && engine.onFinal(x),
     onPartial: (x) => settings.view().enabled && engine.onPartial(x),
-    begin: () => settings.view().enabled && engine.begin(),
+    begin() {
+      if (!settings.view().enabled) return;
+      try {
+        engine.begin();
+      } catch (error) {
+        console.error("Copilot failed to begin", error);
+      }
+    },
     onLevel,
     endSession: () => engine.endSession(),
     // for the hotkey / menus

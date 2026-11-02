@@ -135,6 +135,7 @@ export interface CopilotBridge {
     remove(id: number): Promise<void>;
     setActive(id: number, active: boolean): Promise<void>;
     addFiles(id: number): Promise<number>;
+    addDropped?(id: number, files: FileList | File[]): Promise<number>; // control panel only
     removeFile(id: number): Promise<void>;
     reindex(id: number): Promise<boolean>;
   };
@@ -147,8 +148,9 @@ export interface CopilotBridge {
     get(id: string): Promise<PastSessionDetail | null>;
     remove(id: string): Promise<void>;
   };
+  openWindow?(): Promise<void>; // control panel only: show the live window
   window(
-    action: "expand" | "mode" | "opacity" | "hide" | "close",
+    action: "expand" | "mode" | "opacity" | "hide" | "close" | "open",
     value?: unknown // mode: "orb" | "peek" | "full"
   ): Promise<void>;
 }

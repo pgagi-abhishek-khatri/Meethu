@@ -315,7 +315,7 @@ test("system prompt: SKIP rule only for proactive cards", () => {
   assert.doesNotMatch(buildSystemPrompt({ proactive: false }), /reply with exactly "SKIP/);
 });
 
-test("runner: a proactive card is shown only when done, and a low one is dropped; asked cards stream", async () => {
+test("runner: a proactive card is shown only when done, low confidence included; asked cards stream", async () => {
   const events = [];
   const mk = (text) =>
     createAnswerRunner({
@@ -335,9 +335,9 @@ test("runner: a proactive card is shown only when done, and a low one is dropped
   }).done;
   assert.deepEqual(
     events.map((e) => e.type),
-    ["card_skip"]
+    ["card_start", "card_done"]
   );
-  assert.equal(r.reason, "low confidence");
+  assert.equal(r.confidence, "low");
 
   events.length = 0;
   const card = await mk("TITLE: T\nBody\nCONFIDENCE: high").run({
@@ -363,8 +363,8 @@ test("runner: a proactive card is shown only when done, and a low one is dropped
   }).done;
   assert.deepEqual(
     events.map((e) => e.type),
-    ["card_skip"]
-  ); // unlabeled = not trusted
+    ["card_start", "card_done"]
+  ); // unlabeled is shown, marked low
 
   events.length = 0;
   const asked = await mk("TITLE: T\nNot sure.\nCONFIDENCE: low").run({
@@ -430,50 +430,6 @@ test("mainCall: DeepSeek's fast tier does not think; a length finish is reported
   assert.equal(res.reason, "truncated");
   const asked = await runner.run({ id: "y", proactive: false, focus: "f", context: {} }).done;
   assert.equal(asked.truncated, true);
-});
-
-test("verifier: a proactive card that adds nothing new is dropped; talking points, asked cards and a failing verifier are not", async () => {
-  const { createCardVerifier, buildVerifyState } = require("../../src/copilot/core/answer/verify");
-  const mk = (adds, verify) =>
-    createAnswerRunner({
-      model: async () => ({ text: "TITLE: T\nBody\nCONFIDENCE: high", sources: [] }),
-      verify:
-        verify ??
-        createCardVerifier({
-          client: { systemOne: async () => ({ answers: { adds: { type: "noul", noul: adds } } }) },
-        }),
-      emit: () => {},
-    });
-  const job = (extra) => ({
-    id: "v",
-    proactive: true,
-    deliverable: "explanation",
-    focus: "f",
-    context: { transcript: [{ id: 1, source: "system", text: "hello" }] },
-    ...extra,
-  });
-  assert.equal((await mk(0.2).run(job()).done).skipped, true);
-  assert.equal((await mk(0.95).run(job()).done).body, "Body");
-  assert.equal((await mk(0.2).run(job({ deliverable: "talking_points" })).done).body, "Body");
-  assert.equal((await mk(0.2).run(job({ proactive: false })).done).body, "Body");
-  const broken = createCardVerifier({
-    client: {
-      systemOne: async () => {
-        throw new Error("down");
-      },
-    },
-  });
-  assert.equal((await mk(0, broken).run(job()).done).body, "Body");
-  const st = buildVerifyState({
-    transcript: [
-      { id: 1, source: "system", text: "a" },
-      { id: 2, source: "mic", text: "b" },
-    ],
-    focus: "b",
-    card: { title: "T", body: "B" },
-  });
-  assert.deepEqual(st.context, ["OTHER: a"]);
-  assert.equal(st.card, "T: B");
 });
 
 test("narration running straight into TITLE on the same line is cut", () => {

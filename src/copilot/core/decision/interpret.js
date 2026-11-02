@@ -111,9 +111,7 @@ function interpret(rawAnswers, plan, ctx, cfg) {
 
   const substance = noulOf(rawAnswers, "act");
   const chatter = noulOf(rawAnswers, "chatter");
-  const help = noulOf(rawAnswers, "help");
-  const act =
-    substance == null || chatter == null || help == null ? null : substance * (1 - chatter) * help;
+  const act = substance == null || chatter == null ? null : substance * (1 - chatter);
   raw.act = act;
   const complete = noulOf(rawAnswers, "complete");
   const kind = choiceOf(rawAnswers, "kind", Object.fromEntries(plan.kinds.map((k) => [k, k])));
@@ -123,7 +121,7 @@ function interpret(rawAnswers, plan, ctx, cfg) {
       reasons: [
         "invalid_answer:" +
           (act == null
-            ? "act/chatter/help"
+            ? "act/chatter"
             : complete == null
               ? "complete"
               : asked == null
@@ -179,13 +177,12 @@ function interpret(rawAnswers, plan, ctx, cfg) {
   return go();
 }
 
-// D1 unreachable. A proactive decision stays quiet; an explicit request cannot be known without D1.
+// D1 unreachable: the moment still gets a card with default settings; the answer model can still SKIP chatter.
 function fallbackDecision(explicit, errorCode) {
   const reasons = [`decision_unavailable:${errorCode}`];
-  if (!explicit) return { kind: "wait", reasons };
   return {
     kind: "run",
-    trigger: "explicit",
+    trigger: explicit ? "explicit" : "proactive",
     timing: "now",
     deliverable: "quick_answer",
     offers: [],
@@ -193,8 +190,8 @@ function fallbackDecision(explicit, errorCode) {
     needs: { ...NO_NEEDS },
     thread: { kind: "main" },
     contextSeconds: 120,
-    confidence: 1,
-    reasons: [...reasons, "explicit request: default settings"],
+    confidence: explicit ? 1 : 0.5,
+    reasons: [...reasons, "default settings"],
   };
 }
 

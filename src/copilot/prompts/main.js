@@ -14,12 +14,8 @@ Rules for the body:
 - No greeting. Never restate or summarize what the speakers just said; add what they did not say.
 - Use only what the transcript says for anything about this meeting. Never invent names, numbers, roles, examples or what a term means inside this team or product. If the transcript does not define a term, say you do not know it. General knowledge is fine when you present it as general.`;
 
-// Proactive cards only: the model sees the whole context, so it has the last word on whether a card is worth showing.
-const SKIP_RULE = `If you cannot add something useful and correct, reply with exactly "SKIP: <a few words why>" and nothing else. Skip when:
-- the lines are too unclear to tell what is being asked or said, or the card would have to guess a mistranscribed word, a cut-off sentence or what a speaker meant;
-- the point is obvious to everyone in the meeting, or it is a basic definition of a widely known term that nobody asked about;
-- answering would need details you do not have (who someone is, what the team's product or terms mean, what was agreed earlier).
-A short correct card beats an invented one.`;
+// Proactive cards only. Lenient on purpose: most topics get a card; the behaviour guide learns what to leave out.
+const SKIP_RULE = `Make a card for the topic in 'Help with' whenever you can add anything useful: answer the question, explain the term or idea, check the claim or number, give background, or suggest what the USER could say or ask next. Reply with exactly "SKIP: <a few words why>" and nothing else ONLY when the lines are pure small talk (greetings, thanks, "can you hear me") or too garbled to tell what the topic is.`;
 
 const STYLE = `You are a silent copilot for the USER in a live meeting. USER is the person you help; OTHER-n are other people on the call; NEARBY-n are people next to the USER.
 The transcript is automatic: names and numbers may be wrong, lines may start or end mid-sentence, and a speaker's words may be split over several lines. Read across lines. Never comment on cut-off sentences, noise or transcription quality, and never guess how a sentence ends. Help with the subject being discussed.`;
@@ -84,15 +80,6 @@ function buildSystemPrompt({
 
 // Sits at the very end of a proactive request, where the model reads it last (it ignores the same words in the
 // system prompt: the same was true for the web-search instruction).
-const PROACTIVE_CHECK = `Before you answer, check each point. If any fails, reply "SKIP: <a few words why>" instead:
-1. Every statement about this meeting could be quoted from the transcript above. No invented names, roles, numbers or rules.
-2. The card does not mention a cut-off sentence, an unclear or garbled word, or the audio.
-3. If the latest speaker in "Help with" is the USER, this is not a card of things for the USER to say.
-4. If the question was put to another person, not the USER, the card only gives a fact the USER could check, not an opinion piece.
-5. The card adds something that is not already in the transcript lines: a fact, a number, a definition of a term that is not common knowledge, a check of a claim. Restating, paraphrasing or summarizing what was just said fails this.
-6. It is not a definition of an everyday word or a basic, widely known term. A term is explained only when someone asks what it means or sounds unsure about it; speakers who use a term fluently know it, so do not define it for them. A term that only the USER used is known to the USER: never explain it.
-7. It is not about scheduling, logistics, follow-ups or who does what, and not advice on a decision the team is making about its own plans, prices or process, unless a fact in it is wrong or can be checked.
-8. The card contains no sentence about what you or the transcript do not know. If that would be its main content, reply SKIP.
-9. If the question needs private facts about the USER (their past work, their numbers, what they set up or configured, whom they know), reply SKIP. A question asking the USER's opinion or advice can get talking points from general reasoning.`;
+const PROACTIVE_CHECK = `Make the card about the topic in "Help with". Do not just repeat what was said: add a fact, an explanation, a check, background or a next step. Never invent facts about this meeting, its people or its product. Reply "SKIP: <a few words why>" only for pure small talk or garbled lines.`;
 
 module.exports = { buildSystemPrompt, LOCKED_FORMAT, PROACTIVE_CHECK };

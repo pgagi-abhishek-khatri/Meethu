@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { CopilotSettings } from "./copilotApi";
+import { acceleratorFromEvent } from "./copilotFormat";
 import type { CopilotState } from "./copilotState";
 
 interface Props {
@@ -84,33 +85,6 @@ function Toggle({
       {label}
     </label>
   );
-}
-
-// Electron accelerator from a key press: needs a modifier and a real key.
-export function acceleratorFromEvent(e: {
-  key: string;
-  ctrlKey: boolean;
-  metaKey: boolean;
-  altKey: boolean;
-  shiftKey: boolean;
-}): string | null {
-  if (["Control", "Shift", "Alt", "Meta", "AltGraph"].includes(e.key)) return null;
-  const named: Record<string, string> = {
-    " ": "Space",
-    ArrowUp: "Up",
-    ArrowDown: "Down",
-    ArrowLeft: "Left",
-    ArrowRight: "Right",
-    Escape: "Esc",
-  };
-  const key = named[e.key] ?? (e.key.length === 1 ? e.key.toUpperCase() : e.key);
-  const mods = [
-    e.ctrlKey && "CommandOrControl",
-    e.metaKey && "Super",
-    e.altKey && "Alt",
-    e.shiftKey && "Shift",
-  ].filter(Boolean) as string[];
-  return mods.length ? [...mods, key].join("+") : null;
 }
 
 export default function SettingsView({ settings: s, state, onSettings }: Props) {

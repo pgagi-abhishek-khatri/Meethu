@@ -1,307 +1,493 @@
-import { useCallback, useEffect, useState } from "react";
-import { Plus, RotateCcw, Trash2, X } from "../icons";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import {
+  AudioLines,
+  Brain,
+  Check,
+  ChevronRight,
+  Folder,
+  Home,
+  MessageSquareText,
+  Monitor,
+  Settings2,
+  Sparkles,
+  Zap,
+} from "../icons";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
 import { Toggle } from "../ui/toggle";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
-import { PAGE_CONTENT_WIDTH_CLASS } from "../ui/pageWidth";
-import { CARD_SURFACE_CLASS } from "../ui/surfaces";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { SettingsGroup, SettingsRow, SettingsSection } from "../ui/SettingsSection";
+import { MeetingTranscriptionPanel } from "../settings/MeetingSettings";
 import { cn } from "../lib/utils";
+import { useSettingsStore } from "../../stores/settingsStore";
+import { getMeetingStreamingTranscriptionProviders } from "../../models/ModelRegistry";
 import { BlurField, useCopilotSettings } from "./CopilotFields";
-import { PastMeeting, RecentsList } from "./PastMeetings";
-import type { Project, ProjectFile, RuleKind } from "./copilotApi";
+import CopilotSettingsTab, { DenoiseRow, OpenRouterKeySection } from "./CopilotSettingsTab";
+import CopilotProjects from "./CopilotProjects";
+import { WORKING } from "./copilotFormat";
+import CopilotMeetings, { MeetingRow } from "./CopilotMeetings";
+import { Block, PaneHeader } from "./CopilotPane";
+import type { PastSession, Project } from "./copilotApi";
 
-const RULE_LABELS: Record<RuleKind, string> = {
-  meet_url: "Meeting link",
-  title: "Title contains",
-  domain: "Organizer domain",
+type Section = "overview" | "projects" | "meetings" | "behaviour" | "audio" | "settings";
+const SECTIONS: { id: Section; label: string; icon: typeof Home }[] = [
+  { id: "overview", label: "Overview", icon: Home },
+  { id: "projects", label: "Projects", icon: Folder },
+  { id: "meetings", label: "Meetings", icon: MessageSquareText },
+  { id: "behaviour", label: "Behaviour", icon: Brain },
+  { id: "audio", label: "Audio & keys", icon: AudioLines },
+  { id: "settings", label: "Settings", icon: Settings2 },
+];
+
+const PACE: Record<string, string> = {
+  quiet: "Calm",
+  normal: "Balanced",
+  chatty: "Lively",
 };
 
-const WORKING = new Set(["queued", "reading", "analysing", "embedding"]);
-const sizeLabel = (b: number | null) =>
-  b == null
-    ? ""
-    : b > 1048576
-      ? `${(b / 1048576).toFixed(1)} MB`
-      : `${Math.max(1, Math.round(b / 1024))} KB`;
-
-// One file and how far the copilot got with it: working / ready (what it is) / failed (why, with Retry).
-function FileRow({ f, run }: { f: ProjectFile; run: (p: Promise<unknown>) => void }) {
-  const api = window.copilot!.projects;
-  const working = WORKING.has(f.status);
-  return (
-    <div className="space-y-0.5 rounded-md border border-border/50 px-2.5 py-1.5 text-xs">
-      <div className="flex items-center justify-between gap-2">
-        <span className="truncate text-foreground" title={f.path}>
-          {f.name}
-        </span>
-        <span className="flex shrink-0 items-center gap-2 text-muted-foreground">
-          {sizeLabel(f.bytes)}
-          {f.status === "ready" && (
-            <span className="text-emerald-600">Ready · {f.chunks} pieces</span>
-          )}
-          {working && <span className="animate-pulse text-sky-600">{f.stage ?? "Working…"}</span>}
-          {f.status === "error" && (
-            <button type="button" title="Try again" onClick={() => run(api.reindex(f.id))}>
-              <RotateCcw size={12} />
-            </button>
-          )}
-          <button type="button" title="Remove" onClick={() => run(api.removeFile(f.id))}>
-            <X size={13} />
-          </button>
-        </span>
-      </div>
-      {f.status === "error" && <p className="text-destructive">{f.error}</p>}
-      {f.status === "ready" && f.summary && <p className="text-muted-foreground">{f.summary}</p>}
-      {f.note && <p className="text-amber-600">{f.note}</p>}
-    </div>
-  );
+function useMeetingAudio() {
+  const mode = useSettingsStore((s) => s.meetingTranscriptionMode);
+  const provider = useSettingsStore((s) => s.meetingCloudTranscriptionProvider);
+  const isSignedIn = useSettingsStore((s) => s.isSignedIn);
+  if (mode === "openwhispr") return { label: "OpenWhispr Cloud", needsSignIn: !isSignedIn };
+  if (mode === "local") return { label: "Local model", needsSignIn: false };
+  const name = getMeetingStreamingTranscriptionProviders().find((p) => p.id === provider)?.name;
+  return { label: name ?? "Your provider key", needsSignIn: false };
 }
 
-function ProjectCard({ p, reload }: { p: Project; reload: () => void }) {
-  const [kind, setKind] = useState<RuleKind>("title");
-  const [pattern, setPattern] = useState("");
-  const api = window.copilot!.projects;
-  const run = (f: Promise<unknown>) => f.then(reload);
-
+function CheckRow({
+  ok,
+  label,
+  detail,
+  onClick,
+}: {
+  ok: boolean;
+  label: string;
+  detail: string;
+  onClick: () => void;
+}) {
   return (
-    <div className={cn(CARD_SURFACE_CLASS, "space-y-3 p-4")}>
-      <div className="flex items-end gap-2">
-        <div className="flex-1">
-          <BlurField label="Name" value={p.name} onSave={(name) => run(api.rename(p.id, name))} />
-        </div>
-        <label className="flex items-center gap-2 pb-2 text-xs text-foreground">
-          Active
-          <input
-            type="checkbox"
-            checked={p.active}
-            onChange={(e) => run(api.setActive(p.id, e.target.checked))}
-          />
-        </label>
-        <Button
-          variant="ghost"
-          size="icon"
-          title="Delete project"
-          onClick={() => confirm(`Delete "${p.name}"?`) && run(api.remove(p.id))}
-        >
-          <Trash2 size={14} />
-        </Button>
-      </div>
-      <BlurField
-        label="How should the copilot talk in this project"
-        rows={3}
-        value={p.instructions}
-        onSave={(instructions) => run(api.update(p.id, { instructions }))}
-      />
-      <BlurField
-        label="Standing notes: goals, prices, who is who"
-        rows={4}
-        value={p.plan}
-        onSave={(plan) => run(api.update(p.id, { plan }))}
-      />
-
-      <div className="space-y-1.5">
-        <p className="text-xs font-medium text-foreground">Files</p>
-        {p.files.map((f) => (
-          <FileRow key={f.id} f={f} run={run} />
-        ))}
-        <Button variant="outline" size="sm" onClick={() => run(api.addFiles(p.id))}>
-          <Plus size={13} /> Add files
-        </Button>
-      </div>
-
-      <div className="space-y-1.5">
-        <p className="text-xs font-medium text-foreground">Calendar rules</p>
-        {p.rules.map((r) => (
-          <div
-            key={r.id}
-            className="flex items-center justify-between text-xs text-muted-foreground"
-          >
-            <span>
-              {RULE_LABELS[r.kind]}: {r.pattern}
-            </span>
-            <button type="button" onClick={() => run(api.removeRule(r.id))}>
-              <X size={13} />
-            </button>
-          </div>
-        ))}
-        <form
-          className="flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!pattern.trim()) return;
-            void run(api.addRule(p.id, kind, pattern.trim()));
-            setPattern("");
-          }}
-        >
-          <select
-            value={kind}
-            onChange={(e) => setKind(e.target.value as RuleKind)}
-            className="rounded border border-border/70 bg-input px-2 text-xs text-foreground"
-          >
-            {Object.entries(RULE_LABELS).map(([k, l]) => (
-              <option key={k} value={k}>
-                {l}
-              </option>
-            ))}
-          </select>
-          <Input value={pattern} onChange={(e) => setPattern(e.target.value)} className="h-8" />
-          <Button type="submit" variant="outline" size="sm">
-            Add
-          </Button>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-function Projects() {
-  const [list, setList] = useState<Project[]>([]);
-  const [name, setName] = useState("");
-  const reload = useCallback(() => void window.copilot?.projects.list().then(setList), []);
-  useEffect(reload, [reload]);
-  // While a file is being read, the page follows it.
-  const busy = list.some((p) => p.files.some((f) => WORKING.has(f.status)));
-  useEffect(() => {
-    if (!busy) return;
-    const t = setInterval(reload, 1500);
-    return () => clearInterval(t);
-  }, [busy, reload]);
-  return (
-    <div className="space-y-4">
-      <form
-        className="flex gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (!name.trim()) return;
-          void window.copilot?.projects.create(name.trim()).then(reload);
-          setName("");
-        }}
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-center gap-3 px-4 py-3 text-start transition-colors hover:bg-foreground/3 dark:hover:bg-white/3"
+    >
+      <span
+        className={cn(
+          "flex h-5 w-5 shrink-0 items-center justify-center rounded-full",
+          ok ? "bg-success/15 text-success" : "bg-warning/15 text-warning"
+        )}
       >
-        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="New project" />
-        <Button type="submit">Create</Button>
-      </form>
-      {list.map((p) => (
-        <ProjectCard key={p.id} p={p} reload={reload} />
-      ))}
+        {ok ? <Check size={11} /> : <span className="text-[11px] font-bold">!</span>}
+      </span>
+      <span className="flex-1 text-xs font-medium text-foreground">{label}</span>
+      <span className="truncate text-xs text-muted-foreground">{detail}</span>
+      <ChevronRight size={14} className="shrink-0 text-muted-foreground/60" />
+    </button>
+  );
+}
+
+const FLOW: { icon: typeof Home; title: string; text: string }[] = [
+  {
+    icon: AudioLines,
+    title: "Listens",
+    text: "Your mic and the call audio are transcribed live while a note records.",
+  },
+  {
+    icon: Zap,
+    title: "Decides",
+    text: "Spots questions, objections and moments where a card would help.",
+  },
+  {
+    icon: Sparkles,
+    title: "Answers",
+    text: "Short lines you can say, drawn from your project's files and briefing.",
+  },
+  {
+    icon: Brain,
+    title: "Learns",
+    text: "Not helpful taps and skipped questions you ask for tune its behaviour.",
+  },
+];
+
+function Overview({
+  projects,
+  meetings,
+  go,
+  openMeeting,
+}: {
+  projects: Project[];
+  meetings: PastSession[];
+  go: (s: Section) => void;
+  openMeeting: (id: string) => void;
+}) {
+  const { settings: s, update } = useCopilotSettings();
+  const audio = useMeetingAudio();
+  if (!s) return null;
+  const active = projects.filter((p) => p.active);
+  const files = active.reduce((n, p) => n + p.files.filter((f) => f.status === "ready").length, 0);
+  const indexing = projects.some((p) => p.files.some((f) => WORKING.has(f.status)));
+  const names = new Map(projects.map((p) => [p.id, p.name]));
+
+  return (
+    <div className="space-y-7">
+      <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-border/70 bg-card/50 px-5 py-4 dark:border-white/10 dark:bg-surface-2/60">
+        <div
+          className={cn(
+            "flex h-10 w-10 items-center justify-center rounded-xl",
+            s.enabled ? "bg-primary/10 text-primary" : "bg-foreground/5 text-muted-foreground"
+          )}
+        >
+          <Sparkles size={18} />
+        </div>
+        <div className="min-w-0 flex-1 basis-48">
+          <p className="text-sm text-foreground">Meeting copilot is {s.enabled ? "on" : "off"}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {s.enabled
+              ? `${PACE[s.quiet]} pace · ${s.autoOpen ? "opens with each meeting" : "open it with the hotkey"}${s.hotkey ? ` (${s.hotkey})` : ""}`
+              : "Turn it on to get help cards during recorded meetings."}
+          </p>
+        </div>
+        <Button size="sm" variant="outline" onClick={() => void window.copilot?.openWindow?.()}>
+          <Monitor size={13} className="me-1" /> Open window
+        </Button>
+        <Toggle
+          checked={s.enabled}
+          onChange={(enabled) => update({ enabled })}
+          ariaLabel="Copilot on"
+        />
+      </div>
+
+      <Block title="Setup">
+        <div className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border/70 bg-card/50 dark:divide-border-subtle/50 dark:border-border-subtle dark:bg-surface-2/50">
+          <CheckRow
+            ok={s.hasKey}
+            label="OpenRouter key"
+            detail={s.hasKey ? (s.keyFromEnv ? "From .env" : "Saved") : "Needed to answer"}
+            onClick={() => go("audio")}
+          />
+          <CheckRow
+            ok={!audio.needsSignIn}
+            label="Meeting audio"
+            detail={audio.needsSignIn ? "Sign in, or pick another provider" : audio.label}
+            onClick={() => go("audio")}
+          />
+          <CheckRow
+            ok={active.length > 0}
+            label="Projects"
+            detail={
+              active.length
+                ? `${active.length} in use · ${files} file${files === 1 ? "" : "s"} ready${indexing ? " · reading…" : ""}`
+                : "Optional: add your material"
+            }
+            onClick={() => go("projects")}
+          />
+        </div>
+      </Block>
+
+      <Block title="How it works">
+        <div className="grid grid-cols-2 gap-2.5 @3xl:grid-cols-4">
+          {FLOW.map(({ icon: Icon, title, text }, i) => (
+            <div
+              key={title}
+              className="rounded-lg border border-border/70 bg-card/50 p-3 dark:border-border-subtle dark:bg-surface-2/50"
+            >
+              <div className="flex items-center gap-2">
+                <span className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-primary">
+                  <Icon size={13} />
+                </span>
+                <span className="text-xs font-medium text-foreground">
+                  {i + 1}. {title}
+                </span>
+              </div>
+              <p className="mt-1.5 text-[11.5px] leading-relaxed text-muted-foreground">{text}</p>
+            </div>
+          ))}
+        </div>
+      </Block>
+
+      <Block title="Recent meetings">
+        {meetings.length ? (
+          <div className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border/70 bg-card/50 dark:divide-border-subtle/50 dark:border-border-subtle dark:bg-surface-2/50">
+            {meetings.slice(0, 4).map((m) => (
+              <MeetingRow
+                key={m.id}
+                s={m}
+                project={names.get(m.project_id ?? -1)}
+                onOpen={openMeeting}
+              />
+            ))}
+            {meetings.length > 4 && (
+              <button
+                type="button"
+                onClick={() => go("meetings")}
+                className="w-full px-4 py-2 text-xs text-primary/80 hover:text-primary"
+              >
+                See all {meetings.length}
+              </button>
+            )}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            None yet. Record a note during a call and the copilot listens along.
+          </p>
+        )}
+      </Block>
     </div>
   );
 }
 
-function Prompts() {
+function Behaviour() {
   const { settings: s, update } = useCopilotSettings();
   if (!s) return null;
   return (
     <div className="space-y-6">
+      <PaneHeader
+        title="Behaviour"
+        description="What the copilot makes cards about and how it talks, in every meeting."
+      />
       <SettingsSection
-        title="Learned behaviour"
-        description="Short and general: it applies to every project. The copilot rewrites it now and then from your Not helpful taps and the skipped questions you ask for. You can edit it."
+        title="Learned guide"
+        description="Rewritten now and then from your Not helpful taps and the skipped moments you ask for. Short and general; you can edit it."
       >
         <SettingsGroup>
           <BlurField
-            label="How the copilot should behave"
             rows={6}
             value={s.behavior}
+            placeholder="Nothing learned yet."
             onSave={(behavior) => update({ behavior })}
           />
         </SettingsGroup>
       </SettingsSection>
       <SettingsSection
-        title="Global instructions"
-        description="Used in every meeting, before any project's own."
+        title="Global context"
+        description="Used in every meeting, before the project's own briefing."
       >
         <SettingsGroup>
           <BlurField
-            label="How should the copilot talk"
+            label="Who you are and how to talk"
             rows={4}
             value={s.instructions}
+            placeholder="e.g. I am a sales lead. Answer in short English. Point out risks in what the client says."
             onSave={(instructions) => update({ instructions })}
           />
           <BlurField
-            label="Standing notes: goals, prices, who is who"
+            label="Standing notes"
             rows={4}
             value={s.plan}
+            placeholder="Goals, prices, who is who…"
             onSave={(plan) => update({ plan })}
           />
         </SettingsGroup>
       </SettingsSection>
-      <SettingsSection title="Start and end cards">
+      <SettingsSection title="Start and end of a meeting">
         <SettingsGroup>
           <BlurField
-            label="Start prompt"
-            rows={3}
+            label="Start card (runs when you wrote notes for the meeting)"
+            rows={2}
             value={s.startPrompt}
+            placeholder="Remind me of the goals and the points to cover."
             onSave={(startPrompt) => update({ startPrompt })}
-          />
-          <BlurField
-            label="End prompt"
-            rows={3}
-            value={s.endPrompt}
-            onSave={(endPrompt) => update({ endPrompt })}
-          />
-          <SettingsRow label="End-of-meeting recap card">
-            <Toggle checked={s.endRecap} onChange={(endRecap) => update({ endRecap })} />
-          </SettingsRow>
-          <BlurField
-            label="Closing prompt"
-            rows={3}
-            value={s.closingPrompt}
-            onSave={(closingPrompt) => update({ closingPrompt })}
           />
           <SettingsRow label="Closing card" description="Lines to say when the call is ending.">
             <Toggle checked={s.closingCard} onChange={(closingCard) => update({ closingCard })} />
           </SettingsRow>
+          {s.closingCard && (
+            <BlurField
+              rows={2}
+              value={s.closingPrompt}
+              onSave={(closingPrompt) => update({ closingPrompt })}
+            />
+          )}
+          <SettingsRow label="Recap card when the meeting ends">
+            <Toggle checked={s.endRecap} onChange={(endRecap) => update({ endRecap })} />
+          </SettingsRow>
+          {s.endRecap && (
+            <BlurField
+              rows={2}
+              value={s.endPrompt}
+              placeholder="Wrap up: decisions, open questions and next steps."
+              onSave={(endPrompt) => update({ endPrompt })}
+            />
+          )}
         </SettingsGroup>
       </SettingsSection>
     </div>
   );
 }
 
-function Past() {
-  const [open, setOpen] = useState<string | null>(null);
-  const [key, setKey] = useState(0);
-  // The past-meeting components are styled for the dark copilot window, so they sit on a dark panel here.
+function AudioAndKeys() {
   return (
-    <div className="overflow-hidden rounded-lg bg-slate-900 p-3">
-      {open ? (
-        <PastMeeting
-          id={open}
-          onBack={() => setOpen(null)}
-          onDeleted={() => {
-            setOpen(null);
-            setKey((k) => k + 1);
-          }}
-        />
-      ) : (
-        <RecentsList refreshKey={key} onPick={setOpen} />
-      )}
+    <div className="space-y-6">
+      <PaneHeader
+        title="Audio & keys"
+        description="How meeting audio is transcribed for the copilot, and the key it answers with."
+      />
+      <OpenRouterKeySection />
+      <SettingsSection
+        title="Meeting transcription"
+        description="The same engine as note recordings. Streaming providers like Soniox need their own key here."
+      >
+        <MeetingTranscriptionPanel />
+      </SettingsSection>
+      <SettingsSection title="Microphone">
+        <SettingsGroup>
+          <DenoiseRow />
+        </SettingsGroup>
+      </SettingsSection>
     </div>
   );
 }
 
 export default function CopilotPage() {
+  const [section, setSection] = useState<Section>("overview");
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [meetings, setMeetings] = useState<PastSession[]>([]);
+  const [projectId, setProjectId] = useState<number | null>(null);
+  const [meetingId, setMeetingId] = useState<string | null>(null);
+
+  const loadProjects = useCallback(
+    () => void window.copilot?.projects.list().then(setProjects),
+    []
+  );
+  const loadMeetings = useCallback(
+    () => void window.copilot?.sessions.list().then(setMeetings),
+    []
+  );
+  useEffect(() => {
+    loadProjects();
+    loadMeetings();
+  }, [loadProjects, loadMeetings]);
+  // While a file is being read, the page follows it.
+  const busy = projects.some((p) => p.files.some((f) => WORKING.has(f.status)));
+  useEffect(() => {
+    if (!busy) return;
+    const t = setInterval(loadProjects, 1500);
+    return () => clearInterval(t);
+  }, [busy, loadProjects]);
+
   if (!window.copilot)
     return <p className="p-6 text-sm text-muted-foreground">Copilot is not available.</p>;
+
+  const go = (s: Section) => {
+    if (s === "meetings") {
+      loadMeetings();
+      setMeetingId(null); // the nav and "See all" land on the list, not on a stale open meeting
+    }
+    setSection(s);
+  };
+  const openMeeting = (id: string) => {
+    setMeetingId(id);
+    setSection("meetings");
+  };
+  const count: Partial<Record<Section, number>> = {
+    projects: projects.length,
+    meetings: meetings.length,
+  };
+
+  const panes: Record<Section, ReactNode> = {
+    overview: (
+      <Overview projects={projects} meetings={meetings} go={go} openMeeting={openMeeting} />
+    ),
+    projects: (
+      <CopilotProjects
+        list={projects}
+        reload={loadProjects}
+        selected={projectId}
+        onSelect={setProjectId}
+      />
+    ),
+    meetings: (
+      <CopilotMeetings
+        list={meetings}
+        projects={projects}
+        reload={loadMeetings}
+        open={meetingId}
+        onOpen={setMeetingId}
+      />
+    ),
+    behaviour: <Behaviour />,
+    audio: <AudioAndKeys />,
+    settings: (
+      <div className="space-y-6">
+        <PaneHeader
+          title="Settings"
+          description="Pace, window, models, project file search and how long meetings are kept."
+        />
+        <CopilotSettingsTab embedded />
+      </div>
+    ),
+  };
+
   return (
-    <div className="h-full overflow-y-auto">
-      <div className={cn(PAGE_CONTENT_WIDTH_CLASS, "py-4")}>
-        <Tabs defaultValue="projects">
-          <TabsList>
-            <TabsTrigger value="projects">Projects</TabsTrigger>
-            <TabsTrigger value="prompts">Prompts</TabsTrigger>
-            <TabsTrigger value="past">Past meetings</TabsTrigger>
-          </TabsList>
-          <TabsContent value="projects">
-            <Projects />
-          </TabsContent>
-          <TabsContent value="prompts">
-            <Prompts />
-          </TabsContent>
-          <TabsContent value="past">
-            <Past />
-          </TabsContent>
-        </Tabs>
+    <div className="@container flex h-full min-h-0">
+      <nav
+        aria-label="Copilot"
+        className="flex w-52 shrink-0 flex-col gap-0.5 overflow-y-auto border-e border-border/70 px-2 pt-3 pb-3 @max-2xl:hidden dark:border-white/8"
+      >
+        <div className="px-2.5 pb-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+          Copilot
+        </div>
+        {SECTIONS.map(({ id, label, icon: Icon }) => {
+          const on = id === section;
+          return (
+            <button
+              key={id}
+              type="button"
+              aria-current={on ? "page" : undefined}
+              onClick={() => go(id)}
+              className={cn(
+                "group flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-start outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-primary/30",
+                on
+                  ? "bg-primary/8 dark:bg-primary/10"
+                  : "hover:bg-foreground/4 active:bg-foreground/6 dark:hover:bg-white/4"
+              )}
+            >
+              <Icon
+                size={15}
+                className={cn(
+                  "shrink-0",
+                  on ? "text-primary" : "text-foreground/60 group-hover:text-foreground/85"
+                )}
+              />
+              <span
+                className={cn(
+                  "truncate text-[12.5px]",
+                  on ? "font-medium text-foreground" : "text-foreground/85"
+                )}
+              >
+                {label}
+              </span>
+              {!!count[id] && (
+                <span className="ms-auto text-[11px] tabular-nums text-muted-foreground">
+                  {count[id]}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="px-5 pt-6 pb-2 @2xl:hidden">
+          <Select value={section} onValueChange={(v) => go(v as Section)}>
+            <SelectTrigger className="h-8 w-full rounded-lg text-xs" aria-label="Copilot section">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SECTIONS.map(({ id, label }) => (
+                <SelectItem key={id} value={id}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-8 pt-6 pb-10 @max-2xl:px-5">
+          <div className="max-w-[760px]">
+            {section === "overview" && <PaneHeader title="Meeting copilot" />}
+            <div className={section === "overview" ? "mt-4" : ""}>{panes[section]}</div>
+          </div>
+        </div>
       </div>
     </div>
   );

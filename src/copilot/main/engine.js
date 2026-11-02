@@ -18,7 +18,6 @@ const { createScheduler, DEFAULT_TRIGGER_CONFIG } = require("../core/trigger/sch
 const { getCopilotAiConfig } = require("../config/aiDefaults");
 const { createMainModel } = require("./mainCall");
 const { createAnswerRunner } = require("./answerRunner");
-const { createCardVerifier } = require("../core/answer/verify");
 const { toUtterances, realQuestion } = require("../core/transcript/utterances");
 const {
   createRollingSummary,
@@ -52,7 +51,6 @@ const CLOSING_GAP_MS = 5 * 60 * 1000;
 const CLOSING_BEFORE_END_MS = 3 * 60 * 1000;
 const DEFAULT_CLOSING =
   "The meeting is ending. Give me 3 to 5 short lines I can say out loud to close it: thank them, one line on what we agreed, who does what next, and ask if anything is missing.";
-const QUIET_AFTER = 6; // this many decisions in a row with nothing to act on: the decider is called less often
 const AUTO_SCORE = 0.69; // keep in step with RAG.autoScore
 const SKIP_REASON = /below_bar|cooldown|already_handled|user_speaking/;
 // The decider could not judge it (failed call, below its gate, no card kind sure enough): a real question is still worth a tap.
@@ -205,7 +203,6 @@ function createEngine({
     return model
       ? createAnswerRunner({
           model,
-          verify: createCardVerifier({ client: baseD1 }),
           now,
           emit(e) {
             if (e.type === "card_skip") {
@@ -522,7 +519,6 @@ function createEngine({
       skipped: [], // { id, line, why, at }: moments passed on, offered in the "Skipped" box
       skipSeq: 0,
       asked: new Set(), // normalised lines already turned into cards or shown, never offered again
-      quietStreak: 0, // decisions in a row that found nothing to act on
       specs: new Map(), // job id -> how it was asked, so "Rerun with high effort" can ask it again
       closingAt: -Infinity,
       closingCount: 0,
@@ -546,7 +542,6 @@ function createEngine({
       now,
       setTimer,
       clearTimer,
-      getQuiet: () => s.quietStreak >= QUIET_AFTER,
     });
     s.d1 = d1;
     session = s;
@@ -685,8 +680,6 @@ function createEngine({
     if (s.callMs.length > MAX_TIMINGS) s.callMs.shift();
     if (s.reactionMs.length > MAX_TIMINGS) s.reactionMs.shift();
     s.decisions[decision.kind] = (s.decisions[decision.kind] ?? 0) + 1;
-    s.quietStreak =
-      decision.kind === "wait" && (decision.raw?.act ?? 0) < 0.25 ? s.quietStreak + 1 : 0;
     // What the moment is about: the substantive words, not the "yeah"s that rode along. Same-voice lines are one
     // utterance (the recogniser cuts a sentence mid-word); a question wins, else the longest utterance.
     const utterances = toUtterances(

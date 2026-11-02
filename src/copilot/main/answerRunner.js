@@ -4,7 +4,7 @@
 const { buildAnswerMessages } = require("../core/answer/contextPack");
 const { parseAnswer } = require("../core/answer/parseAnswer");
 
-function createAnswerRunner({ model, verify = null, emit = () => {}, now = Date.now }) {
+function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
   // job: { id, deliverable, tier, web, proactive, focus, context: {meeting, summary, transcript, contextSeconds, thread} }
   function run(job) {
     const ctl = new AbortController();
@@ -59,8 +59,7 @@ function createAnswerRunner({ model, verify = null, emit = () => {}, now = Date.
             if (cancelled) return;
             const a = parseAnswer(text);
             if (a.skip) return; // the call is finished off below
-            // A proactive card is shown only when it is done: the model rates its own confidence at the end,
-            // and a guess nobody asked for (low) is dropped. Asked cards stream.
+            // A proactive card is shown only when it is done (it may still turn out a SKIP). Asked cards stream.
             if (job.proactive) return;
             start();
             emit({ type: "card_update", id: job.id, ...a });
@@ -75,38 +74,15 @@ function createAnswerRunner({ model, verify = null, emit = () => {}, now = Date.
               emit({ type: "card_skip", id: job.id, reason: "truncated", shown: started });
               return { skipped: true, reason: "truncated" };
             }
-            // Talking points are suggestions, not claims: the model rates them low because it cannot know the USER's view,
-            // so the confidence gate does not apply (the prompt's own checks skip the ones that would invent facts).
-            const gated = job.deliverable !== "talking_points";
-            if (job.proactive && (a.skip || (gated && (!a.confidence || a.confidence === "low")))) {
-              const reason = a.skip ? a.reason : "low confidence";
-              emit({ type: "card_skip", id: job.id, reason, shown: started });
-              return { skipped: true, reason };
-            }
-            // Second look by the fast classifier (see core/answer/verify.js). Talking points are not facts to add.
-            if (verify && job.proactive && gated && a.body) {
-              const v = await verify({
-                transcript: job.context.transcript ?? [],
-                focus: job.focus,
-                card: a,
-              });
-              if (cancelled) return null;
-              if (!v.ok) {
-                emit({
-                  type: "card_skip",
-                  id: job.id,
-                  reason: `adds nothing new (${Math.round(v.adds * 100)}%)`,
-                  shown: started,
-                });
-                return { skipped: true, reason: "adds nothing new" };
-              }
+            if (job.proactive && a.skip) {
+              emit({ type: "card_skip", id: job.id, reason: a.reason, shown: started });
+              return { skipped: true, reason: a.reason };
             }
             start();
             const card = {
               id: job.id,
               title: a.title,
               body: a.body,
-              // A reply with no confidence line is not trusted.
               followups: a.followups ?? [],
               confidence: a.confidence ?? "low", // an asked card with no label is not trusted
               truncated: r.finishReason === "length",

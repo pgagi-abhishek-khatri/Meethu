@@ -15,22 +15,8 @@ const { createAnswerRunner } = require(path.join(root, "src/copilot/main/answerR
 const { speakerLabel } = require(path.join(root, "src/copilot/core/decision/buildState"));
 const [replayFile, segDir, outFile, per = "4"] = process.argv.slice(2);
 const ai = getCopilotAiConfig();
-const { createLiquidClient } = require(path.join(root, "src/copilot/core/decision/liquidClient"));
-const { getDecisionEnv } = require(path.join(root, "src/copilot/core/decision/config"));
-const { createCardVerifier } = require(path.join(root, "src/copilot/core/answer/verify"));
-const de = getDecisionEnv();
 const runner = createAnswerRunner({
   model: createMainModel({ apiKey: ai.apiKey, model: ai.model }),
-  verify: process.env.NOVERIFY
-    ? null
-    : createCardVerifier({
-        client: createLiquidClient({
-          apiKey: de.apiKey,
-          url: de.url,
-          model: de.model,
-          timeoutMs: 30000,
-        }),
-      }),
 });
 const replay = JSON.parse(fs.readFileSync(replayFile, "utf8"));
 const jobs = [];

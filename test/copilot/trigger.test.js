@@ -192,26 +192,3 @@ test("a long monologue is still looked at after maxTurnWaitMs", async () => {
   }
   assert.ok(runs.length >= 1);
 });
-
-test("a quiet stretch spaces the calls out, a real question still goes at once, a tag question is not one", async () => {
-  const { DEFAULT_TRIGGER_CONFIG } = require("../../src/copilot/core/trigger/scheduler");
-  for (const [quiet, text, expected] of [
-    [false, "We use the standard flow for onboarding workers, right?", 1],
-    [true, "We use the standard flow for onboarding workers, right?", 0],
-    [true, "How many levels does the reward ladder have in total?", 1],
-  ]) {
-    const clock = fakeClock();
-    const calls = [];
-    const s = createScheduler({
-      run: async () => (calls.push(1), {}),
-      cfg: DEFAULT_TRIGGER_CONFIG,
-      now: clock.now,
-      setTimer: clock.setTimer,
-      clearTimer: clock.clearTimer,
-      getQuiet: () => quiet,
-    });
-    s.noteFinal({ id: 1, text, source: "system" });
-    await clock.advance(2500);
-    assert.equal(calls.length, expected, `${quiet} ${text}`);
-  }
-});

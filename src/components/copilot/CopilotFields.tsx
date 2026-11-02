@@ -2,21 +2,49 @@ import { useCallback, useEffect, useState } from "react";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import type { CopilotSettings } from "./copilotApi";
+import { acceleratorFromEvent } from "./copilotFormat";
 
 type Patch = Partial<CopilotSettings> & { apiKey?: string };
 
-// Settings of the copilot, loaded from main; updates apply optimistically.
+// Settings of the copilot, loaded from main and shared by every component on the page; updates
+// apply optimistically.
+let shared: CopilotSettings | null = null;
+const listeners = new Set<(s: CopilotSettings | null) => void>();
+const publish = (s: CopilotSettings | null) => {
+  shared = s;
+  listeners.forEach((l) => l(s));
+};
+
 export function useCopilotSettings() {
-  const [settings, setSettings] = useState<CopilotSettings | null>(null);
+  const [settings, setSettings] = useState<CopilotSettings | null>(shared);
   useEffect(() => {
-    void window.copilot?.getSettings().then(setSettings);
+    listeners.add(setSettings);
+    void window.copilot?.getSettings().then(publish);
+    return () => void listeners.delete(setSettings);
   }, []);
   const update = useCallback((patch: Patch) => {
     const { apiKey: _key, ...rest } = patch;
-    setSettings((s) => (s ? { ...s, ...rest } : s));
-    void window.copilot?.updateSettings(patch).then(setSettings);
+    if (shared) publish({ ...shared, ...rest });
+    void window.copilot?.updateSettings(patch).then(publish);
   }, []);
   return { settings, update };
+}
+
+// Click, press the keys; Backspace clears.
+export function HotkeyField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <Input
+      readOnly
+      value={value || "None"}
+      className="h-8 w-44 cursor-pointer text-center font-mono text-xs caret-transparent focus:ring-2"
+      onKeyDown={(e) => {
+        e.preventDefault();
+        if (e.key === "Backspace" || e.key === "Delete") return onChange("");
+        const acc = acceleratorFromEvent(e);
+        if (acc) onChange(acc);
+      }}
+    />
+  );
 }
 
 // Text input or textarea that saves when focus leaves it.
