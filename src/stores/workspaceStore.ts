@@ -127,11 +127,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         refreshForWorkspace(resolvedActiveId);
       } catch (error) {
         if (generation !== accountGeneration) return;
-        logger.error(
-          "Failed to load workspaces",
-          { error: (error as Error).message },
-          "workspaces"
-        );
+        if ((error as Error).message !== "OpenWhispr API URL not configured") {
+          logger.error(
+            "Failed to load workspaces",
+            { error: (error as Error).message },
+            "workspaces"
+          );
+        }
         set({ loading: false, loaded: true, error: true });
       } finally {
         if (refreshPromise === request) refreshPromise = null;

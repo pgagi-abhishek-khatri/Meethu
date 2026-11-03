@@ -74,20 +74,39 @@ function createRetriever({
       const cl = clients();
       const lim = deep ? cfg.deep : cfg.fast;
 
-      // queries: the question itself; a high-effort rerun also asks a cheap model for other ways to put it
+      // queries: the moment itself, plus what the query model wrote (`expand`) by the time it may wait.
+      // The moment's embedding starts at once (usually cached by the prefetch), so the written queries
+      // only add their own embedding after them, and a slow query model costs nothing but its queries.
       const queries = [q];
-      let expandMs = 0;
-      if (deep && expand) {
+      const timeout = (ms, value) => new Promise((r) => setTimeout(() => r(value), ms));
+      const embedOf = (texts) =>
+        cl
+          ? cl.embed.embedQueries(texts).then(
+              (r) => ({ r }),
+              (e) => ({ e })
+            )
+          : null;
+      const rawEmbed = embedOf([q]);
+      let expandMs = null;
+      let expandCost = 0;
+      let expandError = null;
+      if (expand) {
         const e0 = now();
         try {
-          for (const x of (
-            await Promise.race([
-              expand(q),
-              new Promise((r) => setTimeout(() => r([]), embedWaitMs)),
-            ])
-          ).slice(0, 3))
-            if (x && !queries.includes(x)) queries.push(clean(x));
-        } catch {}
+          const got = await Promise.race([
+            Promise.resolve(expand(q)),
+            timeout(deep ? cfg.queryWaitMs.deep : cfg.queryWaitMs.fast, null),
+          ]);
+          if (!got) expandError = "slow";
+          const list = Array.isArray(got) ? got : (got?.queries ?? []);
+          expandCost = got?.cost ?? 0;
+          for (const x of list.slice(0, 3)) {
+            const c = clean(x);
+            if (c && !queries.includes(c)) queries.push(c);
+          }
+        } catch (e) {
+          expandError = e.code ?? e.message ?? "error";
+        }
         expandMs = now() - e0;
       }
 
@@ -100,37 +119,59 @@ function createRetriever({
           hits.forEach((id, r) => kwRank.set(id, Math.min(kwRank.get(id) ?? 99, r)));
         }
 
-      // vectors, but never let a slow embedding hold the card: keyword-only after embedWaitMs
-      let vectorLists = [];
-      const cos = new Map(); // chunk id -> best cosine
+      // vectors, but never let a slow embedding hold the card: keyword-only after embedWaitMs.
+      // Written queries are embedded too only with `embedWritten`: the embedding call is a full round trip
+      // (about a second) the moment's own prefetched vector does not pay; without it they search by keyword.
+      const vectorLists = [];
+      const vectorWeights = [];
+      const cos = new Map(); // chunk id -> best cosine over all queries
+      const near = new Set(); // chunks within `margin` of the best match of a query that found them
       let embedMs = null;
+      let embedCost = 0;
       let mode = "keyword";
       let embedError = null;
       if (cl) {
         const e0 = now();
-        try {
-          const r = await Promise.race([
-            cl.embed.embedQueries(queries),
-            new Promise((_, rej) =>
-              setTimeout(() => rej(Object.assign(new Error("slow"), { code: "slow" })), embedWaitMs)
-            ),
-          ]);
-          embedMs = now() - e0;
-          for (const pid of ids)
-            for (const vec of r.vectors) {
-              const hits = rag.vector(pid, vec, 12);
-              vectorLists.push(hits.map((h) => h.id));
-              for (const h of hits) cos.set(h.id, Math.max(cos.get(h.id) ?? -1, h.score));
+        const slow = { e: { code: "slow" } };
+        const [raw, extra] = await Promise.all([
+          Promise.race([rawEmbed, timeout(embedWaitMs, slow)]),
+          queries.length > 1 && cfg.embedWritten
+            ? Promise.race([embedOf(queries.slice(1)), timeout(embedWaitMs, slow)])
+            : { r: { vectors: [] } },
+        ]);
+        embedMs = now() - e0;
+        const vectors = [...(raw.r?.vectors ?? []), ...(extra.r?.vectors ?? [])];
+        const written = (vi) => vi > 0 || !raw.r; // the moment's own vector is first, when it came back
+        embedCost = (raw.r?.cost ?? 0) + (extra.r?.cost ?? 0);
+        embedError = raw.e?.code ?? raw.e?.message ?? extra.e?.code ?? extra.e?.message ?? null;
+        // A chunk only the keyword search found has no cosine yet: it is scored against the same vectors, so an
+        // exact name or number outside the vector top 12 is judged on its meaning rather than dropped.
+        const kwIds = cfg.scoreKeywordHits && rag.similarity ? [...kwRank.keys()] : [];
+        for (const pid of ids)
+          vectors.forEach((vec, vi) => {
+            const hits = rag.vector(pid, vec, 12);
+            vectorLists.push(hits.map((h) => h.id));
+            vectorWeights.push(written(vi) ? cfg.writtenWeight : 1);
+            const scores = new Map(hits.map((h) => [h.id, h.score]));
+            const extra = kwIds.filter((id) => !scores.has(id));
+            if (extra.length)
+              for (const [id, s] of rag.similarity(pid, extra, vec)) scores.set(id, s);
+            // "not far behind the best" is judged per query: a broad written query matching a general
+            // passage well must not push out what the moment's own words matched
+            const top = hits[0]?.score ?? -1;
+            for (const [id, s] of scores) {
+              cos.set(id, Math.max(cos.get(id) ?? -1, s));
+              if (s >= top - cfg.margin) near.add(id);
             }
-          mode = "hybrid";
-        } catch (e) {
-          embedMs = now() - e0;
-          embedError = e.code ?? e.message;
-        }
+          });
+        if (vectors.length) mode = "hybrid";
       }
 
       const fused = rag.rrf([...vectorLists, ...keywordLists], {
-        weights: [...vectorLists.map(() => 1), ...keywordLists.map(() => 0.8)],
+        weights: [
+          ...vectorWeights,
+          ...keywordLists.map((_, li) => 0.8 * (li % queries.length ? cfg.writtenWeight : 1)),
+        ],
       });
       const candidates = fused.length;
       const best = Math.max(-1, ...cos.values());
@@ -140,12 +181,15 @@ function createRetriever({
           log: {
             mode,
             embedMs,
+            expandMs,
+            expandError,
             embedError,
-            queries: queries.length,
+            queries,
+            cost: expandCost + embedCost,
             best: Number(best.toFixed(3)),
             reason: "weak_match",
           },
-          out: { skipped: "weak_match" },
+          out: { skipped: "weak_match", queries, cost: expandCost + embedCost, expandMs, embedMs },
         });
       const kept = fused
         .filter((f) => {
@@ -154,7 +198,7 @@ function createRetriever({
           const exact = (kwRank.get(f.id) ?? 99) < cfg.strongKeyword;
           // the very words asked for count, but not when the meaning is far off (or there is no embedding to check)
           return (
-            (c >= cfg.floor && c >= best - cfg.margin) ||
+            (c >= cfg.floor && near.has(f.id)) ||
             (exact && (mode === "keyword" || c >= cfg.keywordFloor))
           );
         })
@@ -190,8 +234,10 @@ function createRetriever({
           mode,
           embedMs,
           expandMs,
+          expandError,
           embedError,
-          queries: queries.length,
+          queries,
+          cost: expandCost + embedCost,
           candidates,
           kept: usedInfo,
           chars: used,
@@ -199,6 +245,10 @@ function createRetriever({
         },
         out: {
           text,
+          queries,
+          cost: expandCost + embedCost,
+          expandMs,
+          embedMs,
           used: usedInfo,
           skipped: parts.length ? null : candidates ? "below_floor" : "no_match",
         },

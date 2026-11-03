@@ -1,5 +1,7 @@
 const { withPolicyRequestHeaders } = require("./policyRequestHeaders");
 
+const API_NOT_CONFIGURED = "OpenWhispr API URL not configured";
+
 class AuthContextError extends Error {
   constructor(message, code = "AUTH_CONTEXT_CHANGED") {
     super(message);
@@ -75,7 +77,7 @@ function createCloudApiRequestHandler({
   return async function handleCloudApiRequest(opts) {
     try {
       const apiUrl = getApiUrl();
-      if (!apiUrl) throw new Error("OpenWhispr API URL not configured");
+      if (!apiUrl) throw new Error(API_NOT_CONFIGURED);
 
       if (typeof opts?.path !== "string" || !opts.path.startsWith("/")) {
         return { success: false, error: "Invalid API path" };
@@ -153,6 +155,8 @@ function createCloudApiRequestHandler({
       return { success: true, data };
     } catch (error) {
       if (error instanceof AuthContextError) return authFailure(error);
+      // Builds without a cloud backend hit this on every poll; not worth logging.
+      if (error?.message === API_NOT_CONFIGURED) return { success: false, error: error.message };
       logger?.error?.(
         `Cloud API request error (${opts?.path}): ${error?.message || error} ${error?.code || ""}`.trim(),
         error?.stack
@@ -163,6 +167,7 @@ function createCloudApiRequestHandler({
 }
 
 module.exports = {
+  API_NOT_CONFIGURED,
   AuthContextError,
   captureAuthFence,
   createCloudApiRequestHandler,

@@ -9,7 +9,7 @@ const {
   toBuffer,
   fromBuffer,
 } = require("../../src/copilot/rag/vectors");
-const { classify, checkSize } = require("../../src/copilot/rag/config");
+const { classify, checkSize, RAG } = require("../../src/copilot/rag/config");
 const { parseTimed } = require("../../src/copilot/rag/analyzeClient");
 const { createEmbedClient, mediaPart } = require("../../src/copilot/rag/embedClient");
 const { postJson, pool } = require("../../src/copilot/rag/openrouter");
@@ -312,5 +312,71 @@ test("retrieve: a high-effort rerun searches with the extra wordings too, and ta
   });
   assert.equal(fast.used.length, 5);
   assert.equal(deep.used.length, 8);
-  assert.deepEqual(seen, [1, 3]);
+  assert.equal(deep.queries.length, 3);
+  // by default the written queries search by keyword only: no second embedding round trip
+  assert.deepEqual(seen, [1, 1]);
+  // with embedWritten the moment is embedded on its own (cached by the prefetch in the app), the written ones after it
+  const embedding = createRetriever({
+    rag: fakeRag(chunks),
+    clients,
+    cfg: { ...RAG, embedWritten: true },
+  });
+  await embedding.retrieve({
+    query: "pricing",
+    projectIds: [1],
+    deep: true,
+    expand: async () => ["plan cost"],
+  });
+  assert.deepEqual(seen, [1, 1, 1, 1]);
+});
+
+test("retrieve: every card can search with written queries; a slow query model only costs its queries", async () => {
+  const chunks = { 1: { file: "a.md", text: "Valkey cache for live bids", vec: [1, 0] } };
+  const logs = [];
+  const r = createRetriever({
+    rag: fakeRag(chunks),
+    clients: fakeClients([1, 0]),
+    cfg: { ...RAG, queryWaitMs: { fast: 30, deep: 30 } },
+    log: (x) => logs.push(x),
+  });
+  const quick = await r.retrieve({
+    query: "OTHER-1: um so what do we use for the cache",
+    projectIds: [1],
+    expand: async () => ({ queries: ["Valkey cache"], cost: 0.0001 }),
+  });
+  assert.deepEqual(quick.queries, ["um so what do we use for the cache", "Valkey cache"]);
+  assert.equal(quick.used.length, 1);
+  const slow = await r.retrieve({
+    query: "what do we use for the cache",
+    projectIds: [1],
+    expand: () => new Promise((res) => setTimeout(() => res(["never used"]), 200)),
+  });
+  assert.deepEqual(slow.queries, ["what do we use for the cache"]);
+  assert.equal(logs[1].expandError, "slow");
+  assert.equal(slow.used.length, 1);
+});
+
+test("retrieve: a chunk only the keyword search found is scored against the query vector, not dropped", async () => {
+  const chunks = {
+    1: { file: "a.md", text: "general overview of the platform", vec: [0.8, 0.6] },
+    2: { file: "b.md", text: "region ap-south-1 Mumbai", vec: [0.9, 0.436] },
+  };
+  const rag = {
+    ...fakeRag(chunks),
+    keyword: (_p, q) => (/mumbai/i.test(q) ? [2] : []),
+    vector: () => [{ id: 1, score: 0.6 }], // the vector top k misses chunk 2
+    similarity: (_p, ids, vec) =>
+      new Map(ids.map((id) => [id, chunks[id].vec[0] * vec[0] + chunks[id].vec[1] * vec[1]])),
+  };
+  const run = (scoreKeywordHits) =>
+    createRetriever({
+      rag,
+      clients: fakeClients([0.8, 0.6]),
+      cfg: { ...RAG, scoreKeywordHits },
+    }).retrieve({ query: "which region Mumbai", projectIds: [1] });
+  assert.deepEqual(
+    (await run(false)).used.map((u) => u.file),
+    ["a.md"]
+  );
+  assert.ok((await run(true)).used.some((u) => u.file === "b.md"));
 });

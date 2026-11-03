@@ -236,7 +236,9 @@ export const usePolicyStore = create<PolicyState>()((set, get) => {
           });
         } catch (error) {
           if (sequence !== fetchSequence) return;
-          logger.error("Failed to fetch workspace policy:", error);
+          if ((error as Error)?.message !== "OpenWhispr API URL not configured") {
+            logger.error("Failed to fetch workspace policy:", error);
+          }
           const failureCode =
             error && typeof error === "object" && "code" in error && typeof error.code === "string"
               ? error.code

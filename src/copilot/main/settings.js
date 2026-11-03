@@ -12,6 +12,7 @@ const DEFAULTS = {
   mainModel: "", // "" = built-in default
   deepModel: "", // the "Rerun with high effort" model ("" = built-in)
   summaryModel: "",
+  queryModel: "", // writes the project-file search queries ("" = google/gemma-4-31b-it:nitro)
   web: false, // search the web in the quick answers (slower); "Go deeper" always does
   quiet: "normal", // quiet | normal | chatty: how readily the copilot speaks up unasked
   behavior: "", // learned, global: what to make cards about and how (rewritten rarely from the user's feedback; editable)

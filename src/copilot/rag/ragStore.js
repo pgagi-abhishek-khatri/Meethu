@@ -172,6 +172,22 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
       const m = this.matrix(projectId, vec.length);
       return m.ids.length ? topK(m, vec, k) : [];
     },
+    // Cosine of the given chunks to a query vector (chunks a keyword search found outside the vector top k).
+    // -> Map(id -> score); ids not in this project are left out.
+    similarity(projectId, ids, vec) {
+      const m = this.matrix(projectId, vec.length);
+      m.row ??= new Map(m.ids.map((id, r) => [id, r]));
+      const out = new Map();
+      for (const id of ids) {
+        const r = m.row.get(id);
+        if (r == null) continue;
+        let s = 0;
+        const o = r * vec.length;
+        for (let i = 0; i < vec.length; i++) s += m.data[o + i] * vec[i];
+        out.set(id, s);
+      }
+      return out;
+    },
     chunk(id) {
       const r = q.chunk.get(id);
       return r ? { ...r, meta: JSON.parse(r.meta || "{}") } : null;

@@ -25,6 +25,8 @@ const {
   DEFAULT_SUMMARY_CONFIG,
   DEFAULT_SUMMARY_MODEL,
 } = require("../core/summary/rollingSummary");
+const { createQueryWriter } = require("../rag/queryWriter");
+const { RAG } = require("../rag/config");
 
 const MAX_TRANSCRIPT = 300;
 // Per-meeting memory caps: a 2-hour meeting must not grow the heap without bound.
@@ -69,6 +71,7 @@ function createEngine({
   clearTimer = clearTimeout,
   client = null,
   llm = null,
+  queryWriter = null, // injected in tests; otherwise google/gemma (settings.queryModel); COPILOT_QUERY_WRITER=0 turns it off
   mainModel = null, // injected in tests; otherwise built from the settings / .env (COPILOT_MAIN=0 keeps the simulated jobs)
   getSettings = () => ({}), // live: { apiKey, mainModel, summaryModel, quiet, instructions, plan, startPrompt, endPrompt, endRecap, maxParallel }
   getReference = () => "", // text of the project files not indexed yet (small text files are inlined as before)
@@ -83,6 +86,7 @@ function createEngine({
   // a changed setting applies to the next meeting.
   let baseD1 = null;
   let summaryLlm = null;
+  let writer = null;
   let model = null;
   let active = false;
   let deepModelId = null;
@@ -249,6 +253,14 @@ function createEngine({
             model: st.summaryModel || env.COPILOT_SUMMARY_MODEL || DEFAULT_SUMMARY_MODEL,
           })
         : null);
+    writer =
+      queryWriter ??
+      (dec.apiKey && env.COPILOT_QUERY_WRITER !== "0"
+        ? createQueryWriter({
+            apiKey: dec.apiKey,
+            model: st.queryModel || env.COPILOT_QUERY_MODEL || RAG.queryModel,
+          })
+        : null);
     const ai = getCopilotAiConfig({
       ...keyEnv,
       COPILOT_AI_MODEL: st.mainModel || env.COPILOT_AI_MODEL || "",
@@ -265,7 +277,15 @@ function createEngine({
   }
 
   // Starts the real main-model call for a job and keeps the job bookkeeping straight.
-  // A high-effort rerun searches with a few other wordings of the question (one cheap call, in parallel with nothing else to wait for).
+  // Every card that searches the files also searches with a few queries a fast model writes from the moment
+  // (the raw moment carries filler); retrieve() runs it beside the moment's own embedding.
+  const writeQueries = (spec) => (question) =>
+    writer({
+      moment: clip(spec.focus || question, 1500), // the whole moment: the model reads past the filler
+      gist: spec.gist ?? "",
+      catalog: (rag.catalogLines?.() ?? []).join("\n"),
+    });
+  // Without the query model, a high-effort rerun still asks the summary model for other wordings.
   async function expandQuery(question) {
     const r = await summaryLlm({
       messages: [
@@ -321,7 +341,7 @@ function createEngine({
                       : "asked"
                   : "auto",
                 minScore: spec.project ? 0 : AUTO_SCORE,
-                expand: spec.deep && summaryLlm ? expandQuery : null,
+                expand: writer ? writeQueries(spec) : spec.deep && summaryLlm ? expandQuery : null,
               });
               trace({
                 type: "context",

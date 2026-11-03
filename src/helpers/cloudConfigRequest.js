@@ -1,4 +1,5 @@
 const { readPolicyResponseError, toPolicyFailure } = require("./policyResponseError");
+const { API_NOT_CONFIGURED } = require("./cloudApiRequest");
 
 function createCloudConfigRequestHandler({
   getApiUrl,
@@ -11,7 +12,7 @@ function createCloudConfigRequestHandler({
   return async function handleCloudConfigRequest(event) {
     try {
       const apiUrl = getApiUrl();
-      if (!apiUrl) throw new Error("OpenWhispr API URL not configured");
+      if (!apiUrl) throw new Error(API_NOT_CONFIGURED);
 
       const authHeader = await getAuthHeader(event);
       if (!Object.keys(authHeader).length) throw new Error("Not authenticated");
@@ -46,7 +47,9 @@ function createCloudConfigRequestHandler({
       const data = await response.json();
       return { success: true, ...data };
     } catch (error) {
-      logger?.error?.(`${configPath} fetch error:`, error);
+      if (error?.message !== API_NOT_CONFIGURED) {
+        logger?.error?.(`${configPath} fetch error:`, error);
+      }
       return toPolicyFailure(error);
     }
   };

@@ -5,6 +5,8 @@ const MB = 1024 * 1024;
 const RAG = {
   embedModel: "google/gemini-embedding-2",
   analysisModel: "google/gemini-3.8-flash",
+  queryModel: "google/gemma-4-31b-it:nitro", // writes the search queries for every card that searches the files
+  queryWaitMs: { fast: 900, deep: 2500 }, // the card searches with what the query model wrote by then
   dims: 768, // Matryoshka cut of the 3072 default: 4x smaller, same quality for this size of corpus
   embedBatch: 100, // API maximum per request
   embedConcurrency: 4,
@@ -30,6 +32,9 @@ const RAG = {
   autoScore: 0.69, // an unasked look at the files needs a match this close
   keywordFloor: 0.5, // an exact-word hit still needs at least this much closeness in meaning
   strongKeyword: 3, // an exact-term match this far from the top still counts without the embedding
+  scoreKeywordHits: true, // keyword-only hits get their cosine from the query vectors instead of being dropped
+  embedWritten: false, // embed the written queries too (one more embedding round trip) or use them for keyword search only
+  writtenWeight: 0.7, // a written query's lists count this much in the fusion against the moment's own
   catalogFiles: 12,
   catalogChars: 420,
   queryCache: 64,

@@ -10528,7 +10528,9 @@ class IPCHandlers {
         const data = await response.json();
         return { success: true, ...data };
       } catch (error) {
-        debugLogger.error("Cloud usage fetch error:", error);
+        if (error.message !== "OpenWhispr API URL not configured") {
+          debugLogger.error("Cloud usage fetch error:", error);
+        }
         return { success: false, error: error.message };
       }
     });
