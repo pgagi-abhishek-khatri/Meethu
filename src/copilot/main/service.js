@@ -13,7 +13,7 @@ const { matchProject, rulesFromEvent } = require("./projectMatch");
 const { createEmbedClient } = require("../rag/embedClient");
 const { createAnalyzer } = require("../rag/analyzeClient");
 const { createMedia } = require("../rag/media");
-const { createIngestor } = require("../rag/ingest");
+const { createIngestor, friendly } = require("../rag/ingest");
 const { createRetriever } = require("../rag/retrieve");
 const { createRagLog } = require("../rag/ragLog");
 const { createBehavior } = require("./behavior");
@@ -361,7 +361,15 @@ function createCopilot({
     return !hotkeyError;
   };
   const withError = (view) => ({ ...view, hotkeyError });
-  handle("settings-update", async (patch) => {
+  // One update at a time: each may wait on the hotkey registrar, and two keys pressed quickly must not
+  // interleave (the first key's late answer would save it while the second one is registered).
+  let settingsQueue = Promise.resolve();
+  handle("settings-update", (patch) => {
+    const run = settingsQueue.then(() => applySettings(patch));
+    settingsQueue = run.catch(() => {});
+    return run;
+  });
+  async function applySettings(patch) {
     patch = patch && typeof patch === "object" ? { ...patch } : {};
     if (typeof patch.hotkey === "string" && patch.hotkey !== settings.view().hotkey) {
       if (!(await bindHotkey(patch.hotkey.slice(0, 80)))) {
@@ -373,7 +381,7 @@ function createCopilot({
     const view = withError(settings.update(patch));
     push({ type: "settings", settings: view });
     return view;
-  });
+  }
   handle("projects-list", () => store.projects.list());
   handle("project-create", (name) => store.projects.create(str(name, 80)));
   handle("project-rename", (id, name) => store.projects.rename(Number(id), str(name, 80)));
@@ -440,6 +448,7 @@ function createCopilot({
     return true;
   });
   handle("sessions-list", () => store.listSessions());
+  handle("sessions-count", () => store.countSessions());
   handle("sessions-get", (id) => store.getSession(str(id, 80)));
   handle("sessions-remove", (id) => store.deleteSession(str(id, 80)));
   handle("window", (action, value) => {
@@ -462,10 +471,25 @@ function createCopilot({
       })) ?? null,
   });
 
-  // Files that were mid-index when the app closed, or were added before indexing existed.
+  // Files that were mid-index when the app closed, or were added before indexing existed. Without a key (or
+  // with file search off) they cannot be read now: they are marked failed with the reason, so the page stops
+  // showing them as in progress and offers "Read again".
+  const resumeIndexing = () => {
+    const files = store.rag.unfinished();
+    if (!files.length) return 0;
+    if (ragClients()) {
+      for (const f of files) ingestor.ingest(f).catch(() => {});
+      return files.length;
+    }
+    const error = settings.engine().apiKey
+      ? "Project file search is off in the Copilot settings. Turn it on, then read the file again."
+      : friendly({ code: "no_key" });
+    for (const f of files) store.rag.setFile(f.id, { status: "error", stage: null, error });
+    return files.length;
+  };
   setTimeout(() => {
     try {
-      if (ragClients()) for (const f of store.rag.unfinished()) ingestor.ingest(f).catch(() => {});
+      resumeIndexing();
     } catch {}
   }, 4000).unref?.();
 
@@ -490,6 +514,7 @@ function createCopilot({
       void bindHotkey(settings.view().hotkey);
     },
     openWindow: (opts) => win.open(opts),
+    resumeIndexing, // runs 4 s after launch; exposed for tests
     engine,
     store,
     settings,

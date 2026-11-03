@@ -97,6 +97,7 @@ contextBridge.exposeInMainWorld("copilot", {
   },
   sessions: {
     list: () => copilotCall("sessions-list"),
+    count: () => copilotCall("sessions-count"),
     get: (id) => copilotCall("sessions-get", id),
     remove: (id) => copilotCall("sessions-remove", id),
   },

@@ -38,7 +38,7 @@ async function decide({ input, client, cfg = DEFAULT_DECISION_CONFIG }) {
     };
   } catch (error) {
     return {
-      ...fallbackDecision(false, error.code ?? "error"),
+      ...fallbackDecision(false, error.code ?? "error", ctx, error.status ?? null),
       error: { code: error.code, status: error.status ?? null },
       latency,
       inputTokens: 0,

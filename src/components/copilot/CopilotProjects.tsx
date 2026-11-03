@@ -19,7 +19,8 @@ import { ConfirmDialog } from "../ui/dialog";
 import { cn } from "../lib/utils";
 import { BlurField, useCopilotSettings } from "./CopilotFields";
 import { PaneHeader, Block } from "./CopilotPane";
-import { WORKING } from "./copilotFormat";
+import { WORKING, runThenReload } from "./copilotFormat";
+import { useToast } from "../ui/useToast";
 import type { Project, ProjectFile, RuleKind } from "./copilotApi";
 
 const RULE_LABELS: Record<RuleKind, string> = {
@@ -260,7 +261,15 @@ function Rules({ p, run }: { p: Project; run: (x: Promise<unknown>) => void }) {
 
 function ProjectDetail({ p, reload }: { p: Project; reload: () => void }) {
   const api = window.copilot!.projects;
-  const run = (f: Promise<unknown>) => void f.then(reload);
+  const { toast } = useToast();
+  const run = (f: Promise<unknown>) =>
+    void runThenReload(f, reload, (error) =>
+      toast({
+        title: "That did not work",
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive",
+      })
+    );
   const [confirm, setConfirm] = useState(false);
   const [name, setName] = useState(p.name);
   const [seen, setSeen] = useState(p.name);

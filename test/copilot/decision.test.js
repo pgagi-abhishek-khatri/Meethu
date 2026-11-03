@@ -246,6 +246,43 @@ test("decide: a failed decision still makes a card", async () => {
   assert.equal(d.fallbackDecision(true, "http").trigger, "explicit");
 });
 
+test("decide: a failed decision keeps the rules that need no D1 answer", async () => {
+  const fail = (status) =>
+    one(Object.assign(new Error("x"), { code: status ? "http" : "timeout", status }));
+  // a refused key or an empty account: every call would fail, so no card
+  for (const status of [401, 402, 403]) {
+    const out = await d.decide({ input: input(), client: fail(status) });
+    assert.equal(out.kind, "wait", `status ${status}`);
+    assert.ok(out.reasons.includes("key_refused"));
+  }
+  // a 5xx is transient: the moment still gets a card
+  assert.equal((await d.decide({ input: input(), client: fail(500) })).kind, "run");
+  // an analysis running: only D1 can tell whether the words replace it, so no second card on top
+  const running = await d.decide({
+    input: input({ running: [{ id: "j1", topic: "GDP" }] }),
+    client: fail(null),
+  });
+  assert.equal(running.kind, "wait");
+  assert.ok(running.reasons.includes("analysis_running"));
+  // others' words while the user speaks are held, the user's own words are not
+  const held = await d.decide({
+    input: input({ signals: { endpoint: true, userSpeaking: true } }),
+    client: fail(null),
+  });
+  assert.equal(held.kind, "wait");
+  assert.ok(held.reasons.includes("user_speaking"));
+  const own = await d.decide({
+    input: input({
+      transcript: [seg(1, "system", "Let's talk numbers."), seg(2, "mic", "What is the GDP?")],
+      signals: { endpoint: true, userSpeaking: true },
+    }),
+    client: fail(null),
+  });
+  assert.equal(own.kind, "run");
+  // an explicit request is never held
+  assert.equal(d.fallbackDecision(true, "http", { running: [{}] }, 401).kind, "run");
+});
+
 // ------------------------------------------------------------ state
 test("state labels speakers, splits new text from context and drops empty keys", () => {
   const s = d.buildDecisionState(input(), CFG);

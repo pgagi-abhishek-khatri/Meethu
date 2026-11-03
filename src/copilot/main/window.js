@@ -35,6 +35,18 @@ function createCopilotWindow({
       width: Math.max(1, Math.round(Number(b.width)) || 1),
       height: Math.max(1, Math.round(Number(b.height)) || 1),
     }).workArea;
+  // A saved rectangle from an older build or a hand-edited state file: only whole, finite numbers are kept,
+  // anything else falls back to the default spot and size (Electron throws on NaN bounds).
+  const savedRect = (b) =>
+    b &&
+    Number.isFinite(b.x) &&
+    Number.isFinite(b.y) &&
+    Number.isFinite(b.width) &&
+    Number.isFinite(b.height) &&
+    b.width > 0 &&
+    b.height > 0
+      ? b
+      : null;
   const clampToScreen = (b) => {
     if (!b || !Number.isFinite(b.x) || !Number.isFinite(b.y)) return b;
     const area = areaOf(b);
@@ -61,7 +73,7 @@ function createCopilotWindow({
   function create({ focus, startMode }) {
     const state = getWindowState();
     const expanded = !!state.expanded;
-    const saved = clampToScreen(expanded ? state.expandedBounds : state.compact);
+    const saved = clampToScreen(savedRect(expanded ? state.expandedBounds : state.compact));
     const size = expanded ? SIZES.expanded : SIZES.compact;
     const display = screen.getPrimaryDisplay().workArea;
     const orb = clampToScreen(state.orb);
@@ -193,8 +205,8 @@ function createCopilotWindow({
       if (!alive() || mode !== "full") return;
       const state = getWindowState();
       const target = on
-        ? (state.expandedBounds ?? SIZES.expanded)
-        : (state.compact ?? SIZES.compact);
+        ? (savedRect(state.expandedBounds) ?? SIZES.expanded)
+        : (savedRect(state.compact) ?? SIZES.compact);
       const b = win.getBounds();
       win.setBounds(
         fit({ x: target.x ?? b.x, y: target.y ?? b.y, width: target.width, height: target.height })

@@ -7,10 +7,18 @@ const { RAG } = require("./config");
 const SYSTEM =
   "You write search queries for the USER's own project documents. From the meeting moment, work out the exact fact the documents must hold, and write up to 3 short queries (each at most 12 words). The first restates the precise question with every name, number, amount and term from the moment (write numbers as digits, e.g. 32,000). The others use the words a document would use for that same fact (a section title, a table heading, a feature name). Stay specific: never a broad query like 'bidding rules' or 'project overview'. Ignore filler, greetings and who is speaking. If nothing in the moment could be in the documents, write NONE. One query per line, nothing else.";
 
+// One query per line. Only a list marker is stripped ("1. ", "2) ", "- ", "* "), never the digits a query
+// starts with: the prompt asks for numbers as digits, so "32,000 bid cap" must stay whole.
 const lines = (text) =>
   String(text ?? "")
     .split("\n")
-    .map((l) => l.replace(/^[-*\d.)\s"]+|"$/g, "").trim())
+    .map((l) =>
+      l
+        .trim()
+        .replace(/^(?:[-*•]+|\d{1,2}[.)])\s+/, "")
+        .replace(/^"+|"+$/g, "")
+        .trim()
+    )
     .filter((l) => l && l.length <= 160 && !/^\(|^none\b/i.test(l));
 
 // moment: the new transcript lines; catalog: what the files are (gives the model the documents' own words).
@@ -64,4 +72,4 @@ function createQueryWriter({
   };
 }
 
-module.exports = { createQueryWriter, SYSTEM, userText };
+module.exports = { createQueryWriter, SYSTEM, userText, parseQueryLines: lines };

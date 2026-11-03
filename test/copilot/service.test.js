@@ -38,7 +38,7 @@ function fakeMain() {
   return fn;
 }
 
-function setup({ events = [] } = {}) {
+function setup({ events = [], env = { OPENROUTER_API_KEY: "k", COPILOT_QUERY_WRITER: "0" } } = {}) {
   const handlers = new Map();
   const listeners = new Map();
   const sent = [];
@@ -85,7 +85,7 @@ function setup({ events = [] } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-svc-"));
   const copilot = createCopilot({
     dir,
-    env: { OPENROUTER_API_KEY: "k" },
+    env, // the query writer is off: no real query-model call from a test
     electron,
     loadRenderer: () => Promise.resolve(),
     setupAlwaysOnTop: () => {},
@@ -222,4 +222,58 @@ test("window mode requests reach the window", sqlite, async () => {
   const { copilot, invoke } = setup();
   copilot.begin();
   await invoke("window", "mode", "orb"); // the fake window has no bounds API: it must not throw
+});
+
+test("two hotkeys pressed quickly: the last one is both saved and registered", sqlite, async () => {
+  const { copilot, invoke } = setup();
+  const registered = [];
+  copilot.setHotkeyRegistrar(async (key) => {
+    // the first key's registration answers last
+    await new Promise((r) => setTimeout(r, key === "CommandOrControl+Shift+K" ? 40 : 1));
+    registered.push(key);
+    return { success: true };
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  registered.length = 0;
+  const [a, b] = await Promise.all([
+    invoke("settings-update", { hotkey: "CommandOrControl+Shift+K" }),
+    invoke("settings-update", { hotkey: "CommandOrControl+Shift+J" }),
+  ]);
+  assert.equal(a.hotkey, "CommandOrControl+Shift+K");
+  assert.equal(b.hotkey, "CommandOrControl+Shift+J");
+  assert.deepEqual(registered, ["CommandOrControl+Shift+K", "CommandOrControl+Shift+J"]);
+  assert.equal((await invoke("settings-get")).hotkey, "CommandOrControl+Shift+J");
+});
+
+test(
+  "files cut off mid-index are marked failed with the reason when they cannot be read now",
+  sqlite,
+  async () => {
+    const { copilot, invoke } = setup({ env: { COPILOT_QUERY_WRITER: "0" } }); // no key
+    const pid = await invoke("project-create", "Acme");
+    const f = copilot.store.projects.addFileRow(pid, "C:/x/brief.pdf", "brief.pdf");
+    copilot.store.rag.setFile(f.id, { status: "embedding", stage: "Embedding 40 pieces" });
+    assert.equal(copilot.resumeIndexing(), 1);
+    const row = (await invoke("projects-list"))[0].files[0];
+    assert.equal(row.status, "error");
+    assert.match(row.error, /OpenRouter key/);
+    assert.equal(copilot.resumeIndexing(), 0, "nothing is left in progress");
+  }
+);
+
+test("with a key but file search off, the reason says so", sqlite, async () => {
+  const { copilot, invoke } = setup();
+  await invoke("settings-update", { ragEnabled: false });
+  const pid = await invoke("project-create", "Acme");
+  const f = copilot.store.projects.addFileRow(pid, "C:/x/a.md", "a.md");
+  copilot.store.rag.setFile(f.id, { status: "reading" });
+  copilot.resumeIndexing();
+  assert.match((await invoke("projects-list"))[0].files[0].error, /search is off/);
+});
+
+test("the meeting count is the real total, past the list's 50", sqlite, async () => {
+  const { copilot, invoke } = setup();
+  for (let i = 0; i < 55; i++) copilot.store.startSession(`s${i}`, `Meeting ${i}`);
+  assert.equal((await invoke("sessions-list")).length, 50);
+  assert.equal(await invoke("sessions-count"), 55);
 });

@@ -177,9 +177,24 @@ function interpret(rawAnswers, plan, ctx, cfg) {
   return go();
 }
 
+// A refused key or an empty account: every call would fail the same way, so nothing runs (the banner says why).
+const REFUSED_STATUS = new Set([401, 402, 403]);
+
 // D1 unreachable: the moment still gets a card with default settings; the answer model can still SKIP chatter.
-function fallbackDecision(explicit, errorCode) {
+// The rules that need no D1 answer still hold for a proactive one: no card while the key is refused, while the
+// user speaks over others' words, or while an analysis runs (D1 alone can tell whether the words replace it).
+function fallbackDecision(explicit, errorCode, ctx = {}, status = null) {
   const reasons = [`decision_unavailable:${errorCode}`];
+  if (!explicit) {
+    const held = REFUSED_STATUS.has(status)
+      ? "key_refused"
+      : ctx.running?.length
+        ? "analysis_running"
+        : ctx.signals?.userSpeaking && !ctx.userInNew
+          ? "user_speaking"
+          : null;
+    if (held) return { kind: "wait", reasons: [...reasons, held] };
+  }
   return {
     kind: "run",
     trigger: explicit ? "explicit" : "proactive",

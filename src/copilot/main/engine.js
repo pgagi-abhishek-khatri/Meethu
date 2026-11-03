@@ -25,7 +25,7 @@ const {
   DEFAULT_SUMMARY_CONFIG,
   DEFAULT_SUMMARY_MODEL,
 } = require("../core/summary/rollingSummary");
-const { createQueryWriter } = require("../rag/queryWriter");
+const { createQueryWriter, parseQueryLines } = require("../rag/queryWriter");
 const { RAG } = require("../rag/config");
 
 const MAX_TRANSCRIPT = 300;
@@ -338,12 +338,15 @@ function createEngine({
   // Starts the real main-model call for a job and keeps the job bookkeeping straight.
   // Every card that searches the files also searches with a few queries a fast model writes from the moment
   // (the raw moment carries filler); retrieve() runs it beside the moment's own embedding.
-  const writeQueries = (spec) => (question) =>
-    writer({
-      moment: clip(spec.focus || question, 1500), // the whole moment: the model reads past the filler
-      gist: spec.gist ?? "",
-      catalog: (rag.catalogLines?.() ?? []).join("\n"),
-    });
+  const writeQueries =
+    (spec) =>
+    (question, { signal } = {}) =>
+      writer({
+        moment: clip(spec.focus || question, 1500), // the whole moment: the model reads past the filler
+        gist: spec.gist ?? "",
+        catalog: (rag.catalogLines?.() ?? []).join("\n"),
+        signal, // retrieve() aborts it when the search no longer needs its queries
+      });
   // Without the query model, a high-effort rerun still asks the summary model for other wordings.
   async function expandQuery(question) {
     const r = await summaryLlm({
@@ -356,10 +359,7 @@ function createEngine({
         { role: "user", content: question },
       ],
     });
-    return String(r.text ?? "")
-      .split("\n")
-      .map((l) => l.replace(/^[-*\d.)\s]+/, "").trim())
-      .filter(Boolean);
+    return parseQueryLines(r.text);
   }
   const threadOf = (s, id) => s.threads.get(id) ?? s.threads.get(MAIN);
   function startAnswer(s, job, spec) {
@@ -776,10 +776,10 @@ function createEngine({
       utterances.reduce((a, b) => (b.text.length > (a?.text.length ?? 0) ? b : a), null);
     // A moment D1 judged worth a look but not worth a card right now: the user may still want it.
     if (
+      pick && // every fresh line can be noise: nothing to offer
       (!decision.error || realQuestion(pick.text)) && // a failed decision still leaves a real question for the box
       !unjudged &&
       (decision.kind === "wait" || decision.kind === "skip") &&
-      pick &&
       ((decision.reasons?.some((r) => SKIP_REASON.test(r)) &&
         (realQuestion(pick.text) || (decision.raw?.act ?? 0) >= 0.25)) ||
         (decision.reasons?.some((r) => UNJUDGED.test(r)) && realQuestion(pick.text)))

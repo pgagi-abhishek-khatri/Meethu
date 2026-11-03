@@ -2,48 +2,38 @@ import { useCallback, useEffect, useState } from "react";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import type { CopilotSettings } from "./copilotApi";
-import { acceleratorFromEvent } from "./copilotFormat";
+import { onHotkeyKeyDown } from "./copilotFormat";
+import { createSettingsSync, type SettingsPatch } from "./copilotSettingsSync";
 
-type Patch = Partial<CopilotSettings> & { apiKey?: string };
-
-// Settings of the copilot, loaded from main and shared by every component on the page; updates
-// apply optimistically.
-let shared: CopilotSettings | null = null;
-const listeners = new Set<(s: CopilotSettings | null) => void>();
-const publish = (s: CopilotSettings | null) => {
-  shared = s;
-  listeners.forEach((l) => l(s));
-};
+// Settings of the copilot, loaded from main and shared by every component on the page.
+const sync = createSettingsSync(() => window.copilot);
 
 export function useCopilotSettings() {
-  const [settings, setSettings] = useState<CopilotSettings | null>(shared);
+  const [settings, setSettings] = useState<CopilotSettings | null>(sync.get());
   useEffect(() => {
-    listeners.add(setSettings);
-    void window.copilot?.getSettings().then(publish);
-    return () => void listeners.delete(setSettings);
+    const off = sync.subscribe(setSettings);
+    void sync.load();
+    return off;
   }, []);
-  const update = useCallback((patch: Patch) => {
-    const { apiKey: _key, ...rest } = patch;
-    if (shared) publish({ ...shared, ...rest });
-    void window.copilot?.updateSettings(patch).then(publish);
-  }, []);
+  const update = useCallback((patch: SettingsPatch) => void sync.update(patch), []);
   return { settings, update };
 }
 
 // Click, press the keys; Backspace clears.
 export function HotkeyField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [error, setError] = useState<string | null>(null);
   return (
-    <Input
-      readOnly
-      value={value || "None"}
-      className="h-8 w-44 cursor-pointer text-center font-mono text-xs caret-transparent focus:ring-2"
-      onKeyDown={(e) => {
-        e.preventDefault();
-        if (e.key === "Backspace" || e.key === "Delete") return onChange("");
-        const acc = acceleratorFromEvent(e);
-        if (acc) onChange(acc);
-      }}
-    />
+    <div className="flex flex-col items-end gap-1">
+      <Input
+        readOnly
+        value={value || "None"}
+        aria-invalid={!!error}
+        className="h-8 w-44 cursor-pointer text-center font-mono text-xs caret-transparent focus:ring-2"
+        onKeyDown={(e) => onHotkeyKeyDown(e, onChange, setError)}
+        onBlur={() => setError(null)}
+      />
+      {error && <span className="text-[11px] text-destructive">{error}</span>}
+    </div>
   );
 }
 

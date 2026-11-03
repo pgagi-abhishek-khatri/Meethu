@@ -79,7 +79,17 @@ function createRetriever({
       // The moment's embedding starts at once (usually cached by the prefetch), so the written queries
       // only add their own embedding after them, and a slow query model costs nothing but its queries.
       const queries = [q];
-      const timeout = (ms, value) => new Promise((r) => setTimeout(() => r(value), ms));
+      // Every wait is cleared once it is no longer needed: a pending 2.5 s timer per search adds up.
+      const timers = new Set();
+      const timeout = (ms, value) =>
+        new Promise((r) => {
+          const t = setTimeout(() => (timers.delete(t), r(value)), ms);
+          timers.add(t);
+        });
+      const clearTimers = () => {
+        for (const t of timers) clearTimeout(t);
+        timers.clear();
+      };
       const embedOf = (texts) =>
         cl
           ? cl.embed.embedQueries(texts).then(
@@ -87,26 +97,87 @@ function createRetriever({
               (e) => ({ e })
             )
           : null;
+      const slow = { e: { code: "slow" } };
       const rawEmbed = embedOf([q]);
+      const rawWait = rawEmbed ? Promise.race([rawEmbed, timeout(embedWaitMs, slow)]) : null;
+      // The query model starts at once, beside the moment's embedding; it is aborted when its answer is no longer wanted.
+      const writing = expand ? new AbortController() : null;
+      const e0 = now();
+      const written = expand
+        ? Promise.resolve()
+            .then(() => expand(q, { signal: writing.signal }))
+            .then(
+              (r) => ({ r }),
+              (e) => ({ e })
+            )
+        : null;
+      const weak = (best, embed) => {
+        writing?.abort();
+        clearTimers();
+        const cost = embed.cost ?? 0;
+        return done({
+          log: {
+            mode: embed.mode,
+            embedMs: embed.ms,
+            expandMs: null,
+            expandError: expand ? "not_needed" : null,
+            embedError: embed.error,
+            queries,
+            cost,
+            best: Number(best.toFixed(3)),
+            reason: "weak_match",
+          },
+          out: { skipped: "weak_match", queries, cost, expandMs: null, embedMs: embed.ms },
+        });
+      };
+      // Unprompted look: only the moment's own words decide whether anything is close enough to look further,
+      // so a moment with nothing in the files never waits for the query model.
+      if (minScore) {
+        if (!rawWait) return weak(-1, { mode: "keyword", ms: null, error: null });
+        const m0 = now();
+        const raw = await rawWait;
+        const ms = now() - m0;
+        const vec = raw.r?.vectors?.[0];
+        let top = -1;
+        if (vec) {
+          const kwIds = cfg.scoreKeywordHits && rag.similarity ? [] : null;
+          for (const pid of ids) {
+            for (const h of rag.vector(pid, vec, 12)) top = Math.max(top, h.score);
+            if (kwIds) {
+              const hits = rag.keyword(pid, q, 12);
+              if (hits.length)
+                for (const s of rag.similarity(pid, hits, vec).values()) top = Math.max(top, s);
+            }
+          }
+        }
+        if (top < minScore)
+          return weak(top, {
+            mode: vec ? "hybrid" : "keyword",
+            ms,
+            error: raw.e?.code ?? raw.e?.message ?? null,
+            cost: raw.r?.cost ?? 0,
+          });
+      }
       let expandMs = null;
       let expandCost = 0;
       let expandError = null;
-      if (expand) {
-        const e0 = now();
-        try {
-          const waitMs = deep ? cfg.queryWaitMs.deep : cfg.queryWaitMs.fast;
-          const got = await (waitMs == null
-            ? Promise.resolve(expand(q))
-            : Promise.race([Promise.resolve(expand(q)), timeout(waitMs, null)]));
-          if (!got) expandError = "slow";
+      if (written) {
+        const waitMs = deep ? cfg.queryWaitMs.deep : cfg.queryWaitMs.fast;
+        const left = waitMs == null ? null : Math.max(0, waitMs - (now() - e0));
+        const res = await (left == null ? written : Promise.race([written, timeout(left, null)]));
+        if (!res) {
+          expandError = "slow";
+          writing.abort(); // its queries would arrive too late to be used
+        } else if (res.e) {
+          expandError = res.e.code ?? res.e.message ?? "error";
+        } else {
+          const got = res.r;
           const list = Array.isArray(got) ? got : (got?.queries ?? []);
           expandCost = got?.cost ?? 0;
           for (const x of list.slice(0, 3)) {
             const c = clean(x);
             if (c && !queries.includes(c)) queries.push(c);
           }
-        } catch (e) {
-          expandError = e.code ?? e.message ?? "error";
         }
         expandMs = now() - e0;
       }
@@ -133,9 +204,8 @@ function createRetriever({
       let embedError = null;
       if (cl) {
         const e0 = now();
-        const slow = { e: { code: "slow" } };
         const [raw, extra] = await Promise.all([
-          Promise.race([rawEmbed, timeout(embedWaitMs, slow)]),
+          rawWait,
           queries.length > 1 && cfg.embedWritten
             ? Promise.race([embedOf(queries.slice(1)), timeout(embedWaitMs, slow)])
             : { r: { vectors: [] } },
@@ -167,6 +237,7 @@ function createRetriever({
           });
         if (vectors.length) mode = "hybrid";
       }
+      clearTimers(); // every wait has been decided
 
       const fused = rag.rrf([...vectorLists, ...keywordLists], {
         weights: [

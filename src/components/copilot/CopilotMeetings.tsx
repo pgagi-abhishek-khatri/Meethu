@@ -32,15 +32,41 @@ function MeetingDetail({
   onDeleted: () => void;
 }) {
   const { toast } = useToast();
-  const [d, setD] = useState<PastSessionDetail | null>(null);
+  // undefined while loading; null when the meeting is gone (deleted, or pruned by the retention setting)
+  const [d, setD] = useState<PastSessionDetail | null | undefined>(undefined);
   const [tab, setTab] = useState<"cards" | "transcript">("cards");
   const [find, setFind] = useState("");
   const [confirm, setConfirm] = useState(false);
   useEffect(() => {
-    setD(null);
-    void window.copilot?.sessions.get(id).then(setD);
+    let current = true; // the answer for a meeting opened earlier must not replace this one
+    setD(undefined);
+    const get = window.copilot?.sessions.get(id);
+    if (!get) setD(null);
+    else
+      void get.then(
+        (r) => current && setD(r ?? null),
+        () => current && setD(null)
+      );
+    return () => {
+      current = false;
+    };
   }, [id]);
-  if (!d) return <p className="text-xs text-muted-foreground">Loading…</p>;
+  if (d === undefined) return <p className="text-xs text-muted-foreground">Loading…</p>;
+  if (d === null)
+    return (
+      <div className="space-y-2">
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft size={13} /> All meetings
+        </button>
+        <p className="text-sm text-muted-foreground">
+          This meeting is no longer saved. It was deleted, or removed by the keep-meetings setting.
+        </p>
+      </div>
+    );
 
   const s = d.session;
   const cards = d.cards.filter((c) => c.status === "done");
@@ -62,8 +88,16 @@ function MeetingDetail({
         confirmText="Delete"
         variant="destructive"
         onConfirm={async () => {
-          await window.copilot?.sessions.remove(id);
-          onDeleted();
+          try {
+            await window.copilot?.sessions.remove(id);
+            onDeleted();
+          } catch (error) {
+            toast({
+              title: "The meeting could not be deleted",
+              description: error instanceof Error ? error.message : String(error),
+              variant: "destructive",
+            });
+          }
         }}
       />
       <button
@@ -203,12 +237,14 @@ function MeetingDetail({
 
 export default function CopilotMeetings({
   list,
+  total = list.length,
   projects,
   reload,
   open,
   onOpen,
 }: {
   list: PastSession[];
+  total?: number; // saved in all; the list holds the newest only
   projects: Project[];
   reload: () => void;
   open: string | null;
@@ -273,6 +309,11 @@ export default function CopilotMeetings({
             </select>
           )}
         </div>
+      )}
+      {total > list.length && (
+        <p className="text-[11px] text-muted-foreground">
+          Showing the newest {list.length} of {total} meetings.
+        </p>
       )}
       {shown.length ? (
         <div className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border/70 bg-card/50 dark:divide-border-subtle/50 dark:border-border-subtle dark:bg-surface-2/50">

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { CopilotSettings } from "./copilotApi";
-import { acceleratorFromEvent } from "./copilotFormat";
+import { onHotkeyKeyDown } from "./copilotFormat";
 import type { CopilotState } from "./copilotState";
 
 interface Props {
@@ -90,6 +90,7 @@ function Toggle({
 export default function SettingsView({ settings: s, state, onSettings }: Props) {
   const [key, setKey] = useState("");
   const [debug, setDebug] = useState(false);
+  const [hotkeyError, setHotkeyError] = useState<string | null>(null);
   if (!s) return <div className="p-4 text-slate-500">Loading…</div>;
 
   return (
@@ -167,14 +168,14 @@ export default function SettingsView({ settings: s, state, onSettings }: Props) 
             readOnly
             value={s.hotkey || "None"}
             className={field}
-            onKeyDown={(e) => {
-              e.preventDefault();
-              if (e.key === "Backspace" || e.key === "Delete") return onSettings({ hotkey: "" });
-              const acc = acceleratorFromEvent(e);
-              if (acc) onSettings({ hotkey: acc });
-            }}
+            onKeyDown={(e) =>
+              onHotkeyKeyDown(e, (hotkey) => onSettings({ hotkey }), setHotkeyError)
+            }
+            onBlur={() => setHotkeyError(null)}
           />
-          {s.hotkeyError && <span className="text-[11px] text-rose-300">{s.hotkeyError}</span>}
+          {(hotkeyError || s.hotkeyError) && (
+            <span className="text-[11px] text-rose-300">{hotkeyError || s.hotkeyError}</span>
+          )}
         </label>
         <label className="block">
           <span className="mb-0.5 block text-[12px] text-slate-400">

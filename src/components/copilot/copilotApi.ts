@@ -144,7 +144,8 @@ export interface CopilotBridge {
     set(id: number | null, remember?: boolean): Promise<MeetingProject>; // remember = teach the calendar rule
   };
   sessions: {
-    list(): Promise<PastSession[]>;
+    list(): Promise<PastSession[]>; // the newest 50
+    count?(): Promise<number>; // control panel only: how many are saved in all
     get(id: string): Promise<PastSessionDetail | null>;
     remove(id: string): Promise<void>;
   };

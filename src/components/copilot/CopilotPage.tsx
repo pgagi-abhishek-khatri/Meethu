@@ -112,11 +112,13 @@ const FLOW: { icon: typeof Home; title: string; text: string }[] = [
 function Overview({
   projects,
   meetings,
+  meetingTotal,
   go,
   openMeeting,
 }: {
   projects: Project[];
   meetings: PastSession[];
+  meetingTotal: number;
   go: (s: Section) => void;
   openMeeting: (id: string) => void;
 }) {
@@ -216,13 +218,13 @@ function Overview({
                 onOpen={openMeeting}
               />
             ))}
-            {meetings.length > 4 && (
+            {meetingTotal > 4 && (
               <button
                 type="button"
                 onClick={() => go("meetings")}
                 className="w-full px-4 py-2 text-xs text-primary/80 hover:text-primary"
               >
-                See all {meetings.length}
+                See all {meetingTotal}
               </button>
             )}
           </div>
@@ -342,6 +344,7 @@ export default function CopilotPage() {
   const [section, setSection] = useState<Section>("overview");
   const [projects, setProjects] = useState<Project[]>([]);
   const [meetings, setMeetings] = useState<PastSession[]>([]);
+  const [meetingCount, setMeetingCount] = useState<number | null>(null);
   const [projectId, setProjectId] = useState<number | null>(null);
   const [meetingId, setMeetingId] = useState<string | null>(null);
 
@@ -349,14 +352,28 @@ export default function CopilotPage() {
     () => void window.copilot?.projects.list().then(setProjects),
     []
   );
-  const loadMeetings = useCallback(
-    () => void window.copilot?.sessions.list().then(setMeetings),
-    []
-  );
+  const loadMeetings = useCallback(() => {
+    void window.copilot?.sessions.list().then(setMeetings, () => {});
+    void window.copilot?.sessions.count?.().then(setMeetingCount, () => {});
+  }, []);
   useEffect(() => {
     loadProjects();
     loadMeetings();
   }, [loadProjects, loadMeetings]);
+  // A meeting can end while the page is open (the bridge here has no events): look again when the window
+  // comes back to the front, and now and then while it stays open.
+  useEffect(() => {
+    const refresh = () => document.visibilityState === "visible" && loadMeetings();
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    const t = setInterval(refresh, 30_000);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+      clearInterval(t);
+    };
+  }, [loadMeetings]);
+  const meetingTotal = Math.max(meetingCount ?? 0, meetings.length);
   // While a file is being read, the page follows it.
   const busy = projects.some((p) => p.files.some((f) => WORKING.has(f.status)));
   useEffect(() => {
@@ -381,12 +398,18 @@ export default function CopilotPage() {
   };
   const count: Partial<Record<Section, number>> = {
     projects: projects.length,
-    meetings: meetings.length,
+    meetings: meetingTotal,
   };
 
   const panes: Record<Section, ReactNode> = {
     overview: (
-      <Overview projects={projects} meetings={meetings} go={go} openMeeting={openMeeting} />
+      <Overview
+        projects={projects}
+        meetings={meetings}
+        meetingTotal={meetingTotal}
+        go={go}
+        openMeeting={openMeeting}
+      />
     ),
     projects: (
       <CopilotProjects
@@ -399,6 +422,7 @@ export default function CopilotPage() {
     meetings: (
       <CopilotMeetings
         list={meetings}
+        total={meetingTotal}
         projects={projects}
         reload={loadMeetings}
         open={meetingId}

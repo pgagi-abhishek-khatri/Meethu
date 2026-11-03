@@ -95,6 +95,7 @@ function openStore({ dbPath, Database = require("better-sqlite3"), now = Date.no
        FROM copilot_sessions s ORDER BY s.started_at DESC LIMIT ?`
     ),
     session: db.prepare("SELECT * FROM copilot_sessions WHERE id = ?"),
+    sessionCount: db.prepare("SELECT COUNT(*) AS n FROM copilot_sessions"),
     segments: db.prepare(
       "SELECT seq, source, speaker, text, at FROM copilot_segments WHERE session_id = ? ORDER BY seq"
     ),
@@ -176,6 +177,7 @@ function openStore({ dbPath, Database = require("better-sqlite3"), now = Date.no
       }),
     setFeedback: (sessionId, jobId, feedback) => q.feedback.run(feedback ?? null, sessionId, jobId),
     listSessions: (limit = 50) => q.sessions.all(limit),
+    countSessions: () => q.sessionCount.get().n, // the list stops at its limit; the page shows the real total
     getSession(id) {
       const session = q.session.get(id);
       if (!session) return null;

@@ -836,3 +836,45 @@ test("a tapped skipped moment is a 'wanted' signal", async () => {
     assert.equal(signals.at(-1)[0], "wanted");
   }
 });
+
+test("a failed decision while a card is still running starts no second card; a real question waits in Skipped", async () => {
+  let fail = false;
+  const ok = fakeD1();
+  const client = {
+    calls: [],
+    async systemOne(req) {
+      if (fail) throw Object.assign(new Error("timed out"), { code: "timeout" });
+      return ok.systemOne(req);
+    },
+  };
+  const main = fakeMain();
+  const { clock, events, service } = setup({}, main, { client });
+  say(service, "system", "What was the revenue for the last quarter?");
+  await clock.advance(3000);
+  assert.equal(main.calls.length, 1, "the first card runs");
+  fail = true;
+  say(service, "system", "And how many customers did we lose that quarter?");
+  await clock.advance(6000);
+  assert.equal(main.calls.length, 1, "no second card stacked on the running one");
+  const box = events.filter((e) => e.type === "skipped").at(-1);
+  assert.ok(
+    box?.items.some((i) => /customers/.test(i.line)),
+    "the question is offered in Skipped"
+  );
+  main.calls[0].finish();
+});
+
+test("a refused key starts no proactive cards, even with nothing running", async () => {
+  const client = {
+    async systemOne() {
+      throw Object.assign(new Error("Liquid 401"), { code: "http", status: 401 });
+    },
+  };
+  const main = fakeMain();
+  const { clock, service } = setup({}, main, { client });
+  say(service, "system", "What was the revenue for the last quarter?");
+  await clock.advance(6000);
+  say(service, "system", "And what about the quarter before that one?");
+  await clock.advance(6000);
+  assert.equal(main.calls.length, 0);
+});

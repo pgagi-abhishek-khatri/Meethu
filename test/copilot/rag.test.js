@@ -388,3 +388,112 @@ test("retrieve: a chunk only the keyword search found is scored against the quer
   );
   assert.ok((await run(true)).used.some((u) => u.file === "b.md"));
 });
+
+test("query writer lines: list markers go, the digits a query starts with stay", () => {
+  const { parseQueryLines } = require("../../src/copilot/rag/queryWriter");
+  assert.deepEqual(
+    parseQueryLines(
+      '32,000 bid cap\n1. 2026 pricing tiers\n2) 3 seats plan\n- "Valkey cache"\n* region ap-south-1\n\u2022 SLA 99.9%\nNONE\n(no query)\n'
+    ),
+    [
+      "32,000 bid cap",
+      "2026 pricing tiers",
+      "3 seats plan",
+      "Valkey cache",
+      "region ap-south-1",
+      "SLA 99.9%",
+    ]
+  );
+  // a bare number is a query, not a list marker
+  assert.deepEqual(parseQueryLines("2026\n10.5 percent margin"), ["2026", "10.5 percent margin"]);
+});
+
+test("query writer: a numbered reply keeps every number in the queries it returns", async () => {
+  const { createQueryWriter } = require("../../src/copilot/rag/queryWriter");
+  const write = createQueryWriter({
+    apiKey: "k",
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "1. 32,000 bid limit\n2. 500 units per order" } }],
+          usage: { total_tokens: 9, cost: 0.0001 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      ),
+  });
+  const r = await write({ moment: "OTHER-1: is the bid limit 32,000?" });
+  assert.deepEqual(r.queries, ["32,000 bid limit", "500 units per order"]);
+});
+
+test("retrieve: an unasked look with nothing close never waits for the query model, and aborts it", async () => {
+  const chunks = { 1: { file: "a.md", text: "office plants", vec: [0, 1] } };
+  let signal = null;
+  let calls = 0;
+  const r = createRetriever({ rag: fakeRag(chunks), clients: fakeClients([1, 0]) });
+  const t0 = Date.now();
+  const out = await r.retrieve({
+    query: "what is the bid limit",
+    projectIds: [1],
+    minScore: 0.69,
+    expand: (_q, o) => {
+      calls++;
+      signal = o.signal;
+      return new Promise(() => {}); // a query model that never answers
+    },
+  });
+  assert.equal(out.skipped, "weak_match");
+  assert.ok(Date.now() - t0 < 500, "returned without waiting for the query model");
+  assert.equal(calls, 1);
+  assert.equal(signal.aborted, true, "the query model call is aborted");
+});
+
+test("retrieve: an unasked look with a close match still uses the written queries", async () => {
+  const chunks = { 1: { file: "a.md", text: "Valkey cache for live bids", vec: [1, 0] } };
+  const out = await createRetriever({
+    rag: fakeRag(chunks),
+    clients: fakeClients([1, 0]),
+  }).retrieve({
+    query: "what cache do we use",
+    projectIds: [1],
+    minScore: 0.69,
+    expand: async () => ["Valkey cache"],
+  });
+  assert.deepEqual(out.queries, ["what cache do we use", "Valkey cache"]);
+  assert.equal(out.used.length, 1);
+});
+
+test("retrieve: a capped wait aborts the late query model; no wait timer is left running", async () => {
+  const chunks = { 1: { file: "a.md", text: "Valkey cache", vec: [1, 0] } };
+  let signal = null;
+  const pending = new Set();
+  const realSet = global.setTimeout;
+  const realClear = global.clearTimeout;
+  global.setTimeout = (fn, ms, ...a) => {
+    const t = realSet(() => (pending.delete(t), fn(...a)), ms);
+    pending.add(t);
+    return t;
+  };
+  global.clearTimeout = (t) => (pending.delete(t), realClear(t));
+  try {
+    const out = await createRetriever({
+      rag: fakeRag(chunks),
+      clients: fakeClients([1, 0]),
+      cfg: { ...RAG, queryWaitMs: { fast: 20, deep: 20 } },
+      embedWaitMs: 5000,
+    }).retrieve({
+      query: "what cache",
+      projectIds: [1],
+      expand: (_q, o) => ((signal = o.signal), new Promise(() => {})),
+    });
+    assert.equal(out.used.length, 1);
+    assert.equal(signal.aborted, true);
+    // the 5 s embedding wait was the one timer that could outlive the search
+    assert.ok(
+      ![...pending].some((t) => t._idleTimeout >= 5000),
+      "the embedding wait timer was cleared"
+    );
+  } finally {
+    global.setTimeout = realSet;
+    global.clearTimeout = realClear;
+  }
+});
