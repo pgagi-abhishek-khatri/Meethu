@@ -6,7 +6,8 @@ const RAG = {
   embedModel: "google/gemini-embedding-2",
   analysisModel: "google/gemini-3.8-flash",
   queryModel: "google/gemma-4-31b-it:nitro", // writes the search queries for every card that searches the files
-  queryWaitMs: { fast: 900, deep: 2500 }, // the card searches with what the query model wrote by then
+  queryWaitMs: { fast: null, deep: null }, // null: the search waits for the written queries (a number caps the wait)
+  queryTimeoutMs: 10000, // the query model's own network timeout: a hung call fails, the card searches without it
   dims: 768, // Matryoshka cut of the 3072 default: 4x smaller, same quality for this size of corpus
   embedBatch: 100, // API maximum per request
   embedConcurrency: 4,

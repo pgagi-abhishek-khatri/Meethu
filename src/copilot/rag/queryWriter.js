@@ -26,7 +26,7 @@ const userText = ({ moment, gist = "", catalog = "" }) =>
 function createQueryWriter({
   apiKey,
   model = RAG.queryModel,
-  timeoutMs = RAG.queryWaitMs.deep,
+  timeoutMs = RAG.queryTimeoutMs,
   baseUrl,
   fetchImpl,
 }) {

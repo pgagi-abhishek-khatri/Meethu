@@ -354,6 +354,14 @@ test("retrieve: every card can search with written queries; a slow query model o
   assert.deepEqual(slow.queries, ["what do we use for the cache"]);
   assert.equal(logs[1].expandError, "slow");
   assert.equal(slow.used.length, 1);
+  // with no cap (the default) the search waits for the written queries, however long they take
+  const waiting = createRetriever({ rag: fakeRag(chunks), clients: fakeClients([1, 0]) });
+  const late = await waiting.retrieve({
+    query: "what do we use for the cache",
+    projectIds: [1],
+    expand: () => new Promise((res) => setTimeout(() => res(["Valkey cache"]), 60)),
+  });
+  assert.deepEqual(late.queries, ["what do we use for the cache", "Valkey cache"]);
 });
 
 test("retrieve: a chunk only the keyword search found is scored against the query vector, not dropped", async () => {

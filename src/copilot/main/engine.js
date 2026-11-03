@@ -189,6 +189,63 @@ function createEngine({
           },
         }
       : base;
+  // Same trace for the query writer and the answer model: what each was given and what it returned.
+  const wrapWriter = (base) =>
+    verbose && base
+      ? async (input) => {
+          const t0 = now();
+          try {
+            const r = await base(input);
+            trace({
+              type: "query_writer",
+              moment: input.moment,
+              gist: input.gist,
+              queries: r.queries,
+              tokens: r.tokens,
+              cost: r.cost,
+              ms: now() - t0,
+            });
+            return r;
+          } catch (error) {
+            trace({
+              type: "query_writer_error",
+              code: error.code,
+              message: error.message,
+              ms: now() - t0,
+            });
+            throw error;
+          }
+        }
+      : base;
+  const wrapModel = (base) =>
+    verbose && base
+      ? async (opts) => {
+          const t0 = now();
+          try {
+            const r = await base(opts);
+            trace({
+              type: "answer_call",
+              tier: opts.tier,
+              web: opts.web,
+              model: opts.model ?? null,
+              messages: opts.messages,
+              text: r.text,
+              usage: r.usage,
+              firstTokenMs: r.firstTokenMs,
+              totalMs: r.totalMs,
+            });
+            return r;
+          } catch (error) {
+            trace({
+              type: "answer_error",
+              code: error.code,
+              message: error.message,
+              ms: now() - t0,
+            });
+            throw error;
+          }
+        }
+      : base;
   const log = (record) => {
     trace(record);
     if (!logFile) return;
@@ -253,25 +310,27 @@ function createEngine({
             model: st.summaryModel || env.COPILOT_SUMMARY_MODEL || DEFAULT_SUMMARY_MODEL,
           })
         : null);
-    writer =
+    writer = wrapWriter(
       queryWriter ??
-      (dec.apiKey && env.COPILOT_QUERY_WRITER !== "0"
-        ? createQueryWriter({
-            apiKey: dec.apiKey,
-            model: st.queryModel || env.COPILOT_QUERY_MODEL || RAG.queryModel,
-          })
-        : null);
+        (dec.apiKey && env.COPILOT_QUERY_WRITER !== "0"
+          ? createQueryWriter({
+              apiKey: dec.apiKey,
+              model: st.queryModel || env.COPILOT_QUERY_MODEL || RAG.queryModel,
+            })
+          : null)
+    );
     const ai = getCopilotAiConfig({
       ...keyEnv,
       COPILOT_AI_MODEL: st.mainModel || env.COPILOT_AI_MODEL || "",
       COPILOT_DEEP_MODEL: st.deepModel || env.COPILOT_DEEP_MODEL || "",
     });
     deepModelId = ai.deepModel;
-    model =
+    model = wrapModel(
       mainModel ??
-      (env.COPILOT_MAIN !== "0" && ai.apiKey
-        ? createMainModel({ apiKey: ai.apiKey, model: ai.model, now })
-        : null);
+        (env.COPILOT_MAIN !== "0" && ai.apiKey
+          ? createMainModel({ apiKey: ai.apiKey, model: ai.model, now })
+          : null)
+    );
     runner = buildRunner();
     active = !!d1;
   }
@@ -349,6 +408,12 @@ function createEngine({
                 kept: r.used.length,
                 skipped: r.skipped,
                 ms: r.ms,
+                queries: r.queries,
+                expandMs: r.expandMs,
+                embedMs: r.embedMs,
+                cost: r.cost,
+                used: r.used, // file, page/heading, cosine, keyword rank
+                passages: r.text,
               });
               return { passages: r.text, files: [...new Set(r.used.map((u) => u.file))] };
             }

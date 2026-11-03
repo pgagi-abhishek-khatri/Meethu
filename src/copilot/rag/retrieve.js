@@ -74,7 +74,8 @@ function createRetriever({
       const cl = clients();
       const lim = deep ? cfg.deep : cfg.fast;
 
-      // queries: the moment itself, plus what the query model wrote (`expand`) by the time it may wait.
+      // queries: the moment itself, plus what the query model wrote (`expand`); the search waits for it unless
+      // `queryWaitMs` caps the wait.
       // The moment's embedding starts at once (usually cached by the prefetch), so the written queries
       // only add their own embedding after them, and a slow query model costs nothing but its queries.
       const queries = [q];
@@ -93,10 +94,10 @@ function createRetriever({
       if (expand) {
         const e0 = now();
         try {
-          const got = await Promise.race([
-            Promise.resolve(expand(q)),
-            timeout(deep ? cfg.queryWaitMs.deep : cfg.queryWaitMs.fast, null),
-          ]);
+          const waitMs = deep ? cfg.queryWaitMs.deep : cfg.queryWaitMs.fast;
+          const got = await (waitMs == null
+            ? Promise.resolve(expand(q))
+            : Promise.race([Promise.resolve(expand(q)), timeout(waitMs, null)]));
           if (!got) expandError = "slow";
           const list = Array.isArray(got) ? got : (got?.queries ?? []);
           expandCost = got?.cost ?? 0;
