@@ -272,6 +272,27 @@ test("retrieve: a slow embedding never holds the answer, an exact keyword still 
   assert.match(out.text, /14 days/);
 });
 
+test("retrieve: a vector that arrives while the query model is still writing is used, not called slow", async () => {
+  const chunks = { 1: { file: "a.md", text: "Valkey cache for live bids", vec: [1, 0] } };
+  const logs = [];
+  const r = createRetriever({
+    rag: fakeRag(chunks),
+    clients: fakeClients([1, 0], 60), // the vector comes back after embedWaitMs...
+    embedWaitMs: 20,
+    cfg: { ...RAG, embedGraceMs: 10 },
+    log: (x) => logs.push(x),
+  });
+  const out = await r.retrieve({
+    query: "what cache do we use",
+    projectIds: [1],
+    // ...but before the query model is done
+    expand: () => new Promise((res) => setTimeout(() => res(["Valkey cache"]), 100)),
+  });
+  assert.equal(logs[0].mode, "hybrid");
+  assert.equal(logs[0].embedError, null);
+  assert.equal(out.used.length, 1);
+});
+
 test("retrieve: no index or no key skips without a search; nothing matching says so", async () => {
   const none = createRetriever({
     rag: { ...fakeRag({}), hasIndex: () => false },

@@ -99,7 +99,20 @@ function createRetriever({
           : null;
       const slow = { e: { code: "slow" } };
       const rawEmbed = embedOf([q]);
-      const rawWait = rawEmbed ? Promise.race([rawEmbed, timeout(embedWaitMs, slow)]) : null;
+      // The moment's vector is only "slow" once the search has nothing else to wait for: while the query model
+      // is still writing, waiting for it costs nothing. Its deadline is embedWaitMs from the start, or
+      // `embedGraceMs` after the query model settled when that is later. A vector that misses it still lands in
+      // the embed client's cache for the next search.
+      const vectorWait = () =>
+        rawEmbed
+          ? Promise.race([
+              rawEmbed,
+              timeout(
+                Math.max(embedWaitMs - (now() - t0), written ? (cfg.embedGraceMs ?? 300) : 0),
+                slow
+              ),
+            ])
+          : null;
       // The query model starts at once, beside the moment's embedding; it is aborted when its answer is no longer wanted.
       const writing = expand ? new AbortController() : null;
       const e0 = now();
@@ -133,9 +146,9 @@ function createRetriever({
       // Unprompted look: only the moment's own words decide whether anything is close enough to look further,
       // so a moment with nothing in the files never waits for the query model.
       if (minScore) {
-        if (!rawWait) return weak(-1, { mode: "keyword", ms: null, error: null });
+        if (!rawEmbed) return weak(-1, { mode: "keyword", ms: null, error: null });
         const m0 = now();
-        const raw = await rawWait;
+        const raw = await Promise.race([rawEmbed, timeout(embedWaitMs, slow)]);
         const ms = now() - m0;
         const vec = raw.r?.vectors?.[0];
         let top = -1;
@@ -205,7 +218,7 @@ function createRetriever({
       if (cl) {
         const e0 = now();
         const [raw, extra] = await Promise.all([
-          rawWait,
+          vectorWait(),
           queries.length > 1 && cfg.embedWritten
             ? Promise.race([embedOf(queries.slice(1)), timeout(embedWaitMs, slow)])
             : { r: { vectors: [] } },

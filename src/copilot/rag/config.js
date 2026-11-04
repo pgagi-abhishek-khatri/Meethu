@@ -35,6 +35,7 @@ const RAG = {
   strongKeyword: 3, // an exact-term match this far from the top still counts without the embedding
   scoreKeywordHits: true, // keyword-only hits get their cosine from the query vectors instead of being dropped
   embedWritten: false, // embed the written queries too (one more embedding round trip) or use them for keyword search only
+  embedGraceMs: 300, // how long the moment's vector may still take once the query model has settled
   writtenWeight: 0.7, // a written query's lists count this much in the fusion against the moment's own
   catalogFiles: 12,
   catalogChars: 420,
