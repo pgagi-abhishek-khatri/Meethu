@@ -8,6 +8,7 @@ const fs = require("fs");
 const path = require("path");
 const {
   decide,
+  checkProjectNeed,
   createLiquidClient,
   getDecisionEnv,
   DEFAULT_DECISION_CONFIG,
@@ -81,6 +82,9 @@ function createEngine({
   triggerCfg = DEFAULT_TRIGGER_CONFIG,
   summaryCfg = DEFAULT_SUMMARY_CONFIG,
 } = {}) {
+  // COPILOT_RAG_TRIGGER=twoCall: D1 judges the card, a second D1 call the files (core/decision/config.js).
+  if (env.COPILOT_RAG_TRIGGER)
+    decisionCfg = { ...decisionCfg, ragTrigger: env.COPILOT_RAG_TRIGGER };
   const logFile = logDir ? path.join(logDir, "copilot-decisions.jsonl") : null;
   // The clients depend on the settings (key, models), so they are built when a meeting starts:
   // a changed setting applies to the next meeting.
@@ -344,7 +348,7 @@ function createEngine({
       writer({
         moment: clip(spec.focus || question, 1500), // the whole moment: the model reads past the filler
         gist: spec.gist ?? "",
-        catalog: (rag.catalogLines?.() ?? []).join("\n"),
+        catalog: (rag.writerCatalog?.() ?? rag.catalogLines?.() ?? []).join("\n"),
         signal, // retrieve() aborts it when the search no longer needs its queries
       });
   // Without the query model, a high-effort rerun still asks the summary model for other wordings.
@@ -360,6 +364,55 @@ function createEngine({
       ],
     });
     return parseQueryLines(r.text);
+  }
+  // "twoCall": the second D1 call and the query writer were started together when the card was decided.
+  // Files needed -> search with the written queries; not needed -> the queries go to the model as they are.
+  async function gatedContext(job, spec) {
+    const [gate, written] = await Promise.all([
+      spec.ragGate,
+      spec.queriesP ? spec.queriesP.catch(() => null) : null,
+    ]);
+    const queries = written?.queries ?? [];
+    trace({
+      type: "rag_gate",
+      id: job.id,
+      need: gate.need,
+      p: gate.p,
+      ms: gate.ms,
+      inputTokens: gate.inputTokens,
+      error: gate.error,
+      queries,
+      writerMs: written?.ms ?? null,
+      writerCost: written?.cost ?? 0,
+    });
+    if (!gate.need)
+      return {
+        passages: queries.length
+          ? `Search queries a helper wrote for this moment (the project files were not searched):\n${queries.map((q) => `- ${q}`).join("\n")}`
+          : "",
+        files: [],
+      };
+    const r = await rag.retrieve({
+      query: spec.focus,
+      deep: false,
+      why: "gate",
+      minScore: 0,
+      expand: written ? async () => ({ queries }) : null, // already paid for: not counted again
+    });
+    trace({
+      type: "context",
+      id: job.id,
+      kept: r.used.length,
+      skipped: r.skipped,
+      ms: r.ms,
+      queries: r.queries,
+      expandMs: r.expandMs,
+      embedMs: r.embedMs,
+      cost: r.cost,
+      used: r.used,
+      passages: r.text,
+    });
+    return { passages: r.text, files: [...new Set(r.used.map((u) => u.file))] };
   }
   const threadOf = (s, id) => s.threads.get(id) ?? s.threads.get(MAIN);
   function startAnswer(s, job, spec) {
@@ -386,8 +439,9 @@ function createEngine({
       },
       // The moment needs the project's own documents: find the matching passages before the model is called.
       // Runs inside the card's own time; the question's embedding was usually warmed while the decider ran.
-      prepare:
-        (spec.project || spec.projectAuto) && hasIndex()
+      prepare: spec.ragGate
+        ? () => gatedContext(job, spec)
+        : (spec.project || spec.projectAuto) && hasIndex()
           ? async () => {
               const r = await rag.retrieve({
                 query: spec.focus,
@@ -732,6 +786,7 @@ function createEngine({
       running,
       settings: decisionSettings(),
       projectFiles: hasIndex() ? (rag.catalogLines?.() ?? []) : [],
+      profileBlocks: rag?.catalogMode?.() === "profile",
       signals: {
         endpoint: true,
         userSpeaking: s.userSpeaking,
@@ -789,6 +844,7 @@ function createEngine({
         pick.text,
         decision.reasons.find((r) => SKIP_REASON.test(r) || UNJUDGED.test(r))
       );
+    let runJobId = null;
     if (decision.kind === "run") {
       s.lastRunAt = finished;
       // A replaced analysis is cancelled and its card dropped; the new one stands in its place.
@@ -811,9 +867,10 @@ function createEngine({
         ...(s.model ? { real: true } : { endsAt: finished + SIM_JOB_MS[decision.tier] }),
       };
       s.jobs.push(job);
+      runJobId = job.id;
       trace({ type: "job_start", id: job.id, topic: job.topic, tier: decision.tier });
-      if (s.model)
-        startAnswer(s, job, {
+      if (s.model) {
+        const spec = {
           deliverable: decision.deliverable,
           tier: decision.tier,
           web: webOn() && !["summary", "talking_points"].includes(decision.deliverable),
@@ -823,7 +880,23 @@ function createEngine({
           gist,
           focus: newText,
           contextSeconds: decision.contextSeconds,
-        });
+        };
+        // "twoCall": ask D1 whether the files are needed and start the query writer, both now.
+        if (decisionCfg.ragTrigger === "twoCall" && hasIndex()) {
+          spec.project = false;
+          spec.projectAuto = false;
+          s.d1Calls++;
+          spec.ragGate = checkProjectNeed({ input, client: s.d1, cfg: decisionCfg }).then((g) => {
+            s.tokens += g.inputTokens;
+            return g;
+          });
+          if (writer) {
+            const w0 = now();
+            spec.queriesP = writeQueries(spec)(spec.focus).then((r) => ({ ...r, ms: now() - w0 }));
+          }
+        }
+        startAnswer(s, job, spec);
+      }
       s.cards = [
         ...s.cards,
         {
@@ -842,6 +915,7 @@ function createEngine({
       newText: clip(newText, 300),
       newSegments: fresh.length,
       ids: [fresh[0].id, lastId],
+      jobId: runJobId,
       decision: {
         kind: decision.kind,
         trigger: decision.trigger,

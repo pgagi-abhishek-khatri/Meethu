@@ -207,7 +207,12 @@ function createCopilot({
     log: ragLog,
     getCfg: () => ({ mediaEmbedMinutes: settings.engine().mediaEmbedMinutes }),
   });
-  const retriever = createRetriever({ rag: store.rag, clients: ragClients, log: ragLog });
+  const retriever = createRetriever({
+    rag: store.rag,
+    clients: ragClients,
+    log: ragLog,
+    catalogMode: env.COPILOT_CATALOG || undefined, // "profile" | "summary" (RAG.catalogMode)
+  });
   const projectIds = () => (projectId != null ? [projectId] : store.projects.activeIds());
 
   function persist(e) {
@@ -313,6 +318,8 @@ function createCopilot({
       hasIndex: () => retriever.hasIndex(projectIds()),
       catalog: () => retriever.catalog(projectIds()),
       catalogLines: () => retriever.catalogLines(projectIds()),
+      writerCatalog: () => retriever.writerCatalog(projectIds()),
+      catalogMode: () => retriever.catalogMode(),
       prefetch: (query) => retriever.prefetch(query, projectIds()),
       retrieve: (o) => retriever.retrieve({ ...o, projectIds: projectIds() }),
     },

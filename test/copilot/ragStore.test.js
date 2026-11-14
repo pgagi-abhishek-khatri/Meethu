@@ -38,6 +38,19 @@ const fakeClients =
     analyze: {
       summarize: async ({ name }) => ({ summary: `Summary of ${name}`, tokens: 7, cost: 0.002 }),
       readImage: async () => ({ text: "A price table image", tokens: 3, cost: 0 }),
+      // the file profile (profileBuilder): one fact with a number the file holds, one it does not
+      ask: async () => ({
+        text: JSON.stringify({
+          brief: "Oyaara plans and refunds.",
+          abstract: "Prices and the refund rule.",
+          topics: [{ name: "Refunds", pages: "", covers: "14-day refunds" }],
+          facts: [{ text: "Refunds within 14 days" }, { text: "Gold costs 99 dollars" }],
+          terms: ["Oyaara"],
+        }),
+        tokens: 5,
+        cost: 0.001,
+        finish: "stop",
+      }),
     },
   });
 
@@ -78,7 +91,14 @@ test(
     assert.equal(row.tokens > 0, true);
     assert.deepEqual(
       logs.map((l) => l.stage),
-      ["read", "prepared", "embedded", "done"]
+      ["read", "prepared", "profile_done", "embedded", "done"]
+    );
+    // the profile is saved beside the summary; the fact whose number the file lacks is dropped
+    const profile = JSON.parse(row.profile);
+    assert.equal(row.profile_v, 2);
+    assert.deepEqual(
+      profile.facts.map((x) => x.text),
+      ["Refunds within 14 days"]
     );
 
     assert.equal(store.rag.hasIndex(pid), true);

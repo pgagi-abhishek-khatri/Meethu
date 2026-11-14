@@ -76,8 +76,11 @@ function buildDecisionState(input, cfg) {
       b.newText
     ),
     // What the USER's project files hold (one short line each): lets the judge tell whether they could answer this moment.
+    // File profiles (profileBlocks) come as one block per file, already cut to their share of the budget.
     project_files: input.projectFiles?.length
-      ? input.projectFiles.slice(0, 8).map((l) => clip(oneLine(l), 110))
+      ? input.profileBlocks
+        ? input.projectFiles
+        : input.projectFiles.slice(0, 8).map((l) => clip(oneLine(l), 110))
       : undefined,
     unfinished: partial?.text ? line(partial, 120) : undefined,
     running: input.running?.length

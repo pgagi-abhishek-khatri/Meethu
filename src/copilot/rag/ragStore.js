@@ -21,6 +21,8 @@ const FILE_COLUMNS = [
   ["error", "TEXT"],
   ["note", "TEXT"], // e.g. "partial: only the first 64k tokens were read"
   ["summary", "TEXT"],
+  ["profile", "TEXT"], // JSON file profile (profile.js): brief, abstract, topics, facts, terms
+  ["profile_v", "INTEGER"],
   ["hash", "TEXT"],
   ["bytes", "INTEGER"],
   ["chunk_count", "INTEGER"],
@@ -75,7 +77,7 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
       "SELECT COUNT(*) AS n FROM copilot_project_files WHERE project_id = ? AND status = 'ready'"
     ),
     readyFiles: db.prepare(
-      "SELECT id, name, kind, summary FROM copilot_project_files WHERE project_id = ? AND status = 'ready' ORDER BY id"
+      "SELECT id, name, kind, summary, profile, chunk_count FROM copilot_project_files WHERE project_id = ? AND status = 'ready' ORDER BY id"
     ),
     fts: db.prepare(
       `SELECT c.id AS id FROM copilot_chunks_fts f JOIN copilot_chunks c ON c.id = f.rowid
@@ -87,6 +89,10 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
     ),
     projectBytes: db.prepare(
       "SELECT COALESCE(SUM(bytes), 0) AS n FROM copilot_project_files WHERE project_id = ?"
+    ),
+    fileChunks: db.prepare("SELECT text, meta FROM copilot_chunks WHERE file_id = ? ORDER BY ord"),
+    staleProfiles: db.prepare(
+      "SELECT id, project_id, name, kind FROM copilot_project_files WHERE status = 'ready' AND (profile_v IS NULL OR profile_v < ?)"
     ),
     unindexed: db.prepare(
       "SELECT id, project_id, path, name FROM copilot_project_files WHERE status IS NULL OR status IN ('queued','reading','analysing','embedding')"
@@ -192,8 +198,20 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
       const r = q.chunk.get(id);
       return r ? { ...r, meta: JSON.parse(r.meta || "{}") } : null;
     },
-    // One line per ready file: what it is. Always in the answer prompt.
-    catalog: (projectId) => q.readyFiles.all(projectId),
+    // One row per ready file: what it is (summary, and the profile parsed when there is one).
+    catalog: (projectId) =>
+      q.readyFiles.all(projectId).map((r) => {
+        let profile = null;
+        try {
+          profile = r.profile ? JSON.parse(r.profile) : null;
+        } catch {}
+        return { ...r, profile };
+      }),
+    // A file's chunks in order, for writing its profile again without reading the file again.
+    fileChunks: (fileId) =>
+      q.fileChunks.all(fileId).map((r) => ({ text: r.text, meta: JSON.parse(r.meta || "{}") })),
+    // Ready files whose profile is missing or older than `version`.
+    staleProfiles: (version) => q.staleProfiles.all(version),
     rrf,
   };
 }

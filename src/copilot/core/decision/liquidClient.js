@@ -42,6 +42,7 @@ function createLiquidClient({ apiKey, url, model, timeoutMs, fetchImpl = fetch }
       return {
         answers: body.answers,
         inputTokens: body.usage?.input_tokens ?? null,
+        usage: body.usage ?? null, // whatever the endpoint reports (tokens, and cost when it says)
         ms: performance.now() - started,
       };
     } catch (error) {

@@ -10,7 +10,7 @@ const ANSWER_BUDGET = {
   behavior: 900, // the learned behaviour guide
   plan: 1500,
   reference: 4000, // project files not indexed yet, inlined (first part of each)
-  catalog: 1800, // what each indexed project file holds
+  catalog: 6500, // what each indexed project file holds (the retriever keeps it to its own budget per mode)
   passages: 8000, // matching pieces of the project files (the search caps its own: 2800 fast, 7000 high effort)
 };
 

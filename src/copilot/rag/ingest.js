@@ -9,6 +9,8 @@ const { chunkText, planWindows, mmss } = require("./chunker");
 const { readText, readOffice, splitPdf } = require("./extract");
 const { mediaPart } = require("./embedClient");
 const { pool } = require("./openrouter");
+const { buildProfile } = require("./profileBuilder");
+const { PROFILE_VERSION } = require("./profile");
 
 const FRIENDLY = {
   no_key: "Add your OpenRouter key in the Copilot settings, then retry.",
@@ -241,6 +243,19 @@ function createIngestor({
           )
         );
 
+      // The file's profile (topics, facts, terms; sized to the file) is written beside the short summary.
+      // A failed profile leaves the file searchable; the catalog falls back to the summary.
+      const profileP = buildProfile({
+        ask: cl.analyze.ask,
+        name: file.name,
+        kind,
+        chunks,
+        log: ({ event, ...r }) => rec(event, r),
+        now,
+      })
+        .then((r) => (bill(r), r.profile))
+        .catch((e) => (rec("profile_failed", { error: e.message }), null));
+
       const titleOf = (c) => `${file.name}${c.meta.heading ? ` · ${c.meta.heading}` : ""}`;
       // chunks embedded from text: cache first (same words, same vector)
       const asText = chunks.filter((c) => !c.native);
@@ -287,7 +302,7 @@ function createIngestor({
             }
           })
       );
-      const [summary] = await settleAll([summaryP, textP, nativeP]);
+      const [summary, profile] = await settleAll([summaryP, profileP, textP, nativeP]);
       if (nativeFailed.length) {
         const r = await cl.embed.embedDocs(
           nativeFailed.map((c) => ({ title: titleOf(c), text: c.text }))
@@ -324,6 +339,8 @@ function createIngestor({
         status: "ready",
         stage: null,
         summary,
+        profile: profile ? JSON.stringify(profile) : null,
+        profile_v: profile ? PROFILE_VERSION : null,
         hash,
         chunk_count: chunks.length,
         tokens,

@@ -34,6 +34,9 @@ const KINDS = {
     "The USER asks to draft or write something: an email, write-up, minutes, plan or action items.",
 };
 
+const PROJECT_QUESTION =
+  "Could the USER's project files (listed in project_files) contain facts that answer or inform new_text: the product, its flows, rules, numbers, names, plans, prices, contracts?";
+
 const ASKED = noul(
   "Did the USER explicitly ask the assistant to look something up, check, explain, summarize or draft it?"
 );
@@ -94,12 +97,7 @@ function buildQuestions(ctx) {
       "web",
       "Does new_text rely on a fact about the outside world (a statistic, price, law, regulation, company, product, person or current event) that could be wrong and could be checked online?",
     ],
-    [
-      s.projectFiles,
-      "needs_project",
-      "project",
-      "Could the USER's project files (listed in project_files) contain facts that answer or inform new_text: the product, its flows, rules, numbers, names, plans, prices, contracts?",
-    ],
+    [s.projectFiles, "needs_project", "project", PROJECT_QUESTION],
     [
       s.pastMeetings,
       "needs_past_meetings",
@@ -121,4 +119,4 @@ function buildQuestions(ctx) {
   return { questions, plan };
 }
 
-module.exports = { buildQuestions, KINDS };
+module.exports = { buildQuestions, KINDS, PROJECT_QUESTION };

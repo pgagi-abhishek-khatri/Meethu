@@ -18,6 +18,10 @@ const DEFAULT_DECISION_CONFIG = {
   weakCardMemoryMs: 30000, // ... stops counting as "already handled" after this
   cardMemoryMs: 120000, // a card older than this no longer counts as "already handled"
   choiceMinConfidence: 0.5, // below this a pick-one answer falls back to its most likely option
+  // How the project files get searched. "single": D1's one call also answers needs_project. "twoCall": D1 judges
+  // the card alone; when a card runs, a second D1 call asks whether the files are needed while the query writer
+  // already writes its queries (if not needed, the queries go to the answer model as they are).
+  ragTrigger: "single",
   needThreshold: { web: 0.4, project: 0.5, pastMeetings: 0.5, screenshot: 0.95 },
   proactiveRichMin: 0.9, // diagram/document may be produced unasked only above this
   offerMin: 0.5, // between offerMin and proactiveRichMin: show an "offer" button instead

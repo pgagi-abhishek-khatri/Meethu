@@ -19,7 +19,8 @@ function createAnalyzer({
   const http = { apiKey, baseUrl, fetchImpl, sleep, timeoutMs: 180000 };
 
   // parts: OpenRouter content parts. Returns { text, tokens, cost }.
-  const ask = (parts, { system, maxTokens = 4000 } = {}) =>
+  // json: ask for one JSON object back (file profiles).
+  const ask = (parts, { system, maxTokens = 4000, json = false } = {}) =>
     slots.run(async () => {
       const res = await postJson(
         "/chat/completions",
@@ -28,6 +29,7 @@ function createAnalyzer({
           max_tokens: maxTokens,
           temperature: 0.1,
           reasoning: { effort: "low" },
+          ...(json ? { response_format: { type: "json_object" } } : {}),
           messages: [
             ...(system ? [{ role: "system", content: system }] : []),
             { role: "user", content: parts },

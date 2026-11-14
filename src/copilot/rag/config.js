@@ -39,6 +39,11 @@ const RAG = {
   writtenWeight: 0.7, // a written query's lists count this much in the fusion against the moment's own
   catalogFiles: 12,
   catalogChars: 420,
+  catalogBudget: 1800, // characters of the summary catalog in the answer prompt
+  // "summary": one short line per file (before file profiles). "profile": each reader gets its slice of the
+  // file profiles (profile.js), the characters split over the files by size. COPILOT_CATALOG overrides it.
+  catalogMode: "summary",
+  profileBudget: { decider: 4000, answer: 6000, writer: 1600, floor: 300 },
   queryCache: 64,
 };
 

@@ -4,6 +4,7 @@
 // rerun). `prefetch` lets the question's embedding start while the decider is still thinking.
 const { RAG } = require("./config");
 const { mmss } = require("./chunker");
+const { allocate, renderForDecider, renderForAnswer, renderForWriter } = require("./profile");
 
 const clip = (s, n) => (s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s);
 // the speaker label ("OTHER-1:") is not part of the question
@@ -21,30 +22,66 @@ function createRetriever({
   log = () => {},
   now = Date.now,
   embedWaitMs = 2500,
+  catalogMode = cfg.catalogMode,
 }) {
   const indexed = (projectIds) => projectIds.filter((id) => rag.hasIndex(id));
+  const filesOf = (projectIds) => indexed(projectIds).flatMap((id) => rag.catalog(id));
+  // The summary line of a file without a profile (written before profiles, or its profile failed).
+  const legacyLine = (r, n) => `${r.name}: ${clip(String(r.summary ?? r.kind ?? ""), n)}`;
+  // Each file's slice of the files' profiles, `total` characters split over the files by size.
+  const profiled = (projectIds, total, render) => {
+    const rows = filesOf(projectIds).slice(0, cfg.catalogFiles);
+    const share = allocate(
+      rows.map((r) => ({ chunks: r.chunk_count })),
+      total,
+      cfg.profileBudget.floor
+    );
+    return rows.map((r, i) =>
+      r.profile ? render(r.name, r.profile, share[i]) : legacyLine(r, share[i])
+    );
+  };
 
   return {
     hasIndex: (projectIds) => indexed(projectIds).length > 0,
 
-    // Always in the answer prompt when the project has indexed files: what exists, so the model (and the decider)
-    // can tell whether looking inside would help. No model call.
-    // The same catalog as short lines for the decider: "file: what it is".
+    catalogMode: () => catalogMode,
+
+    // What the files hold, for the decider: "file: what it is" lines (summary mode) or one block per file
+    // with its topics and facts (profile mode).
     catalogLines(projectIds) {
-      return indexed(projectIds)
-        .flatMap((id) => rag.catalog(id))
+      if (catalogMode === "profile")
+        return profiled(projectIds, cfg.profileBudget.decider, renderForDecider);
+      return filesOf(projectIds)
         .slice(0, 8)
         .map(
           (r) => `${r.name}: ${clip(String(r.summary ?? r.kind ?? "").split(/(?<=\.)\s/)[0], 100)}`
         );
     },
 
+    // For the query writer: the documents' own words (summary mode: the decider's lines).
+    writerCatalog(projectIds) {
+      if (catalogMode === "profile")
+        return profiled(projectIds, cfg.profileBudget.writer, renderForWriter);
+      return this.catalogLines(projectIds);
+    },
+
+    // Always in the answer prompt when the project has indexed files: what exists, so the model can tell
+    // whether looking inside would help, and (profile mode) the key facts with their pages. No model call.
     catalog(projectIds) {
-      const rows = indexed(projectIds)
-        .flatMap((id) => rag.catalog(id))
-        .slice(0, cfg.catalogFiles);
+      const head =
+        "The USER's project files (what each holds; the matching passages come below when they are needed):";
+      if (catalogMode === "profile") {
+        const blocks = profiled(projectIds, cfg.profileBudget.answer, renderForAnswer);
+        return blocks.length
+          ? `${head}\n${blocks.map((b) => (b.startsWith("- ") ? b : `- ${b}`)).join("\n")}`
+          : "";
+      }
+      const rows = filesOf(projectIds).slice(0, cfg.catalogFiles);
       if (!rows.length) return "";
-      return `The USER's project files (what each holds; the matching passages come below when they are needed):\n${rows.map((r) => `- ${r.name}: ${clip(r.summary ?? r.kind ?? "", cfg.catalogChars)}`).join("\n")}`;
+      return clip(
+        `${head}\n${rows.map((r) => `- ${r.name}: ${clip(r.summary ?? r.kind ?? "", cfg.catalogChars)}`).join("\n")}`,
+        cfg.catalogBudget
+      );
     },
 
     // Fire and forget: warm the query embedding while the decider runs, so the real search finds it cached.
