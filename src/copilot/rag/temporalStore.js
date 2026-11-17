@@ -96,7 +96,7 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null } = {}
        LEFT JOIN copilot_project_files f ON f.id = c.file_id
        WHERE c.project_id = ? AND c.feature_id = ? AND c.lifecycle_status = 'active'
          AND (c.valid_to IS NULL OR c.valid_to > ?)
-       ORDER BY c.ord ASC`
+       ORDER BY c.valid_from DESC, c.version DESC, c.ord ASC`
     ),
     getFeatureAt: db.prepare(
       `SELECT c.*, f.name AS file
@@ -415,6 +415,26 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null } = {}
 
       // 2. Update predecessor
       supersedeChunk(predId, newChunk.id, effTime);
+
+      // 3. Atomically supersede any older active chunks for this feature belonging to predecessor files or earlier validity
+      const targetFeat = newChunkData.feature_id || pred.feature_id;
+      const targetProj = newChunkData.project_id || pred.project_id;
+      if (targetFeat && targetProj) {
+        const olderChunks = db.prepare(
+          `SELECT id, valid_from FROM copilot_chunks 
+           WHERE project_id = ? AND feature_id = ? AND lifecycle_status = 'active' AND id != ?
+             AND (file_id != ? OR (valid_from IS NOT NULL AND valid_from < ?))`
+        ).all(targetProj, targetFeat, newChunk.id, newChunk.file_id, effTime);
+
+        for (const oc of olderChunks) {
+          try {
+            const ocEff = (oc.valid_from != null && effTime > oc.valid_from) ? effTime : (oc.valid_from != null ? oc.valid_from + 1 : effTime);
+            supersedeChunk(oc.id, newChunk.id, ocEff);
+          } catch (e) {
+            // Ignore if already superseded
+          }
+        }
+      }
     })();
 
     return {
