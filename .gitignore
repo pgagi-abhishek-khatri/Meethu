@@ -323,3 +323,17 @@ src/assets/fonts/yowza/*.otf
 # Local scratch output from the Superpowers Claude Code plugin (SDD fix reports etc.).
 .superpowers/
 copilot-logs/
+
+# Client documents, internal benchmark reports, and local evaluation scripts (never commit)
+*-docs/
+*_Temporal_RAG_Execution_Report.md
+*_comp_report.md
+True_Positives_and_Evidences_Verification_Report.md
+Plan_RAG_JSON_vs_RAG_OKF_*.md
+Evolving_Requirements_Temporal_RAG_Architecture.md
+docs/Summary New approach.md
+docs/copilot/MEETING_LOGS_TEST_REPORT.md
+scripts/run*3DocPipeline.js
+scripts/copilot/reverify-e2e-live.mjs
+scripts/testLiveEvolutionWithActualData.js
+test/copilot/*PdfPrecedence.test.js

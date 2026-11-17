@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openwhispr.com/schemas/okf/document-metadata.schema.json",
+  "title": "OKF Document Metadata Schema",
+  "description": "Validation schema for YAML frontmatter in canonical OKF markdown documents.",
+  "type": "object",
+  "required": [
+    "id",
+    "title",
+    "description",
+    "owner",
+    "status",
+    "version",
+    "canonical",
+    "bundle_id",
+    "tags",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^OKF-[0-9]{4}$",
+      "description": "Unique, immutable canonical document identifier (e.g. OKF-0001)."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 100,
+      "description": "Formal title of the canonical specification."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 300,
+      "description": "Concise summary of the specification scope and purpose."
+    },
+    "owner": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 50,
+      "description": "Entity, team, or maintainer responsible for the document."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "approved", "deprecated", "superseded"],
+      "description": "Document lifecycle state."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Semantic version of the document (MAJOR.MINOR.PATCH)."
+    },
+    "canonical": {
+      "type": "boolean",
+      "const": true,
+      "description": "True indicates this is a canonical specification."
+    },
+    "bundle_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Identifier of the parent OKF bundle manifest."
+    },
+    "tags": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^(domain|type|tier|platform):[a-z0-9-]+$"
+      },
+      "uniqueItems": true,
+      "description": "Controlled namespaced taxonomy tags."
+    },
+    "superseded_by": {
+      "type": ["string", "null"],
+      "pattern": "^OKF-[0-9]{4}$",
+      "description": "Target OKF document ID if this document has been superseded."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Creation timestamp in ISO 8601 format."
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Last approved update timestamp in ISO 8601 format."
+    }
+  },
+  "additionalProperties": false,
+  "if": {
+    "properties": { "status": { "const": "superseded" } }
+  },
+  "then": {
+    "required": ["superseded_by"],
+    "properties": {
+      "superseded_by": {
+        "type": "string",
+        "pattern": "^OKF-[0-9]{4}$"
+      }
+    }
+  }
+}

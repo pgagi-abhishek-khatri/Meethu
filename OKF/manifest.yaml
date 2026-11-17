@@ -1,0 +1,28 @@
+bundle_id: "openwhispr-canonical-v1"
+name: "OpenWhispr Canonical Knowledge Bundle"
+description: "Centralized authoritative documentation bundle for OpenWhispr / Meethu architecture, APIs, and copilot contracts."
+owner: "pgagi-abhishek-khatri"
+status: "approved"
+version: "1.0.0"
+created_at: "2026-11-16T11:00:00Z"
+updated_at: "2026-11-16T11:00:00Z"
+
+precedence_rules:
+  - "canonical OKF documents override informal meeting notes and old proposal documents."
+  - "approved status overrides draft, deprecated, or unverified documents."
+  - "newer semantic versions override older versions."
+  - "as-built specifications override exploratory proposals."
+
+documents:
+  - id: "OKF-0001"
+    path: "documents/OKF-0001-template.md"
+    version: "1.0.0"
+    status: "approved"
+    title: "Canonical Document Template and Frontmatter Guide"
+    sha256: "e1c2bc05ce845b56f4a74325863990ca9e111044ff6a4915773f413b4dd4523f"
+  - id: "OKF-0002"
+    path: "documents/OKF-0002-copilot-architecture.md"
+    version: "1.0.0"
+    status: "approved"
+    title: "Live Meeting Copilot Architecture and Precedence Contract"
+    sha256: "81e634b836927cafd752c617f8fbe44ad1df2c054f0691904f4be66ee6c2597f"

@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openwhispr.com/schemas/okf/bundle-manifest.schema.json",
+  "title": "OKF Bundle Manifest Schema",
+  "description": "Validation schema for OKF central bundle manifests (e.g. OKF/manifest.yaml).",
+  "type": "object",
+  "required": [
+    "bundle_id",
+    "name",
+    "description",
+    "owner",
+    "status",
+    "version",
+    "created_at",
+    "updated_at",
+    "precedence_rules",
+    "documents"
+  ],
+  "properties": {
+    "bundle_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Unique identifier of the bundle."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 100,
+      "description": "Human-readable name of the knowledge bundle."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 500,
+      "description": "Overview of what this bundle governs."
+    },
+    "owner": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 50,
+      "description": "Owner or maintaining team."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "approved", "deprecated"],
+      "description": "Lifecycle state of the bundle."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Semantic version of the bundle manifest."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "precedence_rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      },
+      "description": "Deterministic rules for resolving conflicts between sources."
+    },
+    "documents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "path", "version", "status", "title", "sha256"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^OKF-[0-9]{4}$"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^documents/.*\\.md$"
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["draft", "approved", "deprecated", "superseded"]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 5
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

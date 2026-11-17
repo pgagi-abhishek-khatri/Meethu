@@ -78,6 +78,7 @@ function createEngine({
   getReference = () => "", // text of the project files not indexed yet (small text files are inlined as before)
   onSignal = () => {}, // feedback for the behaviour guide: ("down" | "wanted", the moment's words)
   rag = null, // project search: { hasIndex(), catalog(), prefetch(query), retrieve({query, deep, why, expand}) }
+  okf = null, // OKF knowledge router: { registry, router }
   decisionCfg = DEFAULT_DECISION_CONFIG,
   triggerCfg = DEFAULT_TRIGGER_CONFIG,
   summaryCfg = DEFAULT_SUMMARY_CONFIG,
@@ -437,39 +438,71 @@ function createEngine({
         behavior: st.behavior ?? "",
         catalog: hasIndex() ? (rag.catalog() ?? "") : "",
       },
-      // The moment needs the project's own documents: find the matching passages before the model is called.
+      // The moment needs project or canonical documents: find and route the matching passages before the model is called.
       // Runs inside the card's own time; the question's embedding was usually warmed while the decider ran.
-      prepare: spec.ragGate
-        ? () => gatedContext(job, spec)
-        : (spec.project || spec.projectAuto) && hasIndex()
+      prepare:
+        spec.ragGate || ((spec.project || spec.projectAuto) && hasIndex()) || okf?.registry?.hasBundle?.()
           ? async () => {
-              const r = await rag.retrieve({
-                query: spec.focus,
-                deep: !!spec.deep,
-                why: spec.project
-                  ? spec.proactive
-                    ? "decider"
-                    : spec.deep
-                      ? "rerun"
-                      : "asked"
-                  : "auto",
-                minScore: spec.project ? 0 : AUTO_SCORE,
-                expand: writer ? writeQueries(spec) : spec.deep && summaryLlm ? expandQuery : null,
-              });
-              trace({
-                type: "context",
-                id: job.id,
-                kept: r.used.length,
-                skipped: r.skipped,
-                ms: r.ms,
-                queries: r.queries,
-                expandMs: r.expandMs,
-                embedMs: r.embedMs,
-                cost: r.cost,
-                used: r.used, // file, page/heading, cosine, keyword rank
-                passages: r.text,
-              });
-              return { passages: r.text, files: [...new Set(r.used.map((u) => u.file))] };
+              let ragResult = null;
+              if (spec.ragGate) {
+                ragResult = await gatedContext(job, spec);
+              } else if ((spec.project || spec.projectAuto) && hasIndex()) {
+                const r = await rag.retrieve({
+                  query: spec.focus,
+                  deep: !!spec.deep,
+                  why: spec.project
+                    ? spec.proactive
+                      ? "decider"
+                      : spec.deep
+                        ? "rerun"
+                        : "asked"
+                    : "auto",
+                  minScore: spec.project ? 0 : AUTO_SCORE,
+                  expand: writer ? writeQueries(spec) : spec.deep && summaryLlm ? expandQuery : null,
+                });
+                trace({
+                  type: "context",
+                  id: job.id,
+                  kept: r.used.length,
+                  skipped: r.skipped,
+                  ms: r.ms,
+                  queries: r.queries,
+                  expandMs: r.expandMs,
+                  embedMs: r.embedMs,
+                  cost: r.cost,
+                  used: r.used, // file, page/heading, cosine, keyword rank
+                  passages: r.text,
+                });
+                ragResult = { text: r.text, used: r.used, files: [...new Set(r.used.map((u) => u.file))] };
+              }
+
+              if (okf && okf.router && okf.registry) {
+                const routed = await okf.router.routeContext({
+                  query: spec.focus,
+                  spec,
+                  registry: okf.registry,
+                  ragResult,
+                  budget: spec.deep ? 7000 : 2800,
+                });
+                trace({
+                  type: "okf_route",
+                  id: job.id,
+                  route: routed.route,
+                  confidence: routed.classification.confidence,
+                  reason: routed.classification.reason,
+                  matchedDocIds: routed.classification.matched_doc_ids,
+                  matchedSignals: routed.classification.matched_signals,
+                  fallback: routed.fallback,
+                  latencyMs: routed.latencyMs,
+                  classifierVersion: routed.classification.classifier_version,
+                  provenance: routed.provenance || null,
+                });
+                return { passages: routed.passages, files: routed.files };
+              }
+
+              return ragResult
+                ? { passages: ragResult.text || ragResult.passages || "", files: ragResult.files || [] }
+                : { passages: "", files: [] };
             }
           : null,
     });

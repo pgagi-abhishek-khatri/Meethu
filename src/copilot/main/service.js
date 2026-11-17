@@ -18,6 +18,8 @@ const { createRetriever } = require("../rag/retrieve");
 const { createRagLog } = require("../rag/ragLog");
 const { createBehavior } = require("./behavior");
 const { createOpenRouterLlm, DEFAULT_SUMMARY_MODEL } = require("../core/summary/rollingSummary");
+const { createOkfRegistry } = require("../core/okf/registry");
+const { createOkfRouter } = require("../core/okf/router");
 
 const NOT_REPLAYED = new Set([
   "partial",
@@ -303,6 +305,9 @@ function createCopilot({
     },
   });
 
+  const okfRegistry = createOkfRegistry({ okfDir: path.resolve(__dirname, "../../../OKF") });
+  const okfRouter = createOkfRouter();
+
   const engine = createEngine({
     env,
     logDir,
@@ -322,6 +327,10 @@ function createCopilot({
       catalogMode: () => retriever.catalogMode(),
       prefetch: (query) => retriever.prefetch(query, projectIds()),
       retrieve: (o) => retriever.retrieve({ ...o, projectIds: projectIds() }),
+    },
+    okf: {
+      registry: okfRegistry,
+      router: okfRouter,
     },
     ...engineOptions,
   });
