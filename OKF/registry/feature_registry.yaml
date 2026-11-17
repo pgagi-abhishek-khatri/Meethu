@@ -1,0 +1,169 @@
+schema_version: "1.0.0"
+bundle_id: "openwhispr-canonical-v1"
+
+features:
+  - feature_id: "feat:ingestion_pipeline"
+    canonical_name: "Data Ingestion Pipeline Architecture"
+    domain: "core_platform"
+    description: "Multi-stream distributed data ingestion architecture handling voice, batch, and compliance data."
+    aliases:
+      - "ingestion pipeline"
+      - "data ingestion"
+      - "pipeline architecture"
+      - "streaming pipeline"
+    keywords:
+      - "pipeline"
+      - "ingestion"
+      - "streaming"
+      - "data processing"
+      - "asr stream"
+    current_approved_version: "2.0.0"
+    approval_status: "approved"
+    lifecycle_status: "active"
+    implementation_status: "in_progress"
+    sources:
+      - document_id: "client_requirements_v2"
+        document_name: "Client_Requirements_v2.pdf"
+        section_id: "section_2"
+        section_title: "Upgraded Data Ingestion Architecture"
+        page: 4
+    supersession:
+      supersedes:
+        - "1.0.0"
+      superseded_by: []
+    versions:
+      - version: "1.0.0"
+        approval_status: "approved"
+        lifecycle_status: "superseded"
+        created_at: "2026-01-15T09:00:00Z"
+        approved_at: "2026-01-20T10:00:00Z"
+        superseded_reason: "Upgraded from 1 single synchronous pipeline to 4 parallel streaming pipelines in Phase 2"
+        sources:
+          - document_id: "client_requirements_v1"
+            document_name: "Client_Requirements_v1.docx"
+            section_id: "section_3"
+            section_title: "Data Ingestion Architecture"
+            page: 12
+        supersession:
+          supersedes: []
+          superseded_by:
+            - "2.0.0"
+        spec:
+          pipeline_count: 1
+          topology: "single-instance synchronous"
+          datastore: "PostgreSQL"
+          throughput_limit: "50 req/sec"
+      - version: "2.0.0"
+        approval_status: "approved"
+        lifecycle_status: "active"
+        created_at: "2026-03-01T09:00:00Z"
+        approved_at: "2026-03-05T14:30:00Z"
+        sources:
+          - document_id: "client_requirements_v2"
+            document_name: "Client_Requirements_v2.pdf"
+            section_id: "section_2"
+            section_title: "Upgraded Data Ingestion Architecture"
+            page: 4
+        supersession:
+          supersedes:
+            - "1.0.0"
+          superseded_by: []
+        spec:
+          pipeline_count: 4
+          topology: "distributed parallel streaming"
+          throughput_limit: "2,000 req/sec"
+          pipelines:
+            - "Real-time ASR Stream"
+            - "Batch File Ingestion"
+            - "Live Analytics Stream"
+            - "Compliance & Audit Archival"
+
+  - feature_id: "feat:copilot_orchestration"
+    canonical_name: "Live Meeting Copilot Core Orchestration"
+    domain: "copilot"
+    description: "Core meeting copilot lifecycle orchestration across decider, scheduler, context packing, and answer generation."
+    aliases:
+      - "copilot engine"
+      - "copilot orchestration"
+      - "meeting copilot"
+      - "live copilot loop"
+    keywords:
+      - "copilot"
+      - "orchestration"
+      - "decider"
+      - "scheduler"
+      - "context pack"
+    current_approved_version: "1.0.0"
+    approval_status: "approved"
+    lifecycle_status: "active"
+    implementation_status: "implemented"
+    sources:
+      - document_id: "OKF-0002"
+        document_name: "OKF-0002-copilot-architecture.md"
+        section_id: "section_2"
+        section_title: "Core Orchestration Pipeline"
+    supersession:
+      supersedes: []
+      superseded_by: []
+    versions:
+      - version: "1.0.0"
+        approval_status: "approved"
+        lifecycle_status: "active"
+        created_at: "2026-11-16T11:00:00Z"
+        approved_at: "2026-11-16T11:00:00Z"
+        sources:
+          - document_id: "OKF-0002"
+            document_name: "OKF-0002-copilot-architecture.md"
+            section_id: "section_2"
+            section_title: "Core Orchestration Pipeline"
+        supersession:
+          supersedes: []
+          superseded_by: []
+        spec:
+          decider: "D1 Liquid / fast tier"
+          embedding: "google/gemini-embedding-2 768d"
+          scheduler_turn_gap_seconds: 1.5
+
+  - feature_id: "feat:storage_isolation"
+    canonical_name: "Copilot Dedicated Storage and Isolation Contract"
+    domain: "copilot"
+    description: "Database isolation invariant guaranteeing copilot uses only copilot.db and never writes to app.db."
+    aliases:
+      - "copilot db isolation"
+      - "storage isolation"
+      - "copilot database"
+    keywords:
+      - "sqlite"
+      - "copilot.db"
+      - "isolation"
+      - "database"
+      - "copilot_chunks"
+    current_approved_version: "1.0.0"
+    approval_status: "approved"
+    lifecycle_status: "active"
+    implementation_status: "implemented"
+    sources:
+      - document_id: "OKF-0002"
+        document_name: "OKF-0002-copilot-architecture.md"
+        section_id: "section_3"
+        section_title: "Storage & Isolation Invariants"
+    supersession:
+      supersedes: []
+      superseded_by: []
+    versions:
+      - version: "1.0.0"
+        approval_status: "approved"
+        lifecycle_status: "active"
+        created_at: "2026-11-16T11:00:00Z"
+        approved_at: "2026-11-16T11:00:00Z"
+        sources:
+          - document_id: "OKF-0002"
+            document_name: "OKF-0002-copilot-architecture.md"
+            section_id: "section_3"
+            section_title: "Storage & Isolation Invariants"
+        supersession:
+          supersedes: []
+          superseded_by: []
+        spec:
+          db_file: "copilot.db"
+          disallowed_target: "app.db"

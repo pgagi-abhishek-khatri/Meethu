@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openwhispr.com/schemas/okf/feature-registry.schema.json",
+  "title": "OKF Feature Registry Schema",
+  "description": "Validation schema for canonical feature identity and version lineage registry in OKF.",
+  "type": "object",
+  "required": ["schema_version", "bundle_id", "features"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Semantic version of the feature registry schema."
+    },
+    "bundle_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Parent canonical bundle identifier."
+    },
+    "features": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FeatureEntry"
+      },
+      "description": "List of canonical feature definitions."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "SourceReference": {
+      "type": "object",
+      "required": ["document_id", "document_name"],
+      "properties": {
+        "document_id": {
+          "type": "string",
+          "description": "Unique identifier of the source document (e.g. OKF-0002 or client_requirements_v1)."
+        },
+        "document_name": {
+          "type": "string",
+          "description": "Human-readable filename of the source document."
+        },
+        "section_id": {
+          "type": "string",
+          "description": "Section identifier within the source document."
+        },
+        "section_title": {
+          "type": "string",
+          "description": "Section heading title within the source document."
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Page number within the source document if known."
+        }
+      },
+      "additionalProperties": false
+    },
+    "SupersessionInfo": {
+      "type": "object",
+      "properties": {
+        "supersedes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of version numbers or feature IDs superseded by this entity."
+        },
+        "superseded_by": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of version numbers or feature IDs that supersede this entity."
+        }
+      },
+      "additionalProperties": false
+    },
+    "FeatureVersionEntry": {
+      "type": "object",
+      "required": ["version", "approval_status", "lifecycle_status"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "description": "Semantic version identifier for this requirement revision."
+        },
+        "approval_status": {
+          "type": "string",
+          "enum": ["draft", "pending", "approved", "rejected"],
+          "description": "Authority approval state of this specific version."
+        },
+        "lifecycle_status": {
+          "type": "string",
+          "enum": ["active", "superseded", "deprecated"],
+          "description": "Lifecycle state of this specific version."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "Creation timestamp in ISO 8601 format."
+        },
+        "approved_at": {
+          "type": "string",
+          "description": "Approval timestamp in ISO 8601 format."
+        },
+        "superseded_reason": {
+          "type": "string",
+          "description": "Explanation of why this version was superseded or upgraded."
+        },
+        "sources": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/SourceReference" },
+          "description": "Document and section provenance for this version."
+        },
+        "supersession": {
+          "$ref": "#/$defs/SupersessionInfo"
+        },
+        "spec": {
+          "type": "object",
+          "description": "Structured specifications, parameters, or invariant requirements."
+        }
+      },
+      "additionalProperties": false
+    },
+    "FeatureEntry": {
+      "type": "object",
+      "required": [
+        "feature_id",
+        "canonical_name",
+        "domain",
+        "aliases",
+        "keywords",
+        "approval_status",
+        "lifecycle_status"
+      ],
+      "properties": {
+        "feature_id": {
+          "type": "string",
+          "pattern": "^feat:[a-z0-9_:-]+$",
+          "description": "Immutable canonical feature identifier (e.g. feat:ingestion_pipeline)."
+        },
+        "canonical_name": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 150,
+          "description": "Human-readable canonical name of the feature."
+        },
+        "domain": {
+          "type": "string",
+          "pattern": "^[a-z0-9_-]+$",
+          "description": "Feature domain classification (e.g. core_platform, copilot, audio)."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Short summary of the feature's architectural role."
+        },
+        "aliases": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "description": "Alternative names used in conversations, notes, or tickets."
+        },
+        "keywords": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "description": "Deterministic lookup keywords associated with this feature."
+        },
+        "project_id": {
+          "type": ["integer", "string", "null"],
+          "description": "Optional project scoping identifier (null for global)."
+        },
+        "current_approved_version": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+          "description": "SemVer of the currently active approved version."
+        },
+        "approval_status": {
+          "type": "string",
+          "enum": ["draft", "pending", "approved", "rejected"],
+          "description": "Overall approval state of the feature."
+        },
+        "lifecycle_status": {
+          "type": "string",
+          "enum": ["active", "superseded", "deprecated"],
+          "description": "Overall lifecycle state of the feature."
+        },
+        "implementation_status": {
+          "type": "string",
+          "enum": ["planned", "in_progress", "implemented", "verified"],
+          "description": "Independent engineering implementation state."
+        },
+        "sources": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/SourceReference" },
+          "description": "Source document and section provenance for the active feature definition."
+        },
+        "supersession": {
+          "$ref": "#/$defs/SupersessionInfo"
+        },
+        "versions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/FeatureVersionEntry" },
+          "description": "Registered version history and lineage records."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

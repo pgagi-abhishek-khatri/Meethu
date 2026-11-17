@@ -11,7 +11,11 @@ function normalize(v) {
 // A cut-down (Matryoshka) vector must be re-normalised after the cut.
 const cut = (v, dims) => normalize(Float32Array.from(v.length > dims ? v.slice(0, dims) : v));
 
-const toBuffer = (f32) => Buffer.from(f32.buffer, f32.byteOffset, f32.byteLength);
+const toBuffer = (v) => {
+  if (Buffer.isBuffer(v)) return v;
+  const f32 = v instanceof Float32Array ? v : new Float32Array(v);
+  return Buffer.from(f32.buffer, f32.byteOffset, f32.byteLength);
+};
 const fromBuffer = (buf) =>
   new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
 

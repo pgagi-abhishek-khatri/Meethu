@@ -6,6 +6,7 @@ const defaultFs = require("fs");
 const defaultPath = require("path");
 const defaultYaml = require("js-yaml");
 const { createAuthoritativeLookupService } = require("./lookup");
+const { createFeatureRegistry } = require("./featureRegistry");
 
 function createOkfRegistry({
   okfDir = null,
@@ -21,15 +22,33 @@ function createOkfRegistry({
   let docsByTag = new Map();
   let contentCache = new Map();
   let als = null;
+  let featureRegistry = null;
   let loaded = false;
 
   function load() {
     loaded = true;
+
+    // Initialize/reload feature registry
+    featureRegistry = createFeatureRegistry({
+      okfDir: resolvedDir,
+      fs,
+      path,
+      yaml,
+    });
+    featureRegistry.load();
+
     if (!fs.existsSync(manifestPath)) {
       manifest = null;
       docsById.clear();
       docsByTag.clear();
       contentCache.clear();
+      als = createAuthoritativeLookupService({
+        manifest: null,
+        getDocumentContent: () => null,
+        okfDir: resolvedDir,
+        path,
+        featureRegistry,
+      });
       return false;
     }
 
@@ -57,6 +76,7 @@ function createOkfRegistry({
       getDocumentContent: getDocument,
       okfDir: resolvedDir,
       path,
+      featureRegistry,
     });
 
     return true;
@@ -174,6 +194,57 @@ function createOkfRegistry({
     get als() {
       ensureLoaded();
       return als;
+    },
+    get featureRegistry() {
+      ensureLoaded();
+      return featureRegistry;
+    },
+    getFeatures: (projectId = null) => {
+      ensureLoaded();
+      return featureRegistry?.getFeatures(projectId) || [];
+    },
+    getFeatureById: (featureId, projectId = null) => {
+      ensureLoaded();
+      return featureRegistry?.getFeatureById(featureId, projectId) || null;
+    },
+    getFeatureByName: (name, projectId = null) => {
+      ensureLoaded();
+      return featureRegistry?.getFeatureByName(name, projectId) || null;
+    },
+    getFeatureByAlias: (alias, projectId = null) => {
+      ensureLoaded();
+      return featureRegistry?.getFeatureByAlias(alias, projectId) || null;
+    },
+    findFeaturesByKeyword: (keyword, projectId = null) => {
+      ensureLoaded();
+      return featureRegistry?.findFeaturesByKeyword(keyword, projectId) || [];
+    },
+    getCurrentApprovedVersion: (featureId, projectId = null) => {
+      ensureLoaded();
+      return (
+        featureRegistry?.getCurrentApprovedVersion(featureId, projectId) || {
+          status: "not_found",
+          reason: "Feature registry not loaded",
+        }
+      );
+    },
+    getFeatureLineage: (featureId, projectId = null) => {
+      ensureLoaded();
+      return (
+        featureRegistry?.getFeatureLineage(featureId, projectId) || {
+          status: "not_found",
+          reason: "Feature registry not loaded",
+        }
+      );
+    },
+    resolveFeature: (queryOrRequest, projectId = null) => {
+      ensureLoaded();
+      return (
+        featureRegistry?.resolveFeature(queryOrRequest, projectId) || {
+          matched: false,
+          reason: "Feature registry not loaded",
+        }
+      );
     },
   };
 }

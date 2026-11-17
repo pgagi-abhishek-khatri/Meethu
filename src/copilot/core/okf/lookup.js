@@ -4,6 +4,7 @@
 
 const defaultPath = require("path");
 const { compareSemVer, resolvePrecedence } = require("./versionResolver");
+const { createFeatureRegistry } = require("./featureRegistry");
 
 // Normalizes title strings for exact matching
 function normalizeTitle(s) {
@@ -13,7 +14,7 @@ function normalizeTitle(s) {
     .toLowerCase()
     .replace(/[\u2014\u2013]/g, "-") // em-dash, en-dash to hyphen
     .replace(/["'“”‘’]/g, "") // strip quotes
-    .replace(/[.:;]+$/g, "") // strip trailing punctuation
+    .replace(/[.:;,-]+$/g, "") // strip trailing punctuation
     .replace(/\s+/g, " "); // collapse whitespace
 }
 
@@ -28,7 +29,14 @@ function createAuthoritativeLookupService({
   getDocumentContent = () => null,
   okfDir = null,
   path = defaultPath,
+  featureRegistry = null,
 } = {}) {
+  let featReg = featureRegistry;
+  if (!featReg && okfDir) {
+    try {
+      featReg = createFeatureRegistry({ okfDir, path });
+    } catch {}
+  }
   const idIndex = new Map(); // ID -> DocumentRecord[]
   const titleIndex = new Map(); // NormalizedTitle -> DocumentRecord[]
   const aliasIndex = new Map(); // NormalizedAlias -> DocumentRecord[]
@@ -293,7 +301,50 @@ function createAuthoritativeLookupService({
 
     let outcome = null;
 
-    if (type === "id") {
+    if (type === "feature") {
+      if (!featReg) {
+        return {
+          status: "registry_error",
+          error: "Feature registry not loaded or unavailable",
+          latency_ms: Date.now() - t0,
+        };
+      }
+      const featRes = featReg.resolveFeature(value, request.projectId);
+      if (featRes.ambiguous) {
+        return {
+          status: "ambiguous",
+          matched: false,
+          ambiguous: true,
+          candidates: featRes.candidates,
+          resolution: featRes.resolution,
+          reason: featRes.reason,
+          latency_ms: Date.now() - t0,
+        };
+      }
+      if (!featRes.matched) {
+        return {
+          status: "not_found",
+          matched: false,
+          error: featRes.reason,
+          latency_ms: Date.now() - t0,
+        };
+      }
+      return {
+        status: "resolved",
+        matched: true,
+        feature: featRes.feature,
+        currentApproved: featRes.currentApproved,
+        matched_by: featRes.matchTier,
+        provenance: {
+          bundle_id: bundleId,
+          feature_id: featRes.feature.feature_id,
+          version: featRes.currentApproved?.version || null,
+          status: featRes.currentApproved?.approval_status || featRes.feature.approval_status,
+          sources: featRes.currentApproved?.sources || featRes.feature.sources || [],
+        },
+        latency_ms: Date.now() - t0,
+      };
+    } else if (type === "id") {
       outcome = lookupById(value, options);
       outcome.matchedBy = "id";
     } else if (type === "title") {
@@ -305,6 +356,30 @@ function createAuthoritativeLookupService({
     } else {
       // "auto" detection
       const valStr = String(value || "").trim();
+
+      // 0. Direct feature ID pattern match (feat:*)
+      const featMatch = valStr.match(/\bfeat:[a-z0-9_:-]+\b/i);
+      if (featMatch && featReg) {
+        const feat = featReg.getFeatureById(featMatch[0], request.projectId);
+        if (feat) {
+          const appVer = featReg.getCurrentApprovedVersion(feat.feature_id, request.projectId);
+          return {
+            status: "resolved",
+            matched: true,
+            feature: feat,
+            currentApproved: appVer,
+            matched_by: "feature_id",
+            provenance: {
+              bundle_id: bundleId,
+              feature_id: feat.feature_id,
+              version: appVer?.version || null,
+              status: appVer?.approval_status || feat.approval_status,
+              sources: appVer?.sources || feat.sources || [],
+            },
+            latency_ms: Date.now() - t0,
+          };
+        }
+      }
 
       // 1. Direct ID pattern match
       const idMatch = valStr.match(/\bokf-[0-9]{4}\b/i);
@@ -408,6 +483,30 @@ function createAuthoritativeLookupService({
     lookupByKeyword,
     lookupByTag,
     resolve,
+    // Feature Registry Integration
+    get featureRegistry() {
+      return featReg;
+    },
+    getFeatureById: (featureId, projectId = null) =>
+      featReg ? featReg.getFeatureById(featureId, projectId) : null,
+    getFeatureByName: (name, projectId = null) =>
+      featReg ? featReg.getFeatureByName(name, projectId) : null,
+    getFeatureByAlias: (alias, projectId = null) =>
+      featReg ? featReg.getFeatureByAlias(alias, projectId) : null,
+    findFeaturesByKeyword: (keyword, projectId = null) =>
+      featReg ? featReg.findFeaturesByKeyword(keyword, projectId) : [],
+    getCurrentApprovedVersion: (featureId, projectId = null) =>
+      featReg
+        ? featReg.getCurrentApprovedVersion(featureId, projectId)
+        : { status: "not_found", reason: "Feature registry not loaded" },
+    getFeatureLineage: (featureId, projectId = null) =>
+      featReg
+        ? featReg.getFeatureLineage(featureId, projectId)
+        : { status: "not_found", reason: "Feature registry not loaded" },
+    resolveFeature: (queryOrRequest, projectId = null) =>
+      featReg
+        ? featReg.resolveFeature(queryOrRequest, projectId)
+        : { matched: false, reason: "Feature registry not loaded" },
   };
 }
 

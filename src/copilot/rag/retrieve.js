@@ -23,6 +23,8 @@ function createRetriever({
   now = Date.now,
   embedWaitMs = 2500,
   catalogMode = cfg.catalogMode,
+  als = null,
+  temporalRouter = null,
 }) {
   const indexed = (projectIds) => projectIds.filter((id) => rag.hasIndex(id));
   const filesOf = (projectIds) => indexed(projectIds).flatMap((id) => rag.catalog(id));
@@ -93,7 +95,7 @@ function createRetriever({
     },
 
     // -> { text, used: [{ file, where, score }], skipped: null | reason, ms }
-    async retrieve({ query, projectIds, deep = false, why = "", expand = null, minScore = 0 }) {
+    async retrieve({ query, projectIds, deep = false, why = "", expand = null, minScore = 0, asOf = null, version = null }) {
       const t0 = now();
       const q = clean(query);
       const done = (r) => {
@@ -110,6 +112,40 @@ function createRetriever({
         return done({ log: { mode: "skipped", reason: "no_index" }, out: { skipped: "no_index" } });
       const cl = clients();
       const lim = deep ? cfg.deep : cfg.fast;
+
+      // Phase 5: Temporal OKF Router Gate runs BEFORE vector retrieval
+      let temporalRouting = null;
+      if (temporalRouter && typeof temporalRouter.routeTemporalQuery === "function" && ids.length) {
+        try {
+          const trRes = await temporalRouter.routeTemporalQuery({
+            projectId: ids[0],
+            query: q,
+            asOf,
+            version,
+          });
+          if (trRes && trRes.status === "RESOLVED" && (trRes.passages || trRes.evidence?.length)) {
+            temporalRouting = trRes;
+          }
+        } catch (e) {
+          log({ event: "temporal_router_error", error: e.message });
+        }
+      }
+
+      // Phase 4: Authoritative Lookup Service (ALS) runs BEFORE vector retrieval (fallback if no temporal routing)
+      let authoritativeResult = null;
+      if (!temporalRouting && als && typeof als.lookup === "function" && ids.length) {
+        try {
+          const alsRes = await als.lookup({
+            projectId: ids[0],
+            query: q,
+          });
+          if (alsRes && alsRes.status === "RESOLVED" && alsRes.facts?.length) {
+            authoritativeResult = alsRes;
+          }
+        } catch (e) {
+          log({ event: "als_error", error: e.message });
+        }
+      }
 
       // queries: the moment itself, plus what the query model wrote (`expand`); the search waits for it unless
       // `queryWaitMs` caps the wait.
@@ -348,6 +384,38 @@ function createRetriever({
           kw: kwRank.get(f.id) ?? null,
         });
       }
+      if (temporalRouting && temporalRouting.passages) {
+        parts.unshift(temporalRouting.passages);
+        if (temporalRouting.evidence && temporalRouting.evidence.length) {
+          for (let i = temporalRouting.evidence.length - 1; i >= 0; i--) {
+            const ev = temporalRouting.evidence[i];
+            usedInfo.unshift({
+              file: ev.source,
+              where: `v${ev.version} (${ev.role})`,
+              score: 1.0,
+              kw: 0,
+              temporal: true,
+              role: ev.role,
+              version: ev.version,
+            });
+          }
+        }
+      } else if (authoritativeResult && authoritativeResult.facts?.length) {
+        for (let i = authoritativeResult.facts.length - 1; i >= 0; i--) {
+          const fact = authoritativeResult.facts[i];
+          const authHeader = `[CANONICAL AUTHORITATIVE: ${authoritativeResult.feature.canonical_name} (v${authoritativeResult.version.version}) · ${fact.source_name}]`;
+          const body = clip(fact.text, 900);
+          parts.unshift(`${authHeader}\n${body}`);
+          usedInfo.unshift({
+            file: fact.source_name,
+            where: `canonical v${authoritativeResult.version.version}`,
+            score: 1.0,
+            kw: 0,
+            authoritative: true,
+          });
+        }
+      }
+
       const text = parts.length
         ? `Passages from the USER's project files that match this moment (use them when they answer it; say where a fact comes from in plain words, like "from the pricing sheet"; never quote a path):\n\n${parts.join("\n\n")}`
         : "";
@@ -373,6 +441,8 @@ function createRetriever({
           embedMs,
           used: usedInfo,
           skipped: parts.length ? null : candidates ? "below_floor" : "no_match",
+          authoritative: authoritativeResult || (temporalRouting?.plan ? temporalRouting : null),
+          temporalRouting: temporalRouting || null,
         },
       });
     },

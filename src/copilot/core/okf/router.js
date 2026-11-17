@@ -2,8 +2,22 @@
 // Pure, Electron-free OKF Router Gate.
 // Classifies queries into 'okf', 'rag', or 'mixed' and formats passages with deterministic precedence.
 
+const {
+  createTemporalRouter,
+  classifyTemporalIntent,
+  extractTemporalParameters,
+} = require("./temporalRouter");
+const {
+  resolveEvidence,
+  normalizeEvidence,
+  detectConflicts,
+  buildProvenance,
+  formatEvidenceForContext,
+  resolvePrecedence,
+} = require("./versionResolver");
+
 const CANONICAL_INTENT =
-  /\b(official|approved|contract|standard|policy|formula|rule|architecture|invariant|spec|specification|canonical|okf-[0-9]{4})\b/i;
+  /\b(official|approved|contract|standard|policy|formula|rule|architecture|invariant|spec|specification|canonical|okf-[0-9]{4}|feat:[a-z0-9_:-]+)\b/i;
 
 const EXPLORATORY_INTENT =
   /\b(discuss|discussed|meeting|notes|talked about|who said|what did we say|history|previous|agenda|proposal|draft|timeline)\b/i;
@@ -16,6 +30,18 @@ function createOkfRouter({ defaultBudget = 2800 } = {}) {
   function classifyQuery({ query = "", spec = {}, registry = null }) {
     const q = String(query || "").trim();
     const signals = [];
+
+    const temporalClassification = classifyTemporalIntent(q);
+    const temporalExtraction = extractTemporalParameters(q);
+    const attachTemporal = (res) => ({
+      ...res,
+      temporal: {
+        intent: temporalClassification.intent,
+        confidence: temporalClassification.confidence,
+        ...temporalExtraction.temporal,
+        ambiguity: temporalExtraction.ambiguity,
+      },
+    });
 
     const isCanonical = CANONICAL_INTENT.test(q);
     const isExploratory = EXPLORATORY_INTENT.test(q);
@@ -32,112 +58,136 @@ function createOkfRouter({ defaultBudget = 2800 } = {}) {
       signals.push(`entity:${id}`);
     }
 
+    // Direct Feature ID mention (e.g. feat:ingestion_pipeline)
+    const featMatch = q.match(/\bfeat:[a-z0-9_:-]+\b/i);
+    if (featMatch) {
+      signals.push(`feature:${featMatch[0]}`);
+      if (isExploratory) {
+        return attachTemporal({
+          route: "mixed",
+          confidence: 0.95,
+          reason: `Explicit Feature ID with exploratory cues: ${featMatch[0]}`,
+          matched_signals: signals,
+          matched_doc_ids: matchedDocIds,
+          classifier_version: CLASSIFIER_VERSION,
+        });
+      }
+      return attachTemporal({
+        route: "okf",
+        confidence: 1.0,
+        reason: `Explicit Feature ID requested: ${featMatch[0]}`,
+        matched_signals: signals,
+        matched_doc_ids: matchedDocIds,
+        classifier_version: CLASSIFIER_VERSION,
+      });
+    }
+
     // Direct OKF ID mention (e.g. OKF-0002)
     if (/\bokf-[0-9]{4}\b/i.test(q) && matchedDocIds.length > 0) {
       if (isExploratory) {
-        return {
+        return attachTemporal({
           route: "mixed",
           confidence: 0.95,
           reason: `Explicit OKF ID with exploratory cues: ${matchedDocIds.join(", ")}`,
           matched_signals: signals,
           matched_doc_ids: matchedDocIds,
           classifier_version: CLASSIFIER_VERSION,
-        };
+        });
       }
-      return {
+      return attachTemporal({
         route: "okf",
         confidence: 1.0,
         reason: `Explicit OKF ID requested: ${matchedDocIds.join(", ")}`,
         matched_signals: signals,
         matched_doc_ids: matchedDocIds,
         classifier_version: CLASSIFIER_VERSION,
-      };
+      });
     }
 
     // Entity match + Canonical intent
     if (matchedDocIds.length > 0 && isCanonical && !isExploratory) {
-      return {
+      return attachTemporal({
         route: "okf",
         confidence: 0.95,
         reason: `Canonical intent matching approved entity: ${matchedDocIds.join(", ")}`,
         matched_signals: signals,
         matched_doc_ids: matchedDocIds,
         classifier_version: CLASSIFIER_VERSION,
-      };
+      });
     }
 
     // Entity match + Exploratory intent -> Mixed
     if (matchedDocIds.length > 0 && isExploratory) {
-      return {
+      return attachTemporal({
         route: "mixed",
         confidence: 0.9,
         reason: `Mixed query: official entity ${matchedDocIds.join(", ")} alongside exploratory discussion cues`,
         matched_signals: signals,
         matched_doc_ids: matchedDocIds,
         classifier_version: CLASSIFIER_VERSION,
-      };
+      });
     }
 
     // Entity match without explicit cues -> okf if exact title, else mixed if files asked
     if (matchedDocIds.length > 0) {
       const topMatch = approvedMatches[0];
       if (topMatch.matchReason === "exact_id" || topMatch.matchReason === "title_match") {
-        return {
+        return attachTemporal({
           route: "okf",
           confidence: 0.85,
           reason: `Strong entity title/ID match: ${topMatch.id}`,
           matched_signals: signals,
           matched_doc_ids: matchedDocIds,
           classifier_version: CLASSIFIER_VERSION,
-        };
+        });
       }
     }
 
     // Canonical cue but no registered entity match
     if (isCanonical && !isExploratory) {
-      return {
+      return attachTemporal({
         route: "mixed",
         confidence: 0.7,
         reason: "Canonical query intent without direct OKF entity match; fallback to hybrid",
         matched_signals: signals,
         matched_doc_ids: matchedDocIds,
         classifier_version: CLASSIFIER_VERSION,
-      };
+      });
     }
 
     // Exploratory cue without canonical intent
     if (isExploratory) {
-      return {
+      return attachTemporal({
         route: "rag",
         confidence: 0.95,
         reason: "Exploratory / meeting memory query intent",
         matched_signals: signals,
         matched_doc_ids: matchedDocIds,
         classifier_version: CLASSIFIER_VERSION,
-      };
+      });
     }
 
     // Standard D1 project search request
     if (spec.project || spec.projectAuto) {
-      return {
+      return attachTemporal({
         route: "rag",
         confidence: 0.8,
         reason: "Standard project file search triggered by decider",
         matched_signals: signals,
         matched_doc_ids: matchedDocIds,
         classifier_version: CLASSIFIER_VERSION,
-      };
+      });
     }
 
     // Ambiguous query default
-    return {
+    return attachTemporal({
       route: "rag",
       confidence: 0.5,
       reason: "Ambiguous query without strong canonical cues; default to RAG lane",
       matched_signals: signals,
       matched_doc_ids: matchedDocIds,
       classifier_version: CLASSIFIER_VERSION,
-    };
+    });
   }
 
   function assemblePassages({ route, okfDoc = null, ragText = "", budget = defaultBudget }) {
@@ -206,7 +256,24 @@ function createOkfRouter({ defaultBudget = 2800 } = {}) {
           value: classification.matched_doc_ids[0] || query,
         });
         if (alsRes.status === "resolved") {
-          resolvedDoc = alsRes.document;
+          if (alsRes.document) {
+            resolvedDoc = alsRes.document;
+          } else if (alsRes.feature) {
+            const curVer = alsRes.currentApproved;
+            const specLines = curVer?.spec
+              ? Object.entries(curVer.spec)
+                  .map(([k, v]) => `• ${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`)
+                  .join("\n")
+              : "";
+            resolvedDoc = {
+              id: alsRes.feature.feature_id,
+              title: alsRes.feature.canonical_name,
+              version: curVer?.version || "1.0.0",
+              status: curVer?.approval_status || alsRes.feature.approval_status,
+              path: `registry/feature_registry.yaml#${alsRes.feature.feature_id}`,
+              body: `${alsRes.feature.description || alsRes.feature.canonical_name}\n\n${specLines}`.trim(),
+            };
+          }
           provenance = alsRes.provenance;
         } else if (alsRes.status === "no_authoritative_version") {
           fallback = "okf_no_authoritative_version";
@@ -264,11 +331,22 @@ function createOkfRouter({ defaultBudget = 2800 } = {}) {
     classifyQuery,
     assemblePassages,
     routeContext,
+    classifyTemporalIntent,
+    extractTemporalParameters,
   };
 }
 
 module.exports = {
   createOkfRouter,
+  createTemporalRouter,
+  classifyTemporalIntent,
+  extractTemporalParameters,
+  resolveEvidence,
+  normalizeEvidence,
+  detectConflicts,
+  buildProvenance,
+  formatEvidenceForContext,
+  resolvePrecedence,
   CANONICAL_INTENT,
   EXPLORATORY_INTENT,
   CLASSIFIER_VERSION,

@@ -16,6 +16,7 @@ const path = require("path");
 const crypto = require("crypto");
 const yaml = require("js-yaml");
 const { z } = require("zod");
+const { validateFeatureRegistry } = require("../src/copilot/core/okf/featureRegistryValidator");
 
 // 1. ZOD SCHEMAS
 
@@ -262,6 +263,30 @@ function validateOkfRegistry({ okfDir, fix = false } = {}) {
     } catch {}
   }
 
+  // Validate Feature Registry if present
+  let checkedFeaturesCount = 0;
+  const featureRegistryPath = path.join(rootDir, "registry", "feature_registry.yaml");
+  if (fs.existsSync(featureRegistryPath)) {
+    try {
+      const featRaw = fs.readFileSync(featureRegistryPath, "utf8");
+      const featData = yaml.load(featRaw);
+      const featRes = validateFeatureRegistry(featData);
+      if (!featRes.valid) {
+        for (const err of featRes.errors) {
+          errors.push(`[feature_registry.yaml] ${err}`);
+        }
+      }
+      for (const warn of featRes.warnings) {
+        warnings.push(`[feature_registry.yaml] ${warn}`);
+      }
+      if (featData && Array.isArray(featData.features)) {
+        checkedFeaturesCount = featData.features.length;
+      }
+    } catch (err) {
+      errors.push(`[feature_registry.yaml] Failed to parse: ${err.message}`);
+    }
+  }
+
   if (fix && manifestModified) {
     fs.writeFileSync(manifestPath, yaml.dump(manifest, { lineWidth: -1 }));
   }
@@ -271,6 +296,7 @@ function validateOkfRegistry({ okfDir, fix = false } = {}) {
     errors,
     warnings,
     checkedCount: docFiles.length,
+    checkedFeaturesCount,
   };
 }
 
@@ -281,7 +307,9 @@ if (require.main === module) {
   const fix = args.includes("--fix");
   const result = validateOkfRegistry({ fix });
 
-  console.log(`[OKF Validator] Checked ${result.checkedCount} canonical documents.`);
+  console.log(
+    `[OKF Validator] Checked ${result.checkedCount} canonical documents and ${result.checkedFeaturesCount} canonical features.`
+  );
 
   for (const warn of result.warnings) {
     console.warn(`WARN: ${warn}`);

@@ -1,8 +1,20 @@
 // Chunks, their vectors and the keyword index, inside the copilot's own SQLite file. Search is a plain loop over
 // the project's vectors held in memory (a few thousand chunks = a few ms) merged with SQLite FTS5 keyword hits.
 const { toBuffer, fromBuffer, topK, rrf } = require("./vectors");
+const {
+  createTemporalStore,
+  migrateTemporalSchema,
+  CHUNK_TEMPORAL_COLUMNS,
+  TEMPORAL_INDEXES,
+} = require("./temporalStore");
+const { createDeltaIngest } = require("./deltaIngest");
+const { createAuthoritativeLookup } = require("./authoritativeLookup");
+const { createTemporalRouter } = require("../core/okf/temporalRouter");
 
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS copilot_project_files (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, path TEXT NOT NULL, name TEXT NOT NULL, added_at INTEGER
+);
 CREATE TABLE IF NOT EXISTS copilot_chunks (
   id INTEGER PRIMARY KEY AUTOINCREMENT, file_id INTEGER NOT NULL, project_id INTEGER NOT NULL, ord INTEGER NOT NULL,
   text TEXT NOT NULL, meta TEXT, embed TEXT, hash TEXT, dims INTEGER, vec BLOB
@@ -54,7 +66,21 @@ function ftsQuery(text) {
 
 function createRagStore(db, { addColumn, now = Date.now } = {}) {
   db.exec(SCHEMA);
-  for (const [c, t] of FILE_COLUMNS) addColumn("copilot_project_files", c, t);
+  for (const [c, t] of FILE_COLUMNS) {
+    if (typeof addColumn === "function") {
+      addColumn("copilot_project_files", c, t);
+    } else {
+      const has = db
+        .prepare("PRAGMA table_info(copilot_project_files)")
+        .all()
+        .some((col) => col.name === c);
+      if (!has) db.exec(`ALTER TABLE copilot_project_files ADD COLUMN ${c} ${t}`);
+    }
+  }
+
+  // Phase 2: Idempotent Temporal Schema Migration & Store
+  migrateTemporalSchema(db, { addColumn });
+  const temporal = createTemporalStore(db, { now });
 
   const q = {
     file: db.prepare("SELECT * FROM copilot_project_files WHERE id = ?"),
@@ -70,6 +96,13 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
     ),
     vectors: db.prepare(
       "SELECT id, vec FROM copilot_chunks WHERE project_id = ? AND dims = ? AND vec IS NOT NULL"
+    ),
+    activeVectors: db.prepare(
+      "SELECT id, vec FROM copilot_chunks WHERE project_id = ? AND dims = ? AND lifecycle_status = 'active' AND vec IS NOT NULL"
+    ),
+    historicalVectors: db.prepare(
+      `SELECT id, vec FROM copilot_chunks 
+       WHERE project_id = ? AND dims = ? AND valid_from <= ? AND (valid_to IS NULL OR valid_to > ?) AND vec IS NOT NULL`
     ),
     count: db.prepare("SELECT COUNT(*) AS n FROM copilot_chunks WHERE project_id = ?"),
     countAll: db.prepare("SELECT COUNT(*) AS n FROM copilot_chunks"),
@@ -213,7 +246,78 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
     // Ready files whose profile is missing or older than `version`.
     staleProfiles: (version) => q.staleProfiles.all(version),
     rrf,
+
+    // Phase 2: Temporal Store Engine Integration
+    temporal,
+    insertTemporalChunk: (chunkData, metadata) =>
+      temporal.insertTemporalChunk(chunkData, metadata),
+    getActiveFeatureChunks: (projectId, featureId) =>
+      temporal.getActiveFeatureChunks(projectId, featureId),
+    getFeatureAt: (projectId, featureId, targetTime) =>
+      temporal.getFeatureAt(projectId, featureId, targetTime),
+    getFeatureLineage: (projectId, featureId) =>
+      temporal.getFeatureLineage(projectId, featureId),
+    supersedeChunk: (predecessorId, successorId, effectiveTime) =>
+      temporal.supersedeChunk(predecessorId, successorId, effectiveTime),
+    deprecateChunk: (chunkId, effectiveTime) =>
+      temporal.deprecateChunk(chunkId, effectiveTime),
+    activateSuccessorVersion: (params) => temporal.activateSuccessorVersion(params),
+    validateTemporalIntegrity: (projectId, featureId) =>
+      temporal.validateTemporalIntegrity(projectId, featureId),
+
+    // Active-only matrix and vector search
+    activeMatrix(projectId, dims) {
+      const rows = q.activeVectors.all(projectId, dims);
+      const data = new Float32Array(rows.length * dims);
+      rows.forEach((r, i) => data.set(fromBuffer(r.vec), i * dims));
+      return { ids: rows.map((r) => r.id), data };
+    },
+    // Historical point-in-time matrix
+    historicalMatrix(projectId, dims, targetTime) {
+      const t = Number(targetTime);
+      const rows = q.historicalVectors.all(projectId, dims, t, t);
+      const data = new Float32Array(rows.length * dims);
+      rows.forEach((r, i) => data.set(fromBuffer(r.vec), i * dims));
+      return { ids: rows.map((r) => r.id), data };
+    },
+    // Phase 3: Incremental Semantic Delta Ingestion
+    createDeltaIngest(opts = {}) {
+      return createDeltaIngest({
+        db,
+        ragStore: this,
+        temporalStore: temporal,
+        now,
+        ...opts,
+      });
+    },
+    // Phase 4: Authoritative Lookup Service
+    createAuthoritativeLookup(opts = {}) {
+      return createAuthoritativeLookup({
+        db,
+        ragStore: this,
+        temporalStore: temporal,
+        now,
+        ...opts,
+      });
+    },
+    // Phase 5: Temporal OKF Router Gate
+    createTemporalRouter(opts = {}) {
+      return createTemporalRouter({
+        temporalStore: temporal,
+        now,
+        ...opts,
+      });
+    },
   };
 }
 
-module.exports = { createRagStore, ftsQuery, FILE_COLUMNS };
+module.exports = {
+  createRagStore,
+  createDeltaIngest,
+  createAuthoritativeLookup,
+  createTemporalRouter,
+  ftsQuery,
+  FILE_COLUMNS,
+  CHUNK_TEMPORAL_COLUMNS,
+  TEMPORAL_INDEXES,
+};
