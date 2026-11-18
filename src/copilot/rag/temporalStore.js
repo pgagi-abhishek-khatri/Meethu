@@ -77,9 +77,17 @@ function migrateTemporalSchema(db, { addColumn } = {}) {
  * @param {Object} [options.featureRegistry=null] - Canonical feature registry for validation
  * @returns {Object} Temporal store API
  */
-function createTemporalStore(db, { now = Date.now, featureRegistry = null } = {}) {
+function createTemporalStore(db, { now = Date.now, featureRegistry = null, onMutate = null } = {}) {
   // Ensure schema and indexes exist
   migrateTemporalSchema(db);
+
+  const notifyMutate = (projectId) => {
+    if (typeof onMutate === "function") {
+      try {
+        onMutate(projectId);
+      } catch {}
+    }
+  };
 
   const q = {
     insertChunk: db.prepare(
@@ -106,12 +114,22 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null } = {}
          AND c.valid_from <= ? AND (c.valid_to IS NULL OR c.valid_to > ?)
        ORDER BY c.version DESC, c.ord ASC`
     ),
+    getFeatureInRange: db.prepare(
+      `SELECT c.*, f.name AS file
+       FROM copilot_chunks c
+       LEFT JOIN copilot_project_files f ON f.id = c.file_id
+       WHERE c.project_id = ? AND c.feature_id = ?
+         AND c.valid_from <= ? AND (c.valid_to IS NULL OR c.valid_to > ?)
+       ORDER BY c.valid_from DESC, c.version DESC, c.ord ASC`
+    ),
     getFeatureLineage: db.prepare(
-      `SELECT id, file_id, project_id, ord, text, meta,
-              feature_id, version, lifecycle_status, superseded_by_id, transaction_time, valid_from, valid_to
-       FROM copilot_chunks
-       WHERE project_id = ? AND feature_id = ?
-       ORDER BY valid_from ASC, id ASC`
+      `SELECT c.id, c.file_id, c.project_id, c.ord, c.text, c.meta,
+              c.feature_id, c.version, c.lifecycle_status, c.superseded_by_id, c.transaction_time, c.valid_from, c.valid_to,
+              f.name AS file
+       FROM copilot_chunks c
+       LEFT JOIN copilot_project_files f ON f.id = c.file_id
+       WHERE c.project_id = ? AND c.feature_id = ?
+       ORDER BY c.valid_from ASC, c.id ASC`
     ),
     updateSupersede: db.prepare(
       "UPDATE copilot_chunks SET lifecycle_status = 'superseded', valid_to = ?, superseded_by_id = ? WHERE id = ?"
@@ -251,6 +269,7 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null } = {}
       insertedId = Number(res.lastInsertRowid);
       q.insertFts.run(insertedId, text);
     })();
+    notifyMutate(project_id);
 
     return {
       id: insertedId,
@@ -287,6 +306,21 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null } = {}
     const t = Number(targetTime);
     if (isNaN(t)) throw new Error(`Invalid targetTime '${targetTime}'`);
     const rows = q.getFeatureAt.all(projectId, featureId, t, t);
+    return rows.map(formatChunkRow);
+  }
+
+  /**
+   * C2. Retrieve feature chunks overlapping a historical time range [rangeStart, rangeEnd].
+   * Ensures month/quarter/year queries (e.g. "August 2026") match mid-month effective dates.
+   */
+  function getFeatureInRange(projectId, featureId, rangeStart, rangeEnd = null) {
+    if (!featureId || rangeStart == null) return [];
+    const start = Number(rangeStart);
+    const end = rangeEnd != null ? Number(rangeEnd) : start;
+    if (isNaN(start) || isNaN(end)) {
+      throw new Error(`Invalid range [${rangeStart}, ${rangeEnd}]`);
+    }
+    const rows = q.getFeatureInRange.all(projectId, featureId, end, start);
     return rows.map(formatChunkRow);
   }
 
@@ -351,6 +385,7 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null } = {}
     db.transaction(() => {
       q.updateSupersede.run(effTime, succId, predId);
     })();
+    notifyMutate(pred.project_id);
 
     return {
       predecessor_id: predId,
@@ -375,6 +410,7 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null } = {}
     db.transaction(() => {
       q.updateDeprecate.run(effTime, id);
     })();
+    notifyMutate(chunk.project_id);
 
     return {
       chunk_id: id,
@@ -386,8 +422,15 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null } = {}
   /**
    * G. Transactional Version Activation.
    * Atomically inserts the successor chunk and marks the predecessor as superseded.
+   * When preserveUnchangedHashes is provided, unchanged sibling chunks whose content hash
+   * remains present in the updated document are preserved as active rather than re-embedded.
    */
-  function activateSuccessorVersion({ predecessorId, newChunkData, effectiveTime = null }) {
+  function activateSuccessorVersion({
+    predecessorId,
+    newChunkData,
+    effectiveTime = null,
+    preserveUnchangedHashes = null,
+  }) {
     const predId = Number(predecessorId);
     const pred = q.getChunkById.get(predId);
     if (!pred) {
@@ -395,6 +438,12 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null } = {}
     }
 
     const effTime = effectiveTime != null ? Number(effectiveTime) : now();
+    const preservedSet =
+      preserveUnchangedHashes instanceof Set
+        ? preserveUnchangedHashes
+        : Array.isArray(preserveUnchangedHashes)
+          ? new Set(preserveUnchangedHashes)
+          : null;
 
     let newChunk = null;
 
@@ -413,20 +462,26 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null } = {}
         }
       );
 
-      // 2. Update predecessor
-      supersedeChunk(predId, newChunk.id, effTime);
+      // 2. Update primary predecessor (unless it is an unchanged sibling explicitly preserved)
+      if (!preservedSet || !pred.hash || !preservedSet.has(pred.hash)) {
+        supersedeChunk(predId, newChunk.id, effTime);
+      }
 
-      // 3. Atomically supersede any older active chunks for this feature belonging to predecessor files or earlier validity
+      // 3. Atomically supersede older active chunks for this feature belonging to predecessor files or earlier validity,
+      // skipping any unchanged sibling section still present in preserveUnchangedHashes.
       const targetFeat = newChunkData.feature_id || pred.feature_id;
       const targetProj = newChunkData.project_id || pred.project_id;
       if (targetFeat && targetProj) {
         const olderChunks = db.prepare(
-          `SELECT id, valid_from FROM copilot_chunks 
+          `SELECT id, valid_from, hash FROM copilot_chunks 
            WHERE project_id = ? AND feature_id = ? AND lifecycle_status = 'active' AND id != ?
              AND (file_id != ? OR (valid_from IS NOT NULL AND valid_from < ?))`
         ).all(targetProj, targetFeat, newChunk.id, newChunk.file_id, effTime);
 
         for (const oc of olderChunks) {
+          if (preservedSet && oc.hash && preservedSet.has(oc.hash)) {
+            continue;
+          }
           try {
             const ocEff = (oc.valid_from != null && effTime > oc.valid_from) ? effTime : (oc.valid_from != null ? oc.valid_from + 1 : effTime);
             supersedeChunk(oc.id, newChunk.id, ocEff);
@@ -528,6 +583,7 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null } = {}
     insertTemporalChunk,
     getActiveFeatureChunks,
     getFeatureAt,
+    getFeatureInRange,
     getFeatureLineage,
     supersedeChunk,
     deprecateChunk,

@@ -682,29 +682,41 @@ function resolveEvidence(candidates = [], options = {}) {
 
     let evolutionItems = [];
     if (sorted.length >= 2) {
-      const before = { ...sorted[0], role: "BEFORE" };
-      const after = { ...sorted[sorted.length - 1], role: "AFTER" };
+      // Group by distinct version chronologically so multi-stage evolutions (v1 -> v1.1 -> v2) preserve all stages
+      const distinctStages = [];
+      const seenVers = new Set();
+      for (const item of sorted) {
+        const verKey = item.version || item.evidence_id;
+        if (!seenVers.has(verKey)) {
+          seenVers.add(verKey);
+          distinctStages.push(item);
+        }
+      }
+      const stages = distinctStages.length >= 2 ? distinctStages : [sorted[0], sorted[sorted.length - 1]];
+      const lastIdx = stages.length - 1;
 
-      const supersedesReason =
-        after.lineage.superseded_reason ||
-        before.lineage.superseded_reason ||
-        "Requirements evolved across versions";
-
-      before.provenance = buildProvenance(before, {
-        outcome: "EVOLUTION_PREDECESSOR",
-        rule: "HISTORICAL_PREDECESSOR",
-        reason: supersedesReason,
+      evolutionItems = stages.map((stage, idx) => {
+        const role = idx === 0 ? "BEFORE" : idx === lastIdx ? "AFTER" : "INTERMEDIATE";
+        const prev = idx > 0 ? stages[idx - 1] : null;
+        const supersedesReason =
+          stage.lineage.superseded_reason ||
+          prev?.lineage?.superseded_reason ||
+          "Requirements evolved across versions";
+        const enriched = { ...stage, role };
+        enriched.provenance = buildProvenance(enriched, {
+          outcome:
+            role === "BEFORE"
+              ? "EVOLUTION_PREDECESSOR"
+              : role === "AFTER"
+                ? "EVOLUTION_SUCCESSOR"
+                : "EVOLUTION_INTERMEDIATE",
+          rule: role === "BEFORE" ? "HISTORICAL_PREDECESSOR" : "EXPLICIT_SUPERSESSION",
+          supersedes_version: prev?.version || null,
+          reason: supersedesReason,
+        });
+        provenanceMap[enriched.evidence_id] = enriched.provenance;
+        return enriched;
       });
-      after.provenance = buildProvenance(after, {
-        outcome: "EVOLUTION_SUCCESSOR",
-        rule: "EXPLICIT_SUPERSESSION",
-        supersedes_version: before.version,
-        reason: supersedesReason,
-      });
-
-      provenanceMap[before.evidence_id] = before.provenance;
-      provenanceMap[after.evidence_id] = after.provenance;
-      evolutionItems = [before, after];
     } else if (sorted.length === 1) {
       const single = { ...sorted[0], role: "INITIAL" };
       single.provenance = buildProvenance(single, {
@@ -734,9 +746,18 @@ function resolveEvidence(candidates = [], options = {}) {
   // -------------------------------------------------------------------------
   if (intent === "HISTORICAL_STATE") {
     let eligible = [...deduplicated];
+    const asOfStart = options.asOfStart != null ? Number(options.asOfStart) : null;
+    const asOfEnd = options.asOfEnd != null ? Number(options.asOfEnd) : null;
 
-    // Filter by asOf timestamp
-    if (asOf != null) {
+    // Filter by range overlap [asOfStart, asOfEnd] when provided (e.g. month/quarter queries),
+    // otherwise by exact point-in-time asOf timestamp.
+    if (asOfStart != null && asOfEnd != null) {
+      eligible = eligible.filter((c) => {
+        const from = c.temporal.valid_from ?? -Infinity;
+        const to = c.temporal.valid_to ?? Infinity;
+        return from <= asOfEnd && to > asOfStart;
+      });
+    } else if (asOf != null) {
       const targetTime = Number(asOf);
       eligible = eligible.filter((c) => {
         const from = c.temporal.valid_from ?? -Infinity;

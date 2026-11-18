@@ -78,9 +78,20 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
     }
   }
 
+  // project id -> { ids, data } kept until the project's chunks change (including temporal mutations)
+  const matrices = new Map();
+  const invalidateMatrices = (projectId = null) => {
+    if (projectId == null) {
+      matrices.clear();
+      return;
+    }
+    const prefix = `${projectId}:`;
+    for (const key of matrices.keys()) if (key.startsWith(prefix)) matrices.delete(key);
+  };
+
   // Phase 2: Idempotent Temporal Schema Migration & Store
   migrateTemporalSchema(db, { addColumn });
-  const temporal = createTemporalStore(db, { now });
+  const temporal = createTemporalStore(db, { now, onMutate: invalidateMatrices });
 
   const q = {
     file: db.prepare("SELECT * FROM copilot_project_files WHERE id = ?"),
@@ -98,11 +109,17 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
       "SELECT id, vec FROM copilot_chunks WHERE project_id = ? AND dims = ? AND vec IS NOT NULL"
     ),
     activeVectors: db.prepare(
-      "SELECT id, vec FROM copilot_chunks WHERE project_id = ? AND dims = ? AND lifecycle_status = 'active' AND vec IS NOT NULL"
+      `SELECT id, vec FROM copilot_chunks
+       WHERE project_id = ? AND dims = ?
+         AND (lifecycle_status IS NULL OR lifecycle_status = 'active')
+         AND vec IS NOT NULL`
     ),
     historicalVectors: db.prepare(
       `SELECT id, vec FROM copilot_chunks 
-       WHERE project_id = ? AND dims = ? AND valid_from <= ? AND (valid_to IS NULL OR valid_to > ?) AND vec IS NOT NULL`
+       WHERE project_id = ? AND dims = ?
+         AND (valid_from IS NULL OR valid_from <= ?)
+         AND (valid_to IS NULL OR valid_to > ?)
+         AND vec IS NOT NULL`
     ),
     count: db.prepare("SELECT COUNT(*) AS n FROM copilot_chunks WHERE project_id = ?"),
     countAll: db.prepare("SELECT COUNT(*) AS n FROM copilot_chunks"),
@@ -116,8 +133,23 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
       `SELECT c.id AS id FROM copilot_chunks_fts f JOIN copilot_chunks c ON c.id = f.rowid
        WHERE copilot_chunks_fts MATCH ? AND c.project_id = ? ORDER BY bm25(copilot_chunks_fts) LIMIT ?`
     ),
+    activeFts: db.prepare(
+      `SELECT c.id AS id FROM copilot_chunks_fts f JOIN copilot_chunks c ON c.id = f.rowid
+       WHERE copilot_chunks_fts MATCH ? AND c.project_id = ?
+         AND (c.lifecycle_status IS NULL OR c.lifecycle_status = 'active')
+       ORDER BY bm25(copilot_chunks_fts) LIMIT ?`
+    ),
+    historicalFts: db.prepare(
+      `SELECT c.id AS id FROM copilot_chunks_fts f JOIN copilot_chunks c ON c.id = f.rowid
+       WHERE copilot_chunks_fts MATCH ? AND c.project_id = ?
+         AND (c.valid_from IS NULL OR c.valid_from <= ?)
+         AND (c.valid_to IS NULL OR c.valid_to > ?)
+       ORDER BY bm25(copilot_chunks_fts) LIMIT ?`
+    ),
     chunk: db.prepare(
-      `SELECT c.id, c.file_id, c.ord, c.text, c.meta, c.embed, f.name AS file FROM copilot_chunks c
+      `SELECT c.id, c.file_id, c.ord, c.text, c.meta, c.embed, c.feature_id, c.version, c.lifecycle_status,
+              c.valid_from, c.valid_to, f.name AS file
+       FROM copilot_chunks c
        JOIN copilot_project_files f ON f.id = c.file_id WHERE c.id = ?`
     ),
     projectBytes: db.prepare(
@@ -131,9 +163,6 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
       "SELECT id, project_id, path, name FROM copilot_project_files WHERE status IS NULL OR status IN ('queued','reading','analysing','embedding')"
     ),
   };
-
-  // project id -> { ids, data } kept until the project's chunks change
-  const matrices = new Map();
 
   return {
     file: (id) => q.file.get(id) ?? null,
@@ -173,7 +202,7 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
           q.insertFts.run(id, c.text);
         });
       })();
-      for (const key of matrices.keys()) if (key.startsWith(`${projectId}:`)) matrices.delete(key);
+      invalidateMatrices(projectId);
     },
     removeFile(fileId, projectId) {
       this.replaceChunks(fileId, projectId, [], 0);
@@ -187,34 +216,53 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
       return out;
     },
 
-    // Everything a project holds, as one matrix.
-    matrix(projectId, dims) {
-      const key = `${projectId}:${dims}`;
+    // Project vector matrix. Defaults to active-only chunks to prevent superseded leakage;
+    // pass { includeInactive: true } for full audit/legacy scans or { asOfStart, asOfEnd } for point-in-time.
+    matrix(projectId, dims, { includeInactive = false, asOfStart = null, asOfEnd = null } = {}) {
+      if (asOfStart != null || asOfEnd != null) {
+        const start = Number(asOfStart ?? asOfEnd);
+        const end = Number(asOfEnd ?? asOfStart);
+        const rows = q.historicalVectors.all(projectId, dims, end, start);
+        const data = new Float32Array(rows.length * dims);
+        rows.forEach((r, i) => data.set(fromBuffer(r.vec), i * dims));
+        return { ids: rows.map((r) => r.id), data };
+      }
+      const mode = includeInactive ? "all" : "active";
+      const key = `${projectId}:${dims}:${mode}`;
       if (matrices.has(key)) return matrices.get(key);
-      const rows = q.vectors.all(projectId, dims);
+      const rows = includeInactive
+        ? q.vectors.all(projectId, dims)
+        : q.activeVectors.all(projectId, dims);
       const data = new Float32Array(rows.length * dims);
       rows.forEach((r, i) => data.set(fromBuffer(r.vec), i * dims));
       const m = { ids: rows.map((r) => r.id), data };
       matrices.set(key, m);
       return m;
     },
-    keyword(projectId, text, k = 12) {
+    keyword(projectId, text, k = 12, { includeInactive = false, asOfStart = null, asOfEnd = null } = {}) {
       const query = ftsQuery(text);
       if (!query) return [];
       try {
-        return q.fts.all(query, projectId, k).map((r) => r.id);
+        if (asOfStart != null || asOfEnd != null) {
+          const start = Number(asOfStart ?? asOfEnd);
+          const end = Number(asOfEnd ?? asOfStart);
+          return q.historicalFts.all(query, projectId, end, start, k).map((r) => r.id);
+        }
+        return includeInactive
+          ? q.fts.all(query, projectId, k).map((r) => r.id)
+          : q.activeFts.all(query, projectId, k).map((r) => r.id);
       } catch {
         return []; // a syntax edge case must never break an answer
       }
     },
-    vector(projectId, vec, k = 12) {
-      const m = this.matrix(projectId, vec.length);
+    vector(projectId, vec, k = 12, opts = {}) {
+      const m = this.matrix(projectId, vec.length, opts);
       return m.ids.length ? topK(m, vec, k) : [];
     },
     // Cosine of the given chunks to a query vector (chunks a keyword search found outside the vector top k).
     // -> Map(id -> score); ids not in this project are left out.
-    similarity(projectId, ids, vec) {
-      const m = this.matrix(projectId, vec.length);
+    similarity(projectId, ids, vec, opts = {}) {
+      const m = this.matrix(projectId, vec.length, opts);
       m.row ??= new Map(m.ids.map((id, r) => [id, r]));
       const out = new Map();
       for (const id of ids) {
@@ -246,6 +294,7 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
     // Ready files whose profile is missing or older than `version`.
     staleProfiles: (version) => q.staleProfiles.all(version),
     rrf,
+    invalidateMatrices,
 
     // Phase 2: Temporal Store Engine Integration
     temporal,
@@ -255,6 +304,8 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
       temporal.getActiveFeatureChunks(projectId, featureId),
     getFeatureAt: (projectId, featureId, targetTime) =>
       temporal.getFeatureAt(projectId, featureId, targetTime),
+    getFeatureInRange: (projectId, featureId, rangeStart, rangeEnd) =>
+      temporal.getFeatureInRange(projectId, featureId, rangeStart, rangeEnd),
     getFeatureLineage: (projectId, featureId) =>
       temporal.getFeatureLineage(projectId, featureId),
     supersedeChunk: (predecessorId, successorId, effectiveTime) =>
@@ -267,18 +318,13 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
 
     // Active-only matrix and vector search
     activeMatrix(projectId, dims) {
-      const rows = q.activeVectors.all(projectId, dims);
-      const data = new Float32Array(rows.length * dims);
-      rows.forEach((r, i) => data.set(fromBuffer(r.vec), i * dims));
-      return { ids: rows.map((r) => r.id), data };
+      return this.matrix(projectId, dims, { includeInactive: false });
     },
     // Historical point-in-time matrix
-    historicalMatrix(projectId, dims, targetTime) {
-      const t = Number(targetTime);
-      const rows = q.historicalVectors.all(projectId, dims, t, t);
-      const data = new Float32Array(rows.length * dims);
-      rows.forEach((r, i) => data.set(fromBuffer(r.vec), i * dims));
-      return { ids: rows.map((r) => r.id), data };
+    historicalMatrix(projectId, dims, targetTime, rangeEnd = null) {
+      const start = Number(targetTime);
+      const end = rangeEnd != null ? Number(rangeEnd) : start;
+      return this.matrix(projectId, dims, { asOfStart: start, asOfEnd: end });
     },
     // Phase 3: Incremental Semantic Delta Ingestion
     createDeltaIngest(opts = {}) {

@@ -8,6 +8,8 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { docStanding } = require("./docPrecedence");
+const { normalizeTitle } = require("../core/okf/featureRegistry");
 
 // ---------------------------------------------------------------------------
 // A. Content Normalization and Cryptographic Hashing
@@ -54,6 +56,31 @@ function computeContentHash(text, bodyOnly = "") {
   };
 }
 
+/**
+ * Deterministic zero-LLM Anthropic-style contextual title for embeddings.
+ * Format: "File.md [phase 2, what was built | 2026-10-14] · Parent > Section"
+ */
+function buildContextualTitle({ sourceName, standing = null, effectiveAt = null, hierarchy = [], sectionTitle = "" }) {
+  const resolvedStanding = standing || docStanding({ name: sourceName });
+  const standingParts = [];
+  if (resolvedStanding?.phase) standingParts.push(`phase ${resolvedStanding.phase}`);
+  if (resolvedStanding?.label) standingParts.push(resolvedStanding.label);
+  const dateTag =
+    resolvedStanding?.dateText ||
+    (Number.isFinite(Number(effectiveAt)) && Number(effectiveAt) > 1e11
+      ? new Date(Number(effectiveAt)).toISOString().slice(0, 10)
+      : null);
+  if (dateTag) standingParts.push(dateTag);
+
+  const trail = (Array.isArray(hierarchy) ? hierarchy : [])
+    .filter((h) => h && normalizeTitle(h) !== normalizeTitle(sourceName.replace(/\.[^.]+$/, "")))
+    .slice(-3)
+    .join(" > ");
+  const headingPart = trail || sectionTitle || sourceName;
+  const metaTag = standingParts.length ? ` [${standingParts.join(", ")}]` : "";
+  return `${sourceName}${metaTag} · ${headingPart}`;
+}
+
 // ---------------------------------------------------------------------------
 // B. Section Extraction & Document Hierarchy Parsing
 // ---------------------------------------------------------------------------
@@ -72,13 +99,34 @@ function slugify(text) {
 
 /**
  * Extracts structured sections with hierarchy, parent links, and location metadata.
+ * Collapses consecutive duplicate headings (common in DOCX-to-Markdown output) so
+ * empty stub headings are omitted and sub-sections inherit their true parent heading.
  */
 function extractSections(rawText, { sourceDocumentId = "doc", sourceFilename = "document" } = {}) {
   const text = String(rawText || "")
     .replace(/\r\n?/g, "\n")
     .replace(/\0/g, "");
 
-  const lines = text.split("\n");
+  // Pre-pass: collapse consecutive duplicate markdown headings with only blank lines between them
+  // (e.g. DOCX-to-MD emits "## When it is available" followed by "#### When it is available").
+  // Keeping the second (deeper/true) heading prevents the outer "##" from prematurely popping the parent section.
+  const rawLines = text.split("\n");
+  const lines = [];
+  for (let i = 0; i < rawLines.length; i++) {
+    const m1 = HEADING_RE.exec(rawLines[i]);
+    if (m1) {
+      let j = i + 1;
+      while (j < rawLines.length && rawLines[j].trim() === "") j++;
+      const m2 = j < rawLines.length ? HEADING_RE.exec(rawLines[j]) : null;
+      if (m2 && normalizeTitle(m1[2]) === normalizeTitle(m2[2])) {
+        // Drop the redundant wrapper heading and jump straight to the true heading line
+        i = j - 1;
+        continue;
+      }
+    }
+    lines.push(rawLines[i]);
+  }
+
   const sections = [];
   const headingStack = []; // [{ level, title, section_id }]
 
@@ -100,10 +148,14 @@ function extractSections(rawText, { sourceDocumentId = "doc", sourceFilename = "
 
     const { content_hash, body_hash, normalized_text } = computeContentHash(fullText, bodyText);
 
-    // Parent is the immediate ancestor in headingStack
-    const parent = headingStack.length > 0 ? headingStack[headingStack.length - 1] : null;
+    // Parent is the immediate ancestor above currentHeading in headingStack
+    const parent =
+      currentHeading && headingStack.length > 1
+        ? headingStack[headingStack.length - 2]
+        : !currentHeading && headingStack.length > 0
+          ? headingStack[headingStack.length - 1]
+          : null;
     const hierarchy = headingStack.map((h) => h.title);
-    if (currentHeading) hierarchy.push(currentHeading.title);
 
     const sectionId = currentHeading
       ? `sec_${sectionIndex}_${slugify(headingTitle)}`
@@ -128,6 +180,40 @@ function extractSections(rawText, { sourceDocumentId = "doc", sourceFilename = "
     currentLines = [];
   }
 
+  function enterHeading(level, title) {
+    // Collapse consecutive duplicate headings with no body between them (DOCX-to-MD artifact)
+    if (
+      currentHeading &&
+      currentLines.join("\n").trim() === "" &&
+      normalizeTitle(title) === normalizeTitle(currentHeading.title)
+    ) {
+      headingStack.pop();
+      while (headingStack.length > 0 && headingStack[headingStack.length - 1].level >= level) {
+        headingStack.pop();
+      }
+      currentHeading = {
+        level,
+        title,
+        section_id: currentHeading.section_id,
+      };
+      headingStack.push(currentHeading);
+      return;
+    }
+
+    flushCurrentSection();
+
+    while (headingStack.length > 0 && headingStack[headingStack.length - 1].level >= level) {
+      headingStack.pop();
+    }
+
+    currentHeading = {
+      level,
+      title,
+      section_id: `sec_${sectionIndex}_${slugify(title)}`,
+    };
+    headingStack.push(currentHeading);
+  }
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
@@ -141,42 +227,24 @@ function extractSections(rawText, { sourceDocumentId = "doc", sourceFilename = "
     // Markdown heading check (# Heading)
     const hMatch = HEADING_RE.exec(line);
     if (hMatch) {
-      flushCurrentSection();
-      const level = hMatch[1].length;
-      const title = hMatch[2].trim();
-
-      // Pop stack until parent has smaller level
-      while (headingStack.length > 0 && headingStack[headingStack.length - 1].level >= level) {
-        headingStack.pop();
-      }
-
-      currentHeading = {
-        level,
-        title,
-        section_id: `sec_${sectionIndex}_${slugify(title)}`,
-      };
-      headingStack.push(currentHeading);
+      enterHeading(hMatch[1].length, hMatch[2].trim());
       continue;
     }
 
     // Numbered heading check (e.g. 1.1 Ingestion Architecture)
     const numMatch = NUMBERED_HEADING_RE.exec(line);
-    if (numMatch && (line.startsWith("1.") || line.startsWith("2.") || line.startsWith("3.") || line.startsWith("4.") || line.startsWith("5.") || line.startsWith("6."))) {
-      flushCurrentSection();
+    if (
+      numMatch &&
+      (line.startsWith("1.") ||
+        line.startsWith("2.") ||
+        line.startsWith("3.") ||
+        line.startsWith("4.") ||
+        line.startsWith("5.") ||
+        line.startsWith("6."))
+    ) {
       const numParts = numMatch[1].split(".");
       const level = Math.min(6, numParts.length);
-      const title = `${numMatch[1]} ${numMatch[2].trim()}`;
-
-      while (headingStack.length > 0 && headingStack[headingStack.length - 1].level >= level) {
-        headingStack.pop();
-      }
-
-      currentHeading = {
-        level,
-        title,
-        section_id: `sec_${sectionIndex}_${slugify(title)}`,
-      };
-      headingStack.push(currentHeading);
+      enterHeading(level, `${numMatch[1]} ${numMatch[2].trim()}`);
       continue;
     }
 
@@ -212,9 +280,16 @@ function extractSections(rawText, { sourceDocumentId = "doc", sourceFilename = "
 // C. Canonical Feature Matching
 // ---------------------------------------------------------------------------
 
+function cleanHeadingTitle(title) {
+  return String(title || "")
+    .replace(/\[(?:DEPRECATED|RETIRED|OBSOLETE|DRAFT|PROPOSED|ACTIVE)\]/gi, "")
+    .replace(/\[v?[0-9]+(?:\.[0-9]+)*\]/gi, "")
+    .trim();
+}
+
 /**
  * Matches an extracted section to a registered canonical feature.
- * Precedence: Exact feature_id -> Canonical name -> Alias -> Keyword -> Unmatched.
+ * Precedence: Exact feature_id -> Canonical name -> Alias -> Keyword -> Title-First Score -> Parent Heading -> Body Weighted Score -> Unmatched.
  */
 function matchFeature(section, featureRegistry, projectId = null) {
   if (!featureRegistry || typeof featureRegistry.resolveFeature !== "function") {
@@ -228,13 +303,67 @@ function matchFeature(section, featureRegistry, projectId = null) {
     };
   }
 
-  // Clean bracketed tags such as [DEPRECATED] or [v2.0.0] from title for canonical matching
-  const cleanTitle = String(section.section_title || "")
-    .replace(/\[(?:DEPRECATED|RETIRED|OBSOLETE|DRAFT|PROPOSED|ACTIVE)\]/gi, "")
-    .replace(/\[v?[0-9]+(?:\.[0-9]+)*\]/gi, "")
-    .trim();
+  const cleanTitle = cleanHeadingTitle(section.section_title);
 
-  // Use resolveFeature(cleanTitle || sectionTitle, text, projectId)
+  // First try title-only match (high precision); if title itself doesn't resolve, check ancestor headings before body text
+  const titleOnlyRes = cleanTitle
+    ? featureRegistry.resolveFeature(cleanTitle, projectId)
+    : { matched: false, ambiguous: false };
+
+  if (titleOnlyRes.matched && titleOnlyRes.feature) {
+    let confidence = 0.85;
+    if (titleOnlyRes.matchTier === "exact_feature_id") confidence = 1.0;
+    else if (titleOnlyRes.matchTier === "canonical_name") confidence = 0.95;
+    else if (titleOnlyRes.matchTier === "alias") confidence = 0.92;
+    else if (titleOnlyRes.matchTier === "keyword") confidence = 0.88;
+    else if (titleOnlyRes.matchTier === "title_scored") confidence = 0.86;
+
+    return {
+      feature_id: titleOnlyRes.feature.feature_id,
+      feature_name: titleOnlyRes.feature.canonical_name,
+      matched_by: titleOnlyRes.matchTier,
+      confidence,
+      status: "matched",
+      candidates: [titleOnlyRes.feature.feature_id],
+      feature: titleOnlyRes.feature,
+      currentApproved: titleOnlyRes.currentApproved,
+    };
+  }
+
+  if (titleOnlyRes.ambiguous) {
+    return {
+      feature_id: null,
+      feature_name: null,
+      matched_by: null,
+      confidence: 0,
+      status: "ambiguous",
+      candidates: titleOnlyRes.candidates || [],
+      reason: titleOnlyRes.reason,
+    };
+  }
+
+  // Try parent headings in hierarchy (handles generic sub-sections like "When it is available" under "5. Cancel My Bid")
+  if (Array.isArray(section.hierarchy) && section.hierarchy.length > 1) {
+    for (let i = section.hierarchy.length - 2; i >= 0; i--) {
+      const ancestor = cleanHeadingTitle(section.hierarchy[i]);
+      if (!ancestor) continue;
+      const ancRes = featureRegistry.resolveFeature(ancestor, projectId);
+      if (ancRes.matched && ancRes.feature) {
+        return {
+          feature_id: ancRes.feature.feature_id,
+          feature_name: ancRes.feature.canonical_name,
+          matched_by: "parent_heading",
+          confidence: 0.84,
+          status: "matched",
+          candidates: [ancRes.feature.feature_id],
+          feature: ancRes.feature,
+          currentApproved: ancRes.currentApproved,
+        };
+      }
+    }
+  }
+
+  // Fallback to full title + body weighted resolution
   const res = featureRegistry.resolveFeature(
     cleanTitle || section.section_title,
     section.original_text,
@@ -413,6 +542,11 @@ function createDeltaIngest({
 
   /**
    * Main Entrypoint: processDocument
+   * 4-Pass Batched Pipeline:
+   *   Pass 1: Parse sections, match canonical features, classify deltas against pre-mutation snapshot.
+   *   Pass 2: Bulk vector cache lookup across all approved NEW / MODIFIED (and optional UNMATCHED) sections.
+   *   Pass 3: Single batched embedder.embedDocs() call for all uncached sections (eliminates N sequential HTTP calls).
+   *   Pass 4: Atomic SQLite transaction commit with selective sibling preservation (unchanged chunks stay active).
    */
   async function processDocument({
     projectId,
@@ -424,13 +558,18 @@ function createDeltaIngest({
     dryRun = false,
     proposedVersion = null,
     reason = null,
+    autoIndexUnmatched = Boolean(options.autoIndexUnmatched),
+    embedder: callEmbedder = null,
   }) {
+    const activeEmbedder = callEmbedder || embedder;
     const t0 = now();
     const metrics = {
       parse_ms: 0,
       match_ms: 0,
       classification_ms: 0,
       embedding_ms: 0,
+      embedding_tokens: 0,
+      embedding_cost: 0,
       storage_ms: 0,
       total_ms: 0,
     };
@@ -447,6 +586,7 @@ function createDeltaIngest({
       deprecated_features: 0,
       ambiguous_features: 0,
       unmatched_sections: 0,
+      unmatched_indexed: 0,
       embeddings_created: 0,
       embeddings_reused: 0,
       embeddings_skipped: 0,
@@ -472,6 +612,8 @@ function createDeltaIngest({
         if (document.name) sourceName = document.name;
       }
 
+      const standing = docStanding({ name: sourceName });
+
       // 2. Parse sections
       const tParse = now();
       const sections = extractSections(rawText, {
@@ -481,20 +623,47 @@ function createDeltaIngest({
       metrics.parse_ms = now() - tParse;
       summary.total_sections = sections.length;
 
-      // 3. Process each section through Match -> Classify -> Embed -> Store
+      // -----------------------------------------------------------------------
+      // PASS 1: Match & Classify against pre-mutation snapshot
+      // -----------------------------------------------------------------------
+      const activeSnapshotByFeature = new Map(); // feature_id -> activeChunks[]
+      const unchangedHashesByFeature = new Map(); // feature_id -> Set<hash>
+      const plans = [];
+
+      // Existing active unmatched chunk hashes for this project (to avoid duplicate unmatched inserts on re-ingest)
+      const existingUnmatchedHashes = new Set();
+      if (autoIndexUnmatched && db && typeof db.prepare === "function") {
+        try {
+          const rows = db
+            .prepare(
+              `SELECT hash FROM copilot_chunks
+               WHERE project_id = ? AND feature_id IS NULL
+                 AND (lifecycle_status IS NULL OR lifecycle_status = 'active')
+                 AND hash IS NOT NULL`
+            )
+            .all(projectId);
+          for (const r of rows) existingUnmatchedHashes.add(r.hash);
+        } catch {
+          // Non-fatal on mocked DBs
+        }
+      }
+
       for (const sec of sections) {
-        // A. Match canonical feature
         const tMatch = now();
         const match = matchFeature(sec, featureRegistry, projectId);
         metrics.match_ms += now() - tMatch;
 
-        // B. Query existing active chunks for this feature
         let activeChunks = [];
         if (match.status === "matched" && match.feature_id) {
-          activeChunks = resolvedTemporal.getActiveFeatureChunks(projectId, match.feature_id);
+          if (!activeSnapshotByFeature.has(match.feature_id)) {
+            activeSnapshotByFeature.set(
+              match.feature_id,
+              resolvedTemporal.getActiveFeatureChunks(projectId, match.feature_id)
+            );
+          }
+          activeChunks = activeSnapshotByFeature.get(match.feature_id);
         }
 
-        // C. Classify delta
         const tClass = now();
         const delta = classifySectionDelta({
           section: sec,
@@ -504,19 +673,39 @@ function createDeltaIngest({
         });
         metrics.classification_ms += now() - tClass;
 
-        // Update summary counts
         if (delta.classification === "NEW") summary.new_features++;
-        else if (delta.classification === "UNCHANGED") summary.unchanged_features++;
-        else if (delta.classification === "MODIFIED") summary.modified_features++;
+        else if (delta.classification === "UNCHANGED") {
+          summary.unchanged_features++;
+          if (match.feature_id) {
+            if (!unchangedHashesByFeature.has(match.feature_id)) {
+              unchangedHashesByFeature.set(match.feature_id, new Set());
+            }
+            unchangedHashesByFeature.get(match.feature_id).add(sec.content_hash);
+            unchangedHashesByFeature.get(match.feature_id).add(sec.body_hash);
+          }
+        } else if (delta.classification === "MODIFIED") summary.modified_features++;
         else if (delta.classification === "DEPRECATED") summary.deprecated_features++;
         else if (delta.classification === "AMBIGUOUS") summary.ambiguous_features++;
         else if (delta.classification === "UNMATCHED") summary.unmatched_sections++;
 
-        // Determine target version
         const explicitVer = extractVersionFromText(sec.original_text);
         const priorVer = delta.previous_version || (activeChunks[0]?.version ?? null);
         const nextVer =
           proposedVersion || explicitVer || (priorVer ? bumpSemver(priorVer, "minor") : "1.0.0");
+
+        const contextualTitle = buildContextualTitle({
+          sourceName,
+          standing,
+          effectiveAt: effTime,
+          hierarchy: sec.hierarchy,
+          sectionTitle: sec.section_title,
+        });
+
+        const shouldAutoIndex =
+          autoIndexUnmatched &&
+          (delta.classification === "UNMATCHED" || delta.classification === "AMBIGUOUS") &&
+          sec.body_text.trim().length >= 20 &&
+          !existingUnmatchedHashes.has(sec.content_hash);
 
         const changeRecord = {
           section_id: sec.section_id,
@@ -524,7 +713,8 @@ function createDeltaIngest({
           feature_name: match.feature_name,
           classification: delta.classification,
           previous_version: priorVer,
-          proposed_version: delta.classification === "MODIFIED" || delta.classification === "NEW" ? nextVer : priorVer,
+          proposed_version:
+            delta.classification === "MODIFIED" || delta.classification === "NEW" ? nextVer : priorVer,
           content_hash: sec.content_hash,
           matched_by: match.matched_by,
           approval_status: approved ? "approved" : "draft",
@@ -536,62 +726,158 @@ function createDeltaIngest({
           },
         };
 
-        // 4. Ingestion / Embedding / Storage Execution
-        if (!dryRun) {
+        plans.push({
+          sec,
+          match,
+          delta,
+          activeChunks,
+          nextVer,
+          contextualTitle,
+          shouldAutoIndex,
+          changeRecord,
+        });
+      }
+
+      if (dryRun) {
+        for (const p of plans) {
+          if (p.delta.classification === "UNCHANGED") summary.embeddings_reused++;
+          else summary.embeddings_skipped++;
+          p.changeRecord.action_taken = "dry_run_proposed";
+          changes.push(p.changeRecord);
+        }
+        metrics.total_ms = now() - t0;
+        return {
+          ingestion_id: ingestionId,
+          project_id: projectId,
+          source_document: sourceName,
+          effective_at: effTime,
+          status: "dry_run",
+          summary,
+          changes,
+          warnings,
+          errors,
+          metrics,
+        };
+      }
+
+      // -----------------------------------------------------------------------
+      // PASS 2: Bulk Vector Cache Lookup across all sections needing embeddings
+      // -----------------------------------------------------------------------
+      const dims = activeEmbedder?.dims || 768;
+      const needEmbedPlans = plans.filter((p) => {
+        if (!approved) return false;
+        if (p.delta.classification === "NEW" || p.delta.classification === "MODIFIED") return true;
+        if (p.shouldAutoIndex) return true;
+        return false;
+      });
+
+      const cachedByHash = new Map();
+      if (needEmbedPlans.length > 0 && ragStore && typeof ragStore.cachedVectors === "function") {
+        const lookupHashes = [...new Set(needEmbedPlans.map((p) => p.sec.content_hash))];
+        const cached = ragStore.cachedVectors(lookupHashes, dims);
+        for (const [h, vec] of cached.entries()) {
+          cachedByHash.set(h, vec);
+        }
+      }
+
+      // -----------------------------------------------------------------------
+      // PASS 3: Single Batched embedDocs() call for all uncached sections
+      // -----------------------------------------------------------------------
+      const toEmbedByHash = new Map(); // content_hash -> { title, text }
+      for (const p of needEmbedPlans) {
+        if (cachedByHash.has(p.sec.content_hash)) continue;
+        if (!toEmbedByHash.has(p.sec.content_hash)) {
+          toEmbedByHash.set(p.sec.content_hash, {
+            title: p.contextualTitle,
+            text: p.sec.original_text,
+          });
+        }
+      }
+
+      const freshVectorsByHash = new Map();
+      if (toEmbedByHash.size > 0 && activeEmbedder && typeof activeEmbedder.embedDocs === "function") {
+        const entries = [...toEmbedByHash.entries()];
+        const tEmb = now();
+        const embRes = await activeEmbedder.embedDocs(entries.map(([, doc]) => doc));
+        metrics.embedding_ms += now() - tEmb;
+        metrics.embedding_tokens += embRes?.tokens || 0;
+        metrics.embedding_cost += embRes?.cost || 0;
+        const vecs = embRes?.vectors || [];
+        entries.forEach(([h], idx) => {
+          if (vecs[idx]) freshVectorsByHash.set(h, vecs[idx]);
+        });
+      }
+
+      // -----------------------------------------------------------------------
+      // PASS 4: Atomic SQLite Transaction Commit with Selective Supersession
+      // -----------------------------------------------------------------------
+      const tStore = now();
+      const executeWrites = () => {
+        const activatedFeatureIds = new Set();
+
+        for (const p of plans) {
+          const { sec, match, delta, activeChunks, nextVer, contextualTitle, shouldAutoIndex, changeRecord } = p;
+          const chunkMeta = {
+            section_id: sec.section_id,
+            title: sec.section_title,
+            heading: sec.section_title,
+            hierarchy: sec.hierarchy,
+            contextual_title: contextualTitle,
+            source: sourceName,
+          };
+
           if (delta.classification === "UNCHANGED") {
             summary.embeddings_reused++;
             changeRecord.action_taken = "reused";
           } else if (delta.classification === "MODIFIED") {
             if (approved) {
-              // Embedding step: check cache first
-              let vec = null;
-              const dims = embedder?.dims || 768;
-              if (ragStore && typeof ragStore.cachedVectors === "function") {
-                const cached = ragStore.cachedVectors([sec.content_hash], dims);
-                if (cached.has(sec.content_hash)) {
-                  vec = cached.get(sec.content_hash);
-                  summary.embeddings_reused++;
-                }
-              }
-
-              if (!vec && embedder && typeof embedder.embedDocs === "function") {
-                const tEmb = now();
-                const embRes = await embedder.embedDocs([
-                  { title: `${sourceName} · ${sec.section_title}`, text: sec.original_text },
-                ]);
-                metrics.embedding_ms += now() - tEmb;
-                vec = embRes.vectors?.[0] || null;
+              let vec = cachedByHash.get(sec.content_hash) || null;
+              if (vec) {
+                summary.embeddings_reused++;
+              } else if (freshVectorsByHash.has(sec.content_hash)) {
+                vec = freshVectorsByHash.get(sec.content_hash);
                 summary.embeddings_created++;
-              } else if (!vec) {
+              } else {
                 summary.embeddings_skipped++;
               }
 
-              // Transactional activation
-              const tStore = now();
-              resolvedTemporal.activateSuccessorVersion({
-                predecessorId: delta.predecessor_chunk_id,
-                newChunkData: {
+              if (!activatedFeatureIds.has(match.feature_id)) {
+                resolvedTemporal.activateSuccessorVersion({
+                  predecessorId: delta.predecessor_chunk_id,
+                  newChunkData: {
+                    file_id: fileId,
+                    project_id: projectId,
+                    feature_id: match.feature_id,
+                    version: nextVer,
+                    text: sec.original_text,
+                    hash: sec.content_hash,
+                    vec,
+                    dims: vec ? vec.length : null,
+                    meta: chunkMeta,
+                  },
+                  effectiveTime: effTime,
+                  preserveUnchangedHashes: unchangedHashesByFeature.get(match.feature_id) || null,
+                });
+                activatedFeatureIds.add(match.feature_id);
+              } else {
+                // Additional sibling section for the same feature within the same document
+                resolvedTemporal.insertTemporalChunk({
                   file_id: fileId,
                   project_id: projectId,
                   feature_id: match.feature_id,
                   version: nextVer,
+                  lifecycle_status: "active",
                   text: sec.original_text,
                   hash: sec.content_hash,
                   vec,
                   dims: vec ? vec.length : null,
-                  meta: {
-                    section_id: sec.section_id,
-                    title: sec.section_title,
-                    source: sourceName,
-                  },
-                },
-                effectiveTime: effTime,
-              });
-              metrics.storage_ms += now() - tStore;
+                  valid_from: effTime,
+                  valid_to: null,
+                  meta: chunkMeta,
+                });
+              }
               changeRecord.action_taken = "activated";
             } else {
-              // Unapproved modification -> store as draft
-              const tStore = now();
               resolvedTemporal.insertTemporalChunk({
                 file_id: fileId,
                 project_id: projectId,
@@ -602,31 +888,23 @@ function createDeltaIngest({
                 hash: sec.content_hash,
                 valid_from: effTime,
                 valid_to: null,
-                meta: {
-                  section_id: sec.section_id,
-                  title: sec.section_title,
-                  source: sourceName,
-                  note: "Pending approval",
-                },
+                meta: { ...chunkMeta, note: "Pending approval" },
               });
-              metrics.storage_ms += now() - tStore;
               summary.embeddings_skipped++;
               changeRecord.action_taken = "draft_stored";
             }
           } else if (delta.classification === "NEW") {
             if (approved) {
-              let vec = null;
-              if (embedder && typeof embedder.embedDocs === "function") {
-                const tEmb = now();
-                const embRes = await embedder.embedDocs([
-                  { title: `${sourceName} · ${sec.section_title}`, text: sec.original_text },
-                ]);
-                metrics.embedding_ms += now() - tEmb;
-                vec = embRes.vectors?.[0] || null;
+              let vec = cachedByHash.get(sec.content_hash) || null;
+              if (vec) {
+                summary.embeddings_reused++;
+              } else if (freshVectorsByHash.has(sec.content_hash)) {
+                vec = freshVectorsByHash.get(sec.content_hash);
                 summary.embeddings_created++;
+              } else {
+                summary.embeddings_skipped++;
               }
 
-              const tStore = now();
               resolvedTemporal.insertTemporalChunk({
                 file_id: fileId,
                 project_id: projectId,
@@ -639,12 +917,10 @@ function createDeltaIngest({
                 dims: vec ? vec.length : null,
                 valid_from: effTime,
                 valid_to: null,
-                meta: { section_id: sec.section_id, title: sec.section_title, source: sourceName },
+                meta: chunkMeta,
               });
-              metrics.storage_ms += now() - tStore;
               changeRecord.action_taken = "activated";
             } else {
-              const tStore = now();
               resolvedTemporal.insertTemporalChunk({
                 file_id: fileId,
                 project_id: projectId,
@@ -655,24 +931,16 @@ function createDeltaIngest({
                 hash: sec.content_hash,
                 valid_from: effTime,
                 valid_to: null,
-                meta: {
-                  section_id: sec.section_id,
-                  title: sec.section_title,
-                  source: sourceName,
-                  note: "Draft requirement pending approval",
-                },
+                meta: { ...chunkMeta, note: "Draft requirement pending approval" },
               });
-              metrics.storage_ms += now() - tStore;
               summary.embeddings_skipped++;
               changeRecord.action_taken = "draft_stored";
             }
           } else if (delta.classification === "DEPRECATED") {
             if (approved) {
-              const tStore = now();
               for (const c of activeChunks) {
                 resolvedTemporal.deprecateChunk(c.id, effTime);
               }
-              metrics.storage_ms += now() - tStore;
               changeRecord.action_taken = "deprecated";
             } else {
               warnings.push(
@@ -681,24 +949,52 @@ function createDeltaIngest({
               changeRecord.action_taken = "pending_deprecation";
             }
             summary.embeddings_skipped++;
+          } else if (shouldAutoIndex && approved) {
+            let vec = cachedByHash.get(sec.content_hash) || null;
+            if (vec) {
+              summary.embeddings_reused++;
+            } else if (freshVectorsByHash.has(sec.content_hash)) {
+              vec = freshVectorsByHash.get(sec.content_hash);
+              summary.embeddings_created++;
+            } else {
+              summary.embeddings_skipped++;
+            }
+
+            resolvedTemporal.insertTemporalChunk({
+              file_id: fileId,
+              project_id: projectId,
+              feature_id: null,
+              version: null,
+              lifecycle_status: "active",
+              text: sec.original_text,
+              hash: sec.content_hash,
+              vec,
+              dims: vec ? vec.length : null,
+              valid_from: effTime,
+              valid_to: null,
+              meta: chunkMeta,
+            });
+            existingUnmatchedHashes.add(sec.content_hash);
+            summary.unmatched_indexed++;
+            changeRecord.action_taken = "indexed_unmatched";
+          } else if (autoIndexUnmatched && existingUnmatchedHashes.has(sec.content_hash)) {
+            summary.embeddings_reused++;
+            changeRecord.action_taken = "reused";
           } else {
             summary.embeddings_skipped++;
             changeRecord.action_taken = "none";
           }
-        } else {
-          // Dry Run: skip execution, just estimate embeddings
-          if (delta.classification === "UNCHANGED") summary.embeddings_reused++;
-          else if (delta.classification === "MODIFIED" || delta.classification === "NEW") {
-            summary.embeddings_skipped++;
-          } else {
-            summary.embeddings_skipped++;
-          }
-          changeRecord.action_taken = "dry_run_proposed";
+
+          changes.push(changeRecord);
         }
+      };
 
-        changes.push(changeRecord);
+      if (db && typeof db.transaction === "function") {
+        db.transaction(executeWrites)();
+      } else {
+        executeWrites();
       }
-
+      metrics.storage_ms += now() - tStore;
       metrics.total_ms = now() - t0;
 
       return {
@@ -706,7 +1002,7 @@ function createDeltaIngest({
         project_id: projectId,
         source_document: sourceName,
         effective_at: effTime,
-        status: dryRun ? "dry_run" : "success",
+        status: "success",
         summary,
         changes,
         warnings,
@@ -735,6 +1031,7 @@ function createDeltaIngest({
     extractSections,
     normalizeContent,
     computeContentHash,
+    buildContextualTitle,
     matchFeature: (section, projId = null) => matchFeature(section, featureRegistry, projId),
     classifySectionDelta,
     processDocument,
@@ -746,6 +1043,7 @@ module.exports = {
   createDeltaIngest,
   normalizeContent,
   computeContentHash,
+  buildContextualTitle,
   extractSections,
   matchFeature,
   classifySectionDelta,

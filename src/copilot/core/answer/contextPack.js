@@ -293,16 +293,30 @@ function buildEvolutionBanner(before, after, options = {}) {
     `Version ${before.version || "1.0.0"} (Status: ${(before.authority?.lifecycle_status || before.lifecycle || "SUPERSEDED").toUpperCase()})`,
     `Source: ${before.source?.document_name || before.source_doc || "Baseline Document"}`,
     (before.content || before.text || "").trim(),
-    "",
-    "AFTER:",
-    `Version ${after.version || "2.0.0"} (Status: ${(after.authority?.lifecycle_status || after.lifecycle || "ACTIVE").toUpperCase()})`,
-    `Source: ${after.source?.document_name || after.source_doc || "Successor Document"}`,
-    (after.content || after.text || "").trim(),
-    "",
-    "CHANGE:",
-    reason,
-    "========================================================",
   ];
+
+  const intermediates = Array.isArray(options.intermediates) ? options.intermediates : [];
+  for (const mid of intermediates) {
+    lines.push("");
+    lines.push("INTERMEDIATE:");
+    lines.push(
+      `Version ${mid.version || "1.1.0"} (Status: ${(mid.authority?.lifecycle_status || mid.lifecycle || "SUPERSEDED").toUpperCase()})`
+    );
+    lines.push(`Source: ${mid.source?.document_name || mid.source_doc || "Intermediate Document"}`);
+    lines.push((mid.content || mid.text || "").trim());
+  }
+
+  lines.push("");
+  lines.push("AFTER:");
+  lines.push(
+    `Version ${after.version || "2.0.0"} (Status: ${(after.authority?.lifecycle_status || after.lifecycle || "ACTIVE").toUpperCase()})`
+  );
+  lines.push(`Source: ${after.source?.document_name || after.source_doc || "Successor Document"}`);
+  lines.push((after.content || after.text || "").trim());
+  lines.push("");
+  lines.push("CHANGE:");
+  lines.push(reason);
+  lines.push("========================================================");
 
   return lines.join("\n");
 }
@@ -614,10 +628,11 @@ function assembleTemporalContext({
   // 2. Evolution Case (DIFF_EVOLUTION)
   if (effectiveIntent === "DIFF_EVOLUTION" && res?.evolution?.length) {
     const before = res.evolution.find((e) => e.role === "BEFORE") || res.evolution[0];
-    const after = res.evolution.find((e) => e.role === "AFTER") || res.evolution[1];
+    const after = res.evolution.find((e) => e.role === "AFTER") || res.evolution[res.evolution.length - 1];
+    const intermediates = res.evolution.filter((e) => e.role === "INTERMEDIATE");
 
-    if (before && after) {
-      const evoBlock = buildEvolutionBanner(before, after);
+    if (before && after && before !== after) {
+      const evoBlock = buildEvolutionBanner(before, after, { intermediates });
       // Atomic pair check against budget
       if (evoBlock.length > budget) {
         sections.push(
@@ -725,23 +740,37 @@ function assembleTemporalContext({
     sections.push(REQUIREMENT_VS_IMPLEMENTATION_NOTICE);
   }
 
-  // Render Authoritative Units Atomically
+  // Allocate budget to Authoritative blocks FIRST (never drop authoritative for supporting),
+  // then emit in Recency-Anchored Order: Supporting first, Authoritative LAST (closest to question).
   let usedChars = sections.join("\n\n").length;
+  const authoritativeBlocks = [];
   for (const item of assembledItems) {
     const bannerBlock = buildEvidenceBanner(item);
-    if (usedChars + bannerBlock.length <= budget || sections.length <= 2) {
-      sections.push(bannerBlock);
+    if (usedChars + bannerBlock.length <= budget || authoritativeBlocks.length === 0) {
+      authoritativeBlocks.push(bannerBlock);
       usedChars += bannerBlock.length;
     }
   }
 
-  // Render Supporting Units (lower priority, truncated first)
+  const supportingBlocks = [];
   for (const sup of supportingItems) {
     const supBlock = `[SUPPORTING EVIDENCE]\nFile: ${sup.source?.document_name || sup.source_doc || "Project File"}${sup.source?.section ? ` · ${sup.source.section}` : ""}\n\n${(sup.content || sup.text || "").trim()}`;
     if (usedChars + supBlock.length <= budget) {
-      sections.push(supBlock);
+      supportingBlocks.push(supBlock);
       usedChars += supBlock.length;
     }
+  }
+
+  for (const supBlock of supportingBlocks) {
+    sections.push(supBlock);
+  }
+  if (supportingBlocks.length > 0 && authoritativeBlocks.length > 0) {
+    sections.push(
+      "[PRECEDENCE RULE]\nThe [AUTHORITATIVE EVIDENCE] below is the current approved truth and overrides any older or conflicting supporting notes above."
+    );
+  }
+  for (const authBlock of authoritativeBlocks) {
+    sections.push(authBlock);
   }
 
   const evalReport = evaluateContextIntegrity({

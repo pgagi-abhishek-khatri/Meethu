@@ -423,6 +423,14 @@ function createEngine({
     job.queued = false;
     s.specs.set(job.id, { spec, threadId: thread.id, topic: job.topic });
     if (s.specs.size > MAX_SPECS) s.specs.delete(s.specs.keys().next().value);
+    const preOkfClass =
+      !spec.ragGate && okf?.registry?.hasBundle?.() && okf?.router?.classifyQuery
+        ? okf.router.classifyQuery({ query: spec.focus, spec, registry: okf.registry })
+        : null;
+    const okfNeedsPrepare = preOkfClass
+      ? preOkfClass.route === "okf" || preOkfClass.route === "mixed"
+      : Boolean(okf?.registry?.hasBundle?.());
+
     const handle = s.runner.run({
       id: job.id,
       ...spec,
@@ -441,9 +449,43 @@ function createEngine({
       // The moment needs project or canonical documents: find and route the matching passages before the model is called.
       // Runs inside the card's own time; the question's embedding was usually warmed while the decider ran.
       prepare:
-        spec.ragGate || ((spec.project || spec.projectAuto) && hasIndex()) || okf?.registry?.hasBundle?.()
+        spec.ragGate || ((spec.project || spec.projectAuto) && hasIndex()) || okfNeedsPrepare
           ? async () => {
+              // Fast-path: if the query unambiguously targets a canonical OKF document (OKF-XXXX / canonical title)
+              // and does not require meeting/project RAG, skip Gemma query expansion and vector search completely.
+              if (
+                preOkfClass &&
+                preOkfClass.route === "okf" &&
+                Array.isArray(preOkfClass.matched_doc_ids) &&
+                preOkfClass.matched_doc_ids.length > 0
+              ) {
+                const routed = await okf.router.routeContext({
+                  query: spec.focus,
+                  spec,
+                  registry: okf.registry,
+                  ragResult: null,
+                  budget: spec.deep ? 7000 : 2800,
+                });
+                if (routed.passages) {
+                  trace({
+                    type: "okf_route",
+                    id: job.id,
+                    route: routed.route,
+                    confidence: routed.classification.confidence,
+                    reason: routed.classification.reason,
+                    matchedDocIds: routed.classification.matched_doc_ids,
+                    matchedSignals: routed.classification.matched_signals,
+                    fallback: routed.fallback,
+                    latencyMs: routed.latencyMs,
+                    classifierVersion: routed.classification.classifier_version,
+                    provenance: routed.provenance || null,
+                  });
+                  return { passages: routed.passages, files: routed.files };
+                }
+              }
+
               let ragResult = null;
+              let resolvedByTemporal = false;
               if (spec.ragGate) {
                 ragResult = await gatedContext(job, spec);
               } else if ((spec.project || spec.projectAuto) && hasIndex()) {
@@ -473,7 +515,14 @@ function createEngine({
                   used: r.used, // file, page/heading, cosine, keyword rank
                   passages: r.text,
                 });
+                resolvedByTemporal = Boolean(r.temporalRouting?.passages);
                 ragResult = { text: r.text, used: r.used, files: [...new Set(r.used.map((u) => u.file))] };
+              }
+
+              // If temporalRouter already resolved authoritative project chunks from SQLite, return directly
+              // so okf.router does not truncate them against a short YAML metadata summary.
+              if (resolvedByTemporal && ragResult?.text) {
+                return { passages: ragResult.text, files: ragResult.files || [] };
               }
 
               if (okf && okf.router && okf.registry) {

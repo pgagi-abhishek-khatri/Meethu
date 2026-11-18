@@ -122,6 +122,7 @@ function createRetriever({
         try {
           const trRes = await temporalRouter.routeTemporalQuery({
             projectId: ids[0],
+            projectIds: ids,
             query: q,
             asOf,
             version,
@@ -134,16 +135,65 @@ function createRetriever({
         }
       }
 
+      // Fast-path isolation for HISTORICAL_STATE and DIFF_EVOLUTION:
+      // Never pollute a point-in-time or version-diff query with unrelated active vector chunks.
+      if (
+        temporalRouting &&
+        temporalRouting.passages &&
+        (temporalRouting.plan?.intent === "HISTORICAL_STATE" ||
+          temporalRouting.plan?.intent === "DIFF_EVOLUTION")
+      ) {
+        const usedInfo = (temporalRouting.evidence || []).map((ev) => ({
+          file: ev.source,
+          where: `v${ev.version} (${ev.role})`,
+          score: 1.0,
+          kw: 0,
+          temporal: true,
+          role: ev.role,
+          version: ev.version,
+        }));
+        const text = `Authoritative temporal passages from the USER's project files:\n\n${temporalRouting.passages}`;
+        return done({
+          log: {
+            mode: "temporal",
+            embedMs: 0,
+            expandMs: null,
+            expandError: null,
+            embedError: null,
+            queries: [q],
+            cost: 0,
+            candidates: usedInfo.length,
+            kept: usedInfo,
+            chars: temporalRouting.passages.length,
+            reason: null,
+          },
+          out: {
+            text,
+            queries: [q],
+            cost: 0,
+            expandMs: null,
+            embedMs: 0,
+            used: usedInfo,
+            skipped: null,
+            authoritative: temporalRouting,
+            temporalRouting,
+          },
+        });
+      }
+
       // Phase 4: Authoritative Lookup Service (ALS) runs BEFORE vector retrieval (fallback if no temporal routing)
       let authoritativeResult = null;
       if (!temporalRouting && als && typeof als.lookup === "function" && ids.length) {
         try {
-          const alsRes = await als.lookup({
-            projectId: ids[0],
-            query: q,
-          });
-          if (alsRes && alsRes.status === "RESOLVED" && alsRes.facts?.length) {
-            authoritativeResult = alsRes;
+          for (const pid of ids) {
+            const alsRes = await als.lookup({
+              projectId: pid,
+              query: q,
+            });
+            if (alsRes && alsRes.status === "RESOLVED" && alsRes.facts?.length) {
+              authoritativeResult = alsRes;
+              break;
+            }
           }
         } catch (e) {
           log({ event: "als_error", error: e.message });
@@ -221,7 +271,7 @@ function createRetriever({
       };
       // Unprompted look: only the moment's own words decide whether anything is close enough to look further,
       // so a moment with nothing in the files never waits for the query model.
-      if (minScore) {
+      if (minScore && !temporalRouting && !authoritativeResult) {
         if (!rawEmbed) return weak(-1, { mode: "keyword", ms: null, error: null });
         const m0 = now();
         const raw = await Promise.race([rawEmbed, timeout(embedWaitMs, slow)]);
@@ -337,7 +387,7 @@ function createRetriever({
       const candidates = fused.length;
       const best = Math.max(-1, ...cos.values());
       // Unprompted look (the decider did not ask for the files): only when something matches this closely.
-      if (minScore && best < minScore)
+      if (minScore && best < minScore && !temporalRouting && !authoritativeResult)
         return done({
           log: {
             mode,
@@ -398,13 +448,35 @@ function createRetriever({
         slots.forEach((slot, j) => (picked[slot] = ranked[j]));
       }
 
+      // Deduplicate chunks already covered by temporalRouting / authoritativeResult, and
+      // suppress lower-standing "proposal" chunks when an authoritative "built" feature already resolved.
+      const authChunkIds = new Set([
+        ...(temporalRouting?.evidence || []).map((ev) => ev.chunk_id).filter(Boolean),
+        ...(authoritativeResult?.facts || []).map((f) => f.chunk_id).filter(Boolean),
+      ]);
+      const authSources = new Set([
+        ...(temporalRouting?.evidence || []).map((ev) => ev.source).filter(Boolean),
+        ...(authoritativeResult?.facts || []).map((f) => f.source_name).filter(Boolean),
+      ]);
+      const authHasBuiltDoc = [...authSources].some((src) => standing.get(src)?.kind === "built");
+
       let used = 0;
       const parts = [];
       const usedInfo = [];
       const shownStandings = new Map();
+      // When authoritative evidence resolved, cap supporting vector hits to stay compact and avoid noise
+      const supportingCharLimit =
+        temporalRouting?.evidence?.length || authoritativeResult?.facts?.length
+          ? Math.min(lim.chars, 1600)
+          : lim.chars;
+
       for (const f of picked) {
+        if (authChunkIds.has(f.id)) continue;
         const c = rag.chunk(f.id);
         if (!c) continue;
+        const s = standing.get(c.file);
+        // Suppress lower-standing original proposal chunks when authoritative as-built evidence already answered the feature
+        if (authHasBuiltDoc && s?.kind === "proposal") continue;
         const where =
           c.meta.page != null
             ? `p.${c.meta.page}`
@@ -412,9 +484,8 @@ function createRetriever({
               ? mmss(c.meta.start)
               : c.meta.heading || "";
         const body = clip(c.text, 900);
-        if (used + body.length > lim.chars && parts.length) break;
+        if (used + body.length > supportingCharLimit && parts.length) break;
         used += body.length;
-        const s = standing.get(c.file);
         if (s) shownStandings.set(c.file, s);
         parts.push(`[${c.file}${where ? ` · ${where}` : ""}${s ? ` · ${passageTag(s)}` : ""}]\n${body}`);
         usedInfo.push({
@@ -426,8 +497,10 @@ function createRetriever({
         });
       }
       const note = precedenceNote([...shownStandings.values()]);
+      let recencyAnchor = "";
       if (temporalRouting && temporalRouting.passages) {
-        parts.unshift(temporalRouting.passages);
+        const clippedTemporal = clip(temporalRouting.passages, Math.max(lim.chars, 3800));
+        parts.unshift(clippedTemporal);
         if (temporalRouting.evidence && temporalRouting.evidence.length) {
           for (let i = temporalRouting.evidence.length - 1; i >= 0; i--) {
             const ev = temporalRouting.evidence[i];
@@ -440,6 +513,10 @@ function createRetriever({
               role: ev.role,
               version: ev.version,
             });
+          }
+          if (parts.length > 1) {
+            const primary = temporalRouting.evidence[0];
+            recencyAnchor = `[PRECEDENCE REMINDER: Use the authoritative ${primary.source} (v${primary.version}) specification above as the current ground truth if any supporting passage disagrees.]`;
           }
         }
       } else if (authoritativeResult && authoritativeResult.facts?.length) {
@@ -456,7 +533,12 @@ function createRetriever({
             authoritative: true,
           });
         }
+        if (parts.length > authoritativeResult.facts.length) {
+          recencyAnchor = `[PRECEDENCE REMINDER: Use the CANONICAL AUTHORITATIVE specification above as the current ground truth if any supporting passage disagrees.]`;
+        }
       }
+
+      if (recencyAnchor) parts.push(recencyAnchor);
 
       const text = parts.length
         ? `Passages from the USER's project files that match this moment (use them when they answer it; say where a fact comes from in plain words, like "from the pricing sheet"; never quote a path):\n\n${note ? `${note}\n\n` : ""}${parts.join("\n\n")}`

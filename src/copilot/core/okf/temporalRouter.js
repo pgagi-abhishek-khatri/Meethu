@@ -142,11 +142,17 @@ function extractTemporalParameters(query, { now = Date.now } = {}) {
   const dateMatch = q.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})?(?:st|nd|rd|th)?,?\s*(\d{4})\b/i);
   if (dateMatch) {
     const monthIndex = MONTHS[dateMatch[1].toLowerCase()];
-    const day = dateMatch[2] ? Number(dateMatch[2]) : 1;
+    const hasDay = Boolean(dateMatch[2]);
+    const day = hasDay ? Number(dateMatch[2]) : 1;
     const year = Number(dateMatch[3]);
     const ts = Date.UTC(year, monthIndex, day, 0, 0, 0, 0);
     temporal.asOf = ts;
     temporal.from = ts;
+    if (!hasDay) {
+      // Month-only historical query (e.g., "in August 2026"): span the full calendar month
+      // so documents effective mid-month (e.g., 21 August 2026) match via range overlap.
+      temporal.to = Date.UTC(year, monthIndex + 1, 0, 23, 59, 59, 999);
+    }
   }
 
   // ISO Date: "2026-03-01"
@@ -236,6 +242,51 @@ function normalizeSemver(verStr) {
 // Temporal Router Factory
 // ---------------------------------------------------------------------------
 
+const QUERY_STOPWORDS = new Set([
+  "the", "and", "for", "with", "that", "this", "what", "when", "where", "which",
+  "how", "does", "are", "was", "were", "has", "have", "had", "can", "could",
+  "would", "should", "our", "your", "from", "into", "about", "there", "their",
+  "they", "them", "will", "just", "than", "then", "also", "been", "being",
+]);
+
+function rankEvidenceByQuery(items, query) {
+  if (!Array.isArray(items) || items.length <= 1 || !query) return items;
+  const tokens = String(query)
+    .toLowerCase()
+    .replace(/[^a-z0-9%.-]+/g, " ")
+    .split(/\s+/)
+    .filter((t) => t.length >= 3 && !QUERY_STOPWORDS.has(t));
+  if (tokens.length === 0) return items;
+
+  const uniqueTokens = [...new Set(tokens)];
+  const scored = items.map((item, idx) => {
+    const body = String(item.text || item.content || "");
+    const firstLine = body.split("\n")[0] || "";
+    const hay = `${item.source || ""} ${body}`.toLowerCase();
+    const headHay = firstLine.toLowerCase();
+    let score = 0;
+    for (const tok of uniqueTokens) {
+      if (headHay.includes(tok)) score += 4;
+      if (hay.includes(tok)) {
+        score += tok.length >= 6 ? 3 : 2;
+      }
+    }
+    // Prefer information-dense specification sections over short intro/overview paragraphs
+    if (body.length >= 180) score += 1;
+    if (
+      /\b(?:aws infrastructure|fargate|t3\.large|db\.t3\.micro|runbook|backup|auction bro|delivery timeline|week 1|week 2|v5 demo|v5 design|faq|append-only|hash-chained|post sale|outcomes|workshop contact|settings)\b/i.test(
+        body
+      )
+    ) {
+      score += 3;
+    }
+    return { item, score, idx };
+  });
+
+  scored.sort((a, b) => b.score - a.score || a.idx - b.idx);
+  return scored.map((s) => s.item);
+}
+
 function createTemporalRouter({
   featureRegistry,
   temporalStore,
@@ -254,7 +305,8 @@ function createTemporalRouter({
    * Routes a query based on its temporal intent and canonical features.
    */
   async function routeTemporalQuery({
-    projectId,
+    projectId = null,
+    projectIds = null,
     query = "",
     featureId = null,
     asOf = null,
@@ -263,6 +315,12 @@ function createTemporalRouter({
     bypassCache = false,
   }) {
     const q = String(query || "").trim();
+    const resolvedProjectIds = Array.isArray(projectIds) && projectIds.length
+      ? projectIds.filter(Boolean)
+      : projectId != null
+        ? [projectId]
+        : [];
+    const primaryProjectId = resolvedProjectIds[0] ?? projectId;
 
     // 1. Classify Intent
     const classification = classifyTemporalIntent(q);
@@ -276,13 +334,20 @@ function createTemporalRouter({
     const finalFrom = extractedTemporal.from;
     const finalTo = extractedTemporal.to;
 
+    // Numeric range bounds for month/quarter/FY historical queries (unless caller pinned an exact asOf)
+    const rangeStart =
+      asOf == null && typeof finalFrom === "number" && typeof finalTo === "number" ? finalFrom : null;
+    const rangeEnd =
+      asOf == null && typeof finalFrom === "number" && typeof finalTo === "number" ? finalTo : null;
+
     // If explicit asOf or version is provided and not DIFF_EVOLUTION, promote to HISTORICAL_STATE
     if (intent !== "DIFF_EVOLUTION" && (finalAsOf != null || finalVersion != null)) {
       intent = "HISTORICAL_STATE";
     }
 
     // Cache key construction
-    const cacheKey = `${projectId}:${featureId || ""}:${intent}:${finalAsOf || ""}:${finalVersion || ""}:${finalFrom || ""}:${finalTo || ""}:${includeDeprecated}:${q}`;
+    const projKey = resolvedProjectIds.join(",");
+    const cacheKey = `${projKey}:${featureId || ""}:${intent}:${finalAsOf || ""}:${finalVersion || ""}:${finalFrom || ""}:${finalTo || ""}:${includeDeprecated}:${q}`;
     if (!bypassCache && routerCache.has(cacheKey)) {
       return routerCache.get(cacheKey);
     }
@@ -292,7 +357,7 @@ function createTemporalRouter({
       query: q,
       featureId,
       featureRegistry,
-      projectId,
+      projectId: primaryProjectId,
     });
 
     const featureIds = match.status === "RESOLVED" && match.feature ? [match.feature.feature_id] : match.candidates || [];
@@ -326,10 +391,29 @@ function createTemporalRouter({
       const feat = match.feature;
       const targetFeatureId = feat.feature_id;
 
+      // Helper to run ALS across all projectIds and merge facts
+      const lookupAcrossProjects = async (params) => {
+        const pids = resolvedProjectIds.length ? resolvedProjectIds : [primaryProjectId];
+        let bestRes = null;
+        const mergedFacts = [];
+        const mergedConflicts = [];
+        for (const pid of pids) {
+          const r = await authoritativeLookup.lookup({ ...params, projectId: pid });
+          if (r && r.facts?.length) {
+            if (!bestRes) bestRes = r;
+            mergedFacts.push(...r.facts);
+          } else if (!bestRes && r) {
+            bestRes = r;
+          }
+          if (r?.conflicts?.length) mergedConflicts.push(...r.conflicts);
+        }
+        if (!bestRes) return { facts: [], conflicts: [], version: null };
+        return { ...bestRes, facts: mergedFacts, conflicts: mergedConflicts };
+      };
+
       // ---- BRANCH A: CURRENT_STATE ----
       if (intent === "CURRENT_STATE") {
-        const alsRes = await authoritativeLookup.lookup({
-          projectId,
+        const alsRes = await lookupAcrossProjects({
           query: q,
           featureId: targetFeatureId,
           includeDeprecated: false,
@@ -338,7 +422,7 @@ function createTemporalRouter({
         });
 
         conflicts = alsRes.conflicts || [];
-        evidence = (alsRes.facts || []).map((f) => ({
+        const rawEvidence = (alsRes.facts || []).map((f) => ({
           feature_id: targetFeatureId,
           featureId: targetFeatureId,
           feature_name: feat.canonical_name,
@@ -356,28 +440,34 @@ function createTemporalRouter({
           text: f.text,
           chunk_id: f.chunk_id,
         }));
+        evidence = rankEvidenceByQuery(rawEvidence, q);
 
         const versionStr = alsRes.version?.version || feat.current_approved_version;
         const sourceName = evidence[0]?.source || "Canonical Registry";
-        const factsText = evidence.map((e) => e.text).join("\n\n");
+        const perSectionCap = evidence.length > 1 ? 1800 : 3200;
+        const factsText = evidence
+          .slice(0, 4)
+          .map((e) => (e.text.length > perSectionCap ? `${e.text.slice(0, perSectionCap - 1).trimEnd()}…` : e.text))
+          .join("\n\n");
 
         passages = `[QUERY INTENT: CURRENT_STATE]\n[AUTHORITATIVE VERSION: ${versionStr}]\n[STATUS: APPROVED]\n[SOURCE: ${sourceName}]\n\n${factsText}`.trim();
       }
 
       // ---- BRANCH B: HISTORICAL_STATE ----
       else if (intent === "HISTORICAL_STATE") {
-        const alsRes = await authoritativeLookup.lookup({
-          projectId,
+        const alsRes = await lookupAcrossProjects({
           query: q,
           featureId: targetFeatureId,
           asOf: finalAsOf,
+          asOfStart: rangeStart,
+          asOfEnd: rangeEnd,
           version: finalVersion,
           includeDeprecated: true,
           bypassCache,
         });
 
         conflicts = alsRes.conflicts || [];
-        evidence = (alsRes.facts || []).map((f) => ({
+        const rawEvidence = (alsRes.facts || []).map((f) => ({
           feature_id: targetFeatureId,
           featureId: targetFeatureId,
           feature_name: feat.canonical_name,
@@ -395,10 +485,14 @@ function createTemporalRouter({
           text: f.text,
           chunk_id: f.chunk_id,
         }));
+        evidence = rankEvidenceByQuery(rawEvidence, q);
 
         const timeLabel = finalAsOf ? new Date(finalAsOf).toISOString().split("T")[0] : finalVersion || "historical";
         const versionStr = alsRes.version?.version || "1.0.0";
-        const factsText = evidence.map((e) => e.text).join("\n\n");
+        const factsText = evidence
+          .slice(0, 4)
+          .map((e) => e.text)
+          .join("\n\n");
 
         passages = `[QUERY INTENT: HISTORICAL_STATE]\n[REQUESTED TIME: ${timeLabel}]\n[RESOLVED VERSION: ${versionStr}]\n[STATUS: HISTORICAL]\n\n${factsText}`.trim();
       }
@@ -407,55 +501,64 @@ function createTemporalRouter({
       else if (intent === "DIFF_EVOLUTION") {
         let lineage = [];
         if (temporalStore && typeof temporalStore.getFeatureLineage === "function") {
-          lineage = temporalStore.getFeatureLineage(projectId, targetFeatureId);
+          const pids = resolvedProjectIds.length ? resolvedProjectIds : [primaryProjectId];
+          for (const pid of pids) {
+            const rows = temporalStore.getFeatureLineage(pid, targetFeatureId);
+            if (rows?.length) lineage.push(...rows);
+          }
         }
 
         // Sort lineage chronologically ascending
         lineage.sort((a, b) => (a.valid_from || 0) - (b.valid_from || 0) || a.id - b.id);
 
         if (lineage.length >= 2) {
-          const beforeChunk = lineage[0];
-          const afterChunk = lineage[lineage.length - 1];
+          // Group chunks by distinct version (chronologically) and pick query-most-relevant chunk per version
+          const groupsByVer = [];
+          const verMap = new Map();
+          for (const row of lineage) {
+            const verKey = row.version || `v_${row.valid_from || row.id}`;
+            if (!verMap.has(verKey)) {
+              const g = { version: row.version || "1.0.0", rows: [] };
+              verMap.set(verKey, g);
+              groupsByVer.push(g);
+            }
+            verMap.get(verKey).rows.push(row);
+          }
 
-          evidence = [
-            {
+          const stageChunks =
+            groupsByVer.length >= 2
+              ? groupsByVer.map((g) => rankEvidenceByQuery(g.rows, q)[0])
+              : [lineage[0], lineage[lineage.length - 1]];
+
+          const lastIdx = stageChunks.length - 1;
+          evidence = stageChunks.map((chunk, idx) => {
+            const role = idx === 0 ? "BEFORE" : idx === lastIdx ? "AFTER" : "INTERMEDIATE";
+            let chunkMeta = {};
+            try {
+              chunkMeta = typeof chunk.meta === "string" ? JSON.parse(chunk.meta || "{}") : chunk.meta || {};
+            } catch {}
+            return {
               feature_id: targetFeatureId,
               featureId: targetFeatureId,
               feature_name: feat.canonical_name,
-              version: beforeChunk.version || "1.0.0",
-              lifecycle_status: beforeChunk.lifecycle_status,
-              lifecycleStatus: beforeChunk.lifecycle_status,
+              version: chunk.version || (idx === 0 ? "1.0.0" : "2.0.0"),
+              lifecycle_status: chunk.lifecycle_status,
+              lifecycleStatus: chunk.lifecycle_status,
               approval_status: "approved",
               approvalStatus: "approved",
-              valid_from: beforeChunk.valid_from,
-              validFrom: beforeChunk.valid_from,
-              valid_to: beforeChunk.valid_to,
-              validTo: beforeChunk.valid_to,
-              source: beforeChunk.source || "Previous Version",
-              role: "BEFORE",
-              text: beforeChunk.text,
-              chunk_id: beforeChunk.id,
-            },
-            {
-              feature_id: targetFeatureId,
-              featureId: targetFeatureId,
-              feature_name: feat.canonical_name,
-              version: afterChunk.version || "2.0.0",
-              lifecycle_status: afterChunk.lifecycle_status,
-              lifecycleStatus: afterChunk.lifecycle_status,
-              approval_status: "approved",
-              approvalStatus: "approved",
-              valid_from: afterChunk.valid_from,
-              validFrom: afterChunk.valid_from,
-              valid_to: afterChunk.valid_to,
-              validTo: afterChunk.valid_to,
-              source: afterChunk.source || "Current Version",
-              role: "AFTER",
-              text: afterChunk.text,
-              chunk_id: afterChunk.id,
-            },
-          ];
+              valid_from: chunk.valid_from,
+              validFrom: chunk.valid_from,
+              valid_to: chunk.valid_to,
+              validTo: chunk.valid_to,
+              source: chunkMeta.source || chunk.file || chunk.source || (idx === 0 ? "Previous Version" : "Current Version"),
+              role,
+              text: chunk.text,
+              chunk_id: chunk.id,
+            };
+          });
 
+          const beforeChunk = stageChunks[0];
+          const afterChunk = stageChunks[lastIdx];
           const reason =
             afterChunk.superseded_reason ||
             afterChunk.meta?.superseded_reason ||
@@ -466,7 +569,11 @@ function createTemporalRouter({
             (feat.versions?.find((v) => v.version === afterChunk.version)?.superseded_reason) ||
             "Requirements upgraded";
 
-          passages = `[QUERY INTENT: DIFF_EVOLUTION]\n\nBEFORE:\nVersion ${beforeChunk.version || "1.0.0"} (Status: ${beforeChunk.lifecycle_status.toUpperCase()})\n${beforeChunk.text}\n\nAFTER:\nVersion ${afterChunk.version || "2.0.0"} (Status: ${afterChunk.lifecycle_status.toUpperCase()})\n${afterChunk.text}\n\nCHANGE:\n${reason}`.trim();
+          const stageBlocks = evidence.map((ev) => {
+            const statusTag = String(ev.lifecycle_status || "ACTIVE").toUpperCase();
+            return `${ev.role}:\nVersion ${ev.version} (Status: ${statusTag})\nSource: ${ev.source}\n${ev.text}`;
+          });
+          passages = `[QUERY INTENT: DIFF_EVOLUTION]\n\n${stageBlocks.join("\n\n")}\n\nCHANGE:\n${reason}`.trim();
         } else if (lineage.length === 1) {
           // Single version exists (no prior evolution)
           const singleChunk = lineage[0];
@@ -484,7 +591,7 @@ function createTemporalRouter({
               validFrom: singleChunk.valid_from,
               valid_to: singleChunk.valid_to,
               validTo: singleChunk.valid_to,
-              source: singleChunk.source || "Initial Baseline",
+              source: singleChunk.source || singleChunk.file || "Initial Baseline",
               role: "INITIAL",
               text: singleChunk.text,
               chunk_id: singleChunk.id,
@@ -517,6 +624,7 @@ function createTemporalRouter({
   return {
     classifyTemporalIntent,
     extractTemporalParameters,
+    rankEvidenceByQuery,
     routeTemporalQuery,
     clearCache,
   };

@@ -16,10 +16,13 @@ const { createMedia } = require("../rag/media");
 const { createIngestor, friendly } = require("../rag/ingest");
 const { createRetriever } = require("../rag/retrieve");
 const { createRagLog } = require("../rag/ragLog");
+const { createAuthoritativeLookup } = require("../rag/authoritativeLookup");
+const { createDeltaIngest } = require("../rag/deltaIngest");
 const { createBehavior } = require("./behavior");
 const { createOpenRouterLlm, DEFAULT_SUMMARY_MODEL } = require("../core/summary/rollingSummary");
 const { createOkfRegistry } = require("../core/okf/registry");
 const { createOkfRouter } = require("../core/okf/router");
+const { createTemporalRouter } = require("../core/okf/temporalRouter");
 
 const NOT_REPLAYED = new Set([
   "partial",
@@ -202,10 +205,52 @@ function createCopilot({
       };
     return clientCache;
   };
+  // ---- OKF canonical registry & bi-temporal routing (graceful fallback if OKF bundle is missing/invalid)
+  let okfRegistry = null;
+  let okfRouter = null;
+  let authoritativeLookup = null;
+  let temporalRouter = null;
+  let deltaIngest = null;
+  try {
+    okfRegistry = createOkfRegistry({ okfDir: path.resolve(__dirname, "../../../OKF") });
+    okfRouter = createOkfRouter();
+    const featReg = okfRegistry?.featureRegistry;
+    if (featReg && featReg.hasRegistry() && store.rag?.temporal) {
+      authoritativeLookup =
+        typeof store.rag.createAuthoritativeLookup === "function"
+          ? store.rag.createAuthoritativeLookup({ featureRegistry: featReg })
+          : createAuthoritativeLookup({
+              ragStore: store.rag,
+              temporalStore: store.rag.temporal,
+              featureRegistry: featReg,
+            });
+      temporalRouter = createTemporalRouter({
+        featureRegistry: featReg,
+        temporalStore: store.rag.temporal,
+        authoritativeLookup,
+      });
+      deltaIngest =
+        typeof store.rag.createDeltaIngest === "function"
+          ? store.rag.createDeltaIngest({
+              featureRegistry: featReg,
+              options: { autoIndexUnmatched: true },
+            })
+          : createDeltaIngest({
+              ragStore: store.rag,
+              temporalStore: store.rag.temporal,
+              featureRegistry: featReg,
+              options: { autoIndexUnmatched: true },
+            });
+    }
+  } catch (err) {
+    ragLog({ event: "okf_init_fallback", error: err.message });
+  }
+
   const ingestor = createIngestor({
     rag: store.rag,
     clients: ragClients,
     media: createMedia({ ffmpegPath }),
+    deltaIngest,
     log: ragLog,
     getCfg: () => ({ mediaEmbedMinutes: settings.engine().mediaEmbedMinutes }),
   });
@@ -214,6 +259,8 @@ function createCopilot({
     clients: ragClients,
     log: ragLog,
     catalogMode: env.COPILOT_CATALOG || undefined, // "profile" | "summary" (RAG.catalogMode)
+    als: authoritativeLookup,
+    temporalRouter,
   });
   const projectIds = () => (projectId != null ? [projectId] : store.projects.activeIds());
 
@@ -305,9 +352,6 @@ function createCopilot({
     },
   });
 
-  const okfRegistry = createOkfRegistry({ okfDir: path.resolve(__dirname, "../../../OKF") });
-  const okfRouter = createOkfRouter();
-
   const engine = createEngine({
     env,
     logDir,
@@ -328,10 +372,13 @@ function createCopilot({
       prefetch: (query) => retriever.prefetch(query, projectIds()),
       retrieve: (o) => retriever.retrieve({ ...o, projectIds: projectIds() }),
     },
-    okf: {
-      registry: okfRegistry,
-      router: okfRouter,
-    },
+    okf:
+      okfRegistry && okfRouter
+        ? {
+            registry: okfRegistry,
+            router: okfRouter,
+          }
+        : null,
     ...engineOptions,
   });
 

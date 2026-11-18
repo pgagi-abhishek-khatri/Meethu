@@ -203,23 +203,37 @@ function matchDeterministicPrecedence({ query, featureId = null, featureRegistry
     };
   }
 
-  // LEVEL 4 — Exact Registered Keyword
+  // LEVEL 4 — Exact Registered Keyword (with specificity scoring for multi-word natural queries)
   let byKw = featureRegistry.findFeaturesByKeyword(q, projectId);
   if ((!byKw || byKw.length === 0) && allFeatures.length) {
-    const matched = new Set();
+    const scored = [];
     for (const feat of allFeatures) {
       const kws = Array.isArray(feat.keywords) ? feat.keywords : [];
+      let score = 0;
+      let hitCount = 0;
       for (const kw of kws) {
         if (kw && kw.length >= 3) {
           const re = new RegExp(`\\b${kw.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}\\b`, "i");
           if (re.test(q)) {
-            matched.add(feat);
-            break;
+            hitCount++;
+            score += kw.includes(" ") ? 6 : 3;
           }
         }
       }
+      if (hitCount > 0) {
+        scored.push({ feat, score, hitCount });
+      }
     }
-    byKw = Array.from(matched).sort((a, b) => a.feature_id.localeCompare(b.feature_id));
+    scored.sort((a, b) => b.score - a.score || a.feat.feature_id.localeCompare(b.feat.feature_id));
+    if (scored.length === 1) {
+      byKw = [scored[0].feat];
+    } else if (scored.length > 1) {
+      if (scored[0].score >= 1.5 * scored[1].score) {
+        byKw = [scored[0].feat];
+      } else {
+        byKw = scored.map((s) => s.feat).sort((a, b) => a.feature_id.localeCompare(b.feature_id));
+      }
+    }
   }
   if (byKw.length === 1) {
     return {
@@ -297,6 +311,8 @@ function createAuthoritativeLookup({
     featureId = null,
     version = null,
     asOf = null,
+    asOfStart = null,
+    asOfEnd = null,
     includeDeprecated = false,
     includeDrafts = false,
     limit = 10,
@@ -314,7 +330,7 @@ function createAuthoritativeLookup({
     const q = String(query || "").trim();
 
     // Cache key construction
-    const cacheKey = `${projectId}:${featureId || ""}:${version || ""}:${asOf || ""}:${includeDeprecated}:${includeDrafts}:${q}`;
+    const cacheKey = `${projectId}:${featureId || ""}:${version || ""}:${asOf || ""}:${asOfStart || ""}:${asOfEnd || ""}:${includeDeprecated}:${includeDrafts}:${q}`;
     if (!bypassCache && cache.has(cacheKey)) {
       return cache.get(cacheKey);
     }
@@ -380,11 +396,14 @@ function createAuthoritativeLookup({
     const warnings = [];
     const conflicts = [];
 
-    // Branch A: Point-in-Time Resolution (asOf)
-    if (asOf != null && resolvedTemporal) {
+    // Branch A: Point-in-Time / Range Resolution (asOf / asOfStart..asOfEnd)
+    if ((asOf != null || (asOfStart != null && asOfEnd != null)) && resolvedTemporal) {
       isPointInTime = true;
-      const targetTime = Number(asOf);
-      chunks = resolvedTemporal.getFeatureAt(projectId, featId, targetTime);
+      if (asOfStart != null && asOfEnd != null && typeof resolvedTemporal.getFeatureInRange === "function") {
+        chunks = resolvedTemporal.getFeatureInRange(projectId, featId, Number(asOfStart), Number(asOfEnd));
+      } else if (asOf != null) {
+        chunks = resolvedTemporal.getFeatureAt(projectId, featId, Number(asOf));
+      }
       if (chunks.length > 0) {
         resolvedVersionStr = chunks[0].version;
         lifecycleStatus = chunks[0].lifecycle_status;

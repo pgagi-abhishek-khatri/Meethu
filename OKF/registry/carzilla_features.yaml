@@ -1,0 +1,815 @@
+schema_version: "1.0.0"
+bundle_id: "carzilla-canonical-v1"
+
+features:
+  - feature_id: "feat:carzilla_registration_auth"
+    canonical_name: "Bidder Registration and Account Management"
+    domain: "carzilla"
+    description: "Bidder sign-up with Email OTP verification, password login, and post-win Emirates ID/passport KYC and Buyer Agreement upload."
+    aliases:
+      - "bidder registration"
+      - "bidder registration and account management"
+      - "bidder registration verification and payment flow"
+      - "register to bid"
+      - "post win flow"
+      - "post-win flow"
+      - "identity documents"
+      - "buyer agreement"
+      - "email otp"
+      - "registration and bidding"
+    keywords:
+      - "registration"
+      - "register"
+      - "registers"
+      - "signup"
+      - "sign-up"
+      - "signing up"
+      - "otp"
+      - "emirates id"
+      - "passport"
+      - "kyc"
+      - "buyer agreement"
+      - "post-win"
+    current_approved_version: "1.1.0"
+    approval_status: "approved"
+    lifecycle_status: "active"
+    implementation_status: "implemented"
+    sources:
+      - document_id: "carzilla_completion_p1"
+        document_name: "CarZilla_Project_Completion_Document.md"
+        section_id: "sec_3_3"
+        section_title: "3.3 Bidder Registration and Account Management"
+    supersession:
+      supersedes: ["1.0.0"]
+      superseded_by: []
+    versions:
+      - version: "1.0.0"
+        approval_status: "approved"
+        lifecycle_status: "superseded"
+        created_at: "2026-08-21T00:00:00Z"
+        approved_at: "2026-08-21T00:00:00Z"
+        superseded_reason: "Phase 1 Completion simplified sign-up to Email OTP only (no SMS/WhatsApp OTP at sign-up) and moved Emirates ID/passport KYC and Buyer Agreement to post-win."
+        sources:
+          - document_id: "carzilla_proposal"
+            document_name: "CarZilla_Proposal.md"
+            section_id: "sec_v"
+            section_title: "V. Bidder Registration, Verification & Payment Flow"
+        supersession:
+          supersedes: []
+          superseded_by: ["1.1.0"]
+      - version: "1.1.0"
+        approval_status: "approved"
+        lifecycle_status: "active"
+        created_at: "2026-09-28T00:00:00Z"
+        approved_at: "2026-09-28T00:00:00Z"
+        sources:
+          - document_id: "carzilla_completion_p1"
+            document_name: "CarZilla_Project_Completion_Document.md"
+            section_id: "sec_3_3"
+            section_title: "3.3 Bidder Registration and Account Management"
+        supersession:
+          supersedes: ["1.0.0"]
+          superseded_by: []
+
+  - feature_id: "feat:carzilla_live_bidding"
+    canonical_name: "Live Bidding Engine and Real Time Updates"
+    domain: "carzilla"
+    description: "Server-side live bidding engine, 60-second Golden Closing (single 60s extension max), flat AED 500 default increment, proxy bidding, atomic concurrency, and SHA-256 bid hash chain."
+    aliases:
+      - "live bidding engine"
+      - "live auction & bidding architecture"
+      - "live auction and bidding architecture"
+      - "golden closing"
+      - "anti-sniping"
+      - "increment ladder"
+      - "proxy bidding"
+    keywords:
+      - "golden closing"
+      - "anti-sniping"
+      - "increment"
+      - "proxy bid"
+      - "max bid"
+      - "concurrency"
+      - "hash chain"
+      - "hash-chained"
+      - "append-only"
+      - "simultaneous"
+      - "same time"
+      - "bidding engine"
+    current_approved_version: "1.1.0"
+    approval_status: "approved"
+    lifecycle_status: "active"
+    implementation_status: "implemented"
+    sources:
+      - document_id: "carzilla_completion_p1"
+        document_name: "CarZilla_Project_Completion_Document.md"
+        section_id: "sec_3_4"
+        section_title: "3.4 Live Bidding Engine and Real Time Updates"
+    supersession:
+      supersedes: ["1.0.0"]
+      superseded_by: []
+    versions:
+      - version: "1.0.0"
+        approval_status: "approved"
+        lifecycle_status: "superseded"
+        created_at: "2026-08-21T00:00:00Z"
+        approved_at: "2026-08-21T00:00:00Z"
+        superseded_reason: "Phase 1 Completion changed Golden Closing from rolling 120s uncapped to 60s window / 60s extension (max 1 extension) and flat AED 500 default increment."
+        sources:
+          - document_id: "carzilla_proposal"
+            document_name: "CarZilla_Proposal.md"
+            section_id: "sec_iv"
+            section_title: "IV. Live Auction & Bidding Architecture"
+        supersession:
+          supersedes: []
+          superseded_by: ["1.1.0"]
+      - version: "1.1.0"
+        approval_status: "approved"
+        lifecycle_status: "active"
+        created_at: "2026-09-28T00:00:00Z"
+        approved_at: "2026-09-28T00:00:00Z"
+        sources:
+          - document_id: "carzilla_completion_p1"
+            document_name: "CarZilla_Project_Completion_Document.md"
+            section_id: "sec_3_4"
+            section_title: "3.4 Live Bidding Engine and Real Time Updates"
+        supersession:
+          supersedes: ["1.0.0"]
+          superseded_by: []
+
+  - feature_id: "feat:carzilla_cancel_bid"
+    canonical_name: "Cancel My Bid"
+    domain: "carzilla"
+    description: "Phase 2 self-service bid cancellation allowing the current highest bidder to cancel once per lot when the lot has a reserve price, reserve is not yet met, and outside Golden Closing."
+    aliases:
+      - "cancel my bid"
+      - "bid cancellation"
+      - "cancel bid"
+    keywords:
+      - "cancel my bid"
+      - "cancel bid"
+      - "withdraw bid"
+      - "retract bid"
+    current_approved_version: "2.0.0"
+    approval_status: "approved"
+    lifecycle_status: "active"
+    implementation_status: "implemented"
+    sources:
+      - document_id: "carzilla_completion_p2"
+        document_name: "CarZilla_Feature_Completion_Document_Phase_2.md"
+        section_id: "sec_5"
+        section_title: "5. Cancel My Bid"
+    supersession:
+      supersedes: []
+      superseded_by: []
+    versions:
+      - version: "2.0.0"
+        approval_status: "approved"
+        lifecycle_status: "active"
+        created_at: "2026-10-14T00:00:00Z"
+        approved_at: "2026-10-14T00:00:00Z"
+        sources:
+          - document_id: "carzilla_completion_p2"
+            document_name: "CarZilla_Feature_Completion_Document_Phase_2.md"
+            section_id: "sec_5"
+            section_title: "5. Cancel My Bid"
+        supersession:
+          supersedes: []
+          superseded_by: []
+
+  - feature_id: "feat:carzilla_open_bidding"
+    canonical_name: "Two-Day Open Bidding"
+    domain: "carzilla"
+    description: "Phase 2 workflow for lots finishing with unmet reserve or zero bids: moves to 2 days of open bidding followed by a final 15-minute live auction window before Post Sale relist."
+    aliases:
+      - "two-day open bidding"
+      - "two day open bidding"
+      - "open bidding"
+      - "post sale"
+    keywords:
+      - "open bidding"
+      - "two-day"
+      - "two day"
+      - "unmet reserve"
+      - "reserve not met"
+      - "15-minute"
+      - "post sale"
+    current_approved_version: "2.0.0"
+    approval_status: "approved"
+    lifecycle_status: "active"
+    implementation_status: "implemented"
+    sources:
+      - document_id: "carzilla_completion_p2"
+        document_name: "CarZilla_Feature_Completion_Document_Phase_2.md"
+        section_id: "sec_6"
+        section_title: "6. Two-Day Open Bidding"
+    supersession:
+      supersedes: []
+      superseded_by: []
+    versions:
+      - version: "2.0.0"
+        approval_status: "approved"
+        lifecycle_status: "active"
+        created_at: "2026-10-14T00:00:00Z"
+        approved_at: "2026-10-14T00:00:00Z"
+        sources:
+          - document_id: "carzilla_completion_p2"
+            document_name: "CarZilla_Feature_Completion_Document_Phase_2.md"
+            section_id: "sec_6"
+            section_title: "6. Two-Day Open Bidding"
+        supersession:
+          supersedes: []
+          superseded_by: []
+
+  - feature_id: "feat:carzilla_staff_roles"
+    canonical_name: "Staff Invite System and User Roles"
+    domain: "carzilla"
+    description: "Role-based access control and Super Admin Staff Invite System with 7-day temporary password and 5 fixed invited staff roles: Sales, Finance, Support, Inspector, Auction BRO."
+    aliases:
+      - "staff invite system"
+      - "staff roles"
+      - "user roles and access control"
+      - "admin roles"
+      - "managing the team"
+      - "how an invitation works"
+    keywords:
+      - "staff"
+      - "staff roles"
+      - "staff invite"
+      - "auction bro"
+      - "rbac"
+      - "employees"
+      - "super admin"
+      - "temporary password"
+    current_approved_version: "2.0.0"
+    approval_status: "approved"
+    lifecycle_status: "active"
+    implementation_status: "implemented"
+    sources:
+      - document_id: "carzilla_completion_p2"
+        document_name: "CarZilla_Feature_Completion_Document_Phase_2.md"
+        section_id: "sec_2"
+        section_title: "2. Staff Invite System"
+    supersession:
+      supersedes: ["1.1.0"]
+      superseded_by: []
+    versions:
+      - version: "1.0.0"
+        approval_status: "approved"
+        lifecycle_status: "superseded"
+        created_at: "2026-08-21T00:00:00Z"
+        approved_at: "2026-08-21T00:00:00Z"
+        superseded_reason: "Phase 1 simplified the 5 proposal admin roles to 3 roles (Bidder, Super Admin, Inspector)."
+        sources:
+          - document_id: "carzilla_proposal"
+            document_name: "CarZilla_Proposal.md"
+            section_id: "sec_vii"
+            section_title: "VII. Administrator Journey & Auction Management"
+        supersession:
+          supersedes: []
+          superseded_by: ["1.1.0"]
+      - version: "1.1.0"
+        approval_status: "approved"
+        lifecycle_status: "superseded"
+        created_at: "2026-09-28T00:00:00Z"
+        approved_at: "2026-09-28T00:00:00Z"
+        superseded_reason: "Phase 2 introduced Staff Invite System with 5 fixed invited staff roles: Sales, Finance, Support, Inspector, Auction BRO."
+        sources:
+          - document_id: "carzilla_completion_p1"
+            document_name: "CarZilla_Project_Completion_Document.md"
+            section_id: "sec_3_8"
+            section_title: "3.8 User Roles and Access Control"
+        supersession:
+          supersedes: ["1.0.0"]
+          superseded_by: ["2.0.0"]
+      - version: "2.0.0"
+        approval_status: "approved"
+        lifecycle_status: "active"
+        created_at: "2026-10-14T00:00:00Z"
+        approved_at: "2026-10-14T00:00:00Z"
+        sources:
+          - document_id: "carzilla_completion_p2"
+            document_name: "CarZilla_Feature_Completion_Document_Phase_2.md"
+            section_id: "sec_2"
+            section_title: "2. Staff Invite System"
+        supersession:
+          supersedes: ["1.1.0"]
+          superseded_by: []
+
+  - feature_id: "feat:carzilla_sell_my_car"
+    canonical_name: "Sell My Car"
+    domain: "carzilla"
+    description: "Private owner car submission with 1-10 photos, 30-day workshop inspection slot booking, 24-hour cancel/reschedule rule, My Cars tracking, and 2.5% seller commission handled offline."
+    aliases:
+      - "sell my car"
+      - "sell requests"
+      - "inspection slots"
+      - "what the seller does"
+      - "what carzilla staff do"
+    keywords:
+      - "sell my car"
+      - "sell requests"
+      - "seller fee"
+      - "workshop inspection"
+      - "inspection slots"
+      - "my cars"
+      - "reschedule"
+    current_approved_version: "2.0.0"
+    approval_status: "approved"
+    lifecycle_status: "active"
+    implementation_status: "implemented"
+    sources:
+      - document_id: "carzilla_completion_p2"
+        document_name: "CarZilla_Feature_Completion_Document_Phase_2.md"
+        section_id: "sec_3"
+        section_title: "3. Sell My Car"
+    supersession:
+      supersedes: []
+      superseded_by: []
+    versions:
+      - version: "2.0.0"
+        approval_status: "approved"
+        lifecycle_status: "active"
+        created_at: "2026-10-14T00:00:00Z"
+        approved_at: "2026-10-14T00:00:00Z"
+        sources:
+          - document_id: "carzilla_completion_p2"
+            document_name: "CarZilla_Feature_Completion_Document_Phase_2.md"
+            section_id: "sec_3"
+            section_title: "3. Sell My Car"
+        supersession:
+          supersedes: []
+          superseded_by: []
+
+  - feature_id: "feat:carzilla_live_chat"
+    canonical_name: "Live Chat on a Lot"
+    domain: "carzilla"
+    description: "Group Auction chat and private 1-to-1 chat with CarZilla on live lots, moderation/profanity controls, and Admin Live Chat page; no bidder-to-bidder private messaging."
+    aliases:
+      - "live chat on a lot"
+      - "auction chat"
+      - "admin live chat"
+      - "admin live chat page"
+      - "keeping chat civil"
+    keywords:
+      - "live chat"
+      - "auction chat"
+      - "bidder-to-bidder"
+      - "bidder to bidder"
+      - "group chat"
+      - "private chat"
+    current_approved_version: "2.0.0"
+    approval_status: "approved"
+    lifecycle_status: "active"
+    implementation_status: "implemented"
+    sources:
+      - document_id: "carzilla_completion_p2"
+        document_name: "CarZilla_Feature_Completion_Document_Phase_2.md"
+        section_id: "sec_4"
+        section_title: "4. Live Chat on a Lot"
+    supersession:
+      supersedes: []
+      superseded_by: []
+    versions:
+      - version: "2.0.0"
+        approval_status: "approved"
+        lifecycle_status: "active"
+        created_at: "2026-10-14T00:00:00Z"
+        approved_at: "2026-10-14T00:00:00Z"
+        sources:
+          - document_id: "carzilla_completion_p2"
+            document_name: "CarZilla_Feature_Completion_Document_Phase_2.md"
+            section_id: "sec_4"
+            section_title: "4. Live Chat on a Lot"
+        supersession:
+          supersedes: []
+          superseded_by: []
+
+  - feature_id: "feat:carzilla_payments_invoicing"
+    canonical_name: "Payments Deposits and Invoicing"
+    domain: "carzilla"
+    description: "Card pre-authorisation holds (3% of opening bid capped at AED 5,000), flat 2% buyer's premium with no VAT, 24-hour settlement deadline (1h reminder), automatic hold release, and invoice issuance."
+    aliases:
+      - "payments, deposits and invoicing"
+      - "payments deposits and invoicing"
+      - "payments, invoicing & settlement"
+      - "notifications and payments"
+      - "buyer's premium"
+      - "deposit handling"
+    keywords:
+      - "invoice"
+      - "invoices"
+      - "deposit"
+      - "pre-authorisation"
+      - "pre-authorization"
+      - "buyer's premium"
+      - "buyers premium"
+      - "refund"
+      - "settlement"
+      - "vat"
+    current_approved_version: "1.1.0"
+    approval_status: "approved"
+    lifecycle_status: "active"
+    implementation_status: "implemented"
+    sources:
+      - document_id: "carzilla_completion_p1"
+        document_name: "CarZilla_Project_Completion_Document.md"
+        section_id: "sec_3_7"
+        section_title: "3.7 Payments, Deposits and Invoicing"
+    supersession:
+      supersedes: ["1.0.0"]
+      superseded_by: []
+    versions:
+      - version: "1.0.0"
+        approval_status: "approved"
+        lifecycle_status: "superseded"
+        created_at: "2026-08-21T00:00:00Z"
+        approved_at: "2026-08-21T00:00:00Z"
+        superseded_reason: "Phase 1 implemented flat 2% buyer's premium with no VAT, 3% opening-bid hold capped at AED 5,000, and 24-hour payment deadline."
+        sources:
+          - document_id: "carzilla_proposal"
+            document_name: "CarZilla_Proposal.md"
+            section_id: "sec_ix"
+            section_title: "IX. Payments, Invoicing & Settlement"
+        supersession:
+          supersedes: []
+          superseded_by: ["1.1.0"]
+      - version: "1.1.0"
+        approval_status: "approved"
+        lifecycle_status: "active"
+        created_at: "2026-09-28T00:00:00Z"
+        approved_at: "2026-09-28T00:00:00Z"
+        sources:
+          - document_id: "carzilla_completion_p1"
+            document_name: "CarZilla_Project_Completion_Document.md"
+            section_id: "sec_3_7"
+            section_title: "3.7 Payments, Deposits and Invoicing"
+        supersession:
+          supersedes: ["1.0.0"]
+          superseded_by: []
+
+  - feature_id: "feat:carzilla_whatsapp_notifications"
+    canonical_name: "WhatsApp Notifications"
+    domain: "carzilla"
+    description: "Opt-in WhatsApp auction alerts built in Phase 2, toggleable per user with Admin WhatsApp Log, awaiting Meta template approval before going live."
+    aliases:
+      - "whatsapp notifications"
+      - "admin whatsapp log"
+      - "notifications and what they say"
+    keywords:
+      - "whatsapp"
+      - "meta approval"
+      - "meta template"
+      - "whatsapp log"
+      - "whatsapp notifications"
+    current_approved_version: "2.0.0"
+    approval_status: "approved"
+    lifecycle_status: "active"
+    implementation_status: "implemented"
+    sources:
+      - document_id: "carzilla_completion_p2"
+        document_name: "CarZilla_Feature_Completion_Document_Phase_2.md"
+        section_id: "sec_9"
+        section_title: "9. WhatsApp Notifications"
+    supersession:
+      supersedes: ["1.0.0"]
+      superseded_by: []
+    versions:
+      - version: "1.0.0"
+        approval_status: "approved"
+        lifecycle_status: "superseded"
+        created_at: "2026-08-21T00:00:00Z"
+        approved_at: "2026-08-21T00:00:00Z"
+        superseded_reason: "Phase 2 built opt-in WhatsApp Notifications pending Meta template approval."
+        sources:
+          - document_id: "carzilla_proposal"
+            document_name: "CarZilla_Proposal.md"
+            section_id: "sec_viii"
+            section_title: "VIII. Notifications, Integrations & Auction Events"
+        supersession:
+          supersedes: []
+          superseded_by: ["2.0.0"]
+      - version: "2.0.0"
+        approval_status: "approved"
+        lifecycle_status: "active"
+        created_at: "2026-10-14T00:00:00Z"
+        approved_at: "2026-10-14T00:00:00Z"
+        sources:
+          - document_id: "carzilla_completion_p2"
+            document_name: "CarZilla_Feature_Completion_Document_Phase_2.md"
+            section_id: "sec_9"
+            section_title: "9. WhatsApp Notifications"
+        supersession:
+          supersedes: ["1.0.0"]
+          superseded_by: []
+
+  - feature_id: "feat:carzilla_notifications"
+    canonical_name: "Email and In-App Notifications"
+    domain: "carzilla"
+    description: "Email and onsite toast notifications for registration, outbid, wins, staff invites, Sell My Car, referrals, and open bidding."
+    aliases:
+      - "notifications"
+      - "email notifications"
+    keywords:
+      - "notification"
+      - "notifications"
+      - "toast"
+      - "outbid alert"
+    current_approved_version: "2.0.0"
+    approval_status: "approved"
+    lifecycle_status: "active"
+    implementation_status: "implemented"
+    sources:
+      - document_id: "carzilla_completion_p2"
+        document_name: "CarZilla_Feature_Completion_Document_Phase_2.md"
+        section_id: "sec_8"
+        section_title: "8. Notifications"
+    supersession:
+      supersedes: ["1.1.0"]
+      superseded_by: []
+    versions:
+      - version: "1.1.0"
+        approval_status: "approved"
+        lifecycle_status: "superseded"
+        created_at: "2026-09-28T00:00:00Z"
+        approved_at: "2026-09-28T00:00:00Z"
+        superseded_reason: "Phase 2 expanded email and in-app notification triggers for staff invites, Sell My Car, referrals, and two-day open bidding."
+        sources:
+          - document_id: "carzilla_completion_p1"
+            document_name: "CarZilla_Project_Completion_Document.md"
+            section_id: "sec_3_6"
+            section_title: "3.6 Notifications"
+        supersession:
+          supersedes: []
+          superseded_by: ["2.0.0"]
+      - version: "2.0.0"
+        approval_status: "approved"
+        lifecycle_status: "active"
+        created_at: "2026-10-14T00:00:00Z"
+        approved_at: "2026-10-14T00:00:00Z"
+        sources:
+          - document_id: "carzilla_completion_p2"
+            document_name: "CarZilla_Feature_Completion_Document_Phase_2.md"
+            section_id: "sec_8"
+            section_title: "8. Notifications"
+        supersession:
+          supersedes: ["1.1.0"]
+          superseded_by: []
+
+  - feature_id: "feat:carzilla_infrastructure"
+    canonical_name: "AWS Infrastructure Specification and Architecture"
+    domain: "carzilla"
+    description: "AWS ap-south-1 (Mumbai) deployment with ECS Fargate auto-scaling (2-6 tasks at 50% CPU), EC2 t3.large frontend, RDS db.t3.micro (20 GB, 7-day backups, no formal DR runbook), SSM Parameter Store, no separate staging."
+    aliases:
+      - "aws infrastructure specification"
+      - "system architecture"
+      - "system architecture and database"
+      - "platform and data"
+      - "access and environment"
+      - "disaster recovery"
+    keywords:
+      - "aws"
+      - "fargate"
+      - "ecs"
+      - "disaster recovery"
+      - "rds"
+      - "db.t3.micro"
+      - "ap-south-1"
+      - "mumbai"
+      - "staging"
+      - "infrastructure"
+      - "auto-scaling"
+      - "server side"
+      - "server"
+      - "crash"
+      - "crashes"
+      - "crashed"
+      - "downtime"
+      - "outage"
+      - "load tested"
+      - "load test"
+      - "500 bidders"
+      - "1000 bidders"
+      - "2000 bidders"
+    current_approved_version: "1.1.0"
+    approval_status: "approved"
+    lifecycle_status: "active"
+    implementation_status: "implemented"
+    sources:
+      - document_id: "carzilla_completion_p1"
+        document_name: "CarZilla_Project_Completion_Document.md"
+        section_id: "sec_6"
+        section_title: "6. AWS Infrastructure Specification"
+    supersession:
+      supersedes: ["1.0.0"]
+      superseded_by: []
+    versions:
+      - version: "1.0.0"
+        approval_status: "approved"
+        lifecycle_status: "superseded"
+        created_at: "2026-08-21T00:00:00Z"
+        approved_at: "2026-08-21T00:00:00Z"
+        superseded_reason: "Deployed on AWS ap-south-1 (Mumbai) with ECS Fargate (2-6 tasks), EC2 t3.large frontend, and RDS db.t3.micro with no separate staging or formal DR runbook."
+        sources:
+          - document_id: "carzilla_proposal"
+            document_name: "CarZilla_Proposal.md"
+            section_id: "sec_iii"
+            section_title: "III. System Architecture"
+        supersession:
+          supersedes: []
+          superseded_by: ["1.1.0"]
+      - version: "1.1.0"
+        approval_status: "approved"
+        lifecycle_status: "active"
+        created_at: "2026-09-28T00:00:00Z"
+        approved_at: "2026-09-28T00:00:00Z"
+        sources:
+          - document_id: "carzilla_completion_p1"
+            document_name: "CarZilla_Project_Completion_Document.md"
+            section_id: "sec_6"
+            section_title: "6. AWS Infrastructure Specification"
+        supersession:
+          supersedes: ["1.0.0"]
+          superseded_by: []
+
+  - feature_id: "feat:carzilla_referrals"
+    canonical_name: "Referral Program"
+    domain: "carzilla"
+    description: "Personal referral codes and AED 100 cash reward when a referred friend wins and pays for a car, tracked in Admin Referrals."
+    aliases:
+      - "referral program"
+      - "referral rewards"
+      - "how rewards work"
+      - "admin tracking"
+    keywords:
+      - "referral"
+      - "referrals"
+      - "referral code"
+      - "aed 100"
+    current_approved_version: "2.0.0"
+    approval_status: "approved"
+    lifecycle_status: "active"
+    implementation_status: "implemented"
+    sources:
+      - document_id: "carzilla_completion_p2"
+        document_name: "CarZilla_Feature_Completion_Document_Phase_2.md"
+        section_id: "sec_7"
+        section_title: "7. Referral Program"
+    supersession:
+      supersedes: []
+      superseded_by: []
+    versions:
+      - version: "2.0.0"
+        approval_status: "approved"
+        lifecycle_status: "active"
+        created_at: "2026-10-14T00:00:00Z"
+        approved_at: "2026-10-14T00:00:00Z"
+        sources:
+          - document_id: "carzilla_completion_p2"
+            document_name: "CarZilla_Feature_Completion_Document_Phase_2.md"
+            section_id: "sec_7"
+            section_title: "7. Referral Program"
+        supersession:
+          supersedes: []
+          superseded_by: []
+
+  - feature_id: "feat:carzilla_admin_ops"
+    canonical_name: "Admin Dashboard and Auction Operations"
+    domain: "carzilla"
+    description: "Super Admin auction/lot management, bidder suspension/banning (existing bids stay, no new bids), public FAQ management in admin dashboard, and Inspector vehicle documentation workflow."
+    aliases:
+      - "admin dashboard and auction management"
+      - "admin and operations"
+      - "super admin, building and running a sale"
+      - "inspector, documenting a vehicle"
+      - "public catalogue and lot pages"
+      - "public faq"
+      - "faqs"
+      - "faq"
+    keywords:
+      - "suspend"
+      - "suspended"
+      - "suspension"
+      - "ban bidder"
+      - "inspector"
+      - "auction management"
+      - "faq"
+      - "faqs"
+      - "frequently asked"
+    current_approved_version: "1.1.0"
+    approval_status: "approved"
+    lifecycle_status: "active"
+    implementation_status: "implemented"
+    sources:
+      - document_id: "carzilla_completion_p1"
+        document_name: "CarZilla_Project_Completion_Document.md"
+        section_id: "sec_3_5"
+        section_title: "3.5 Admin Dashboard and Auction Management"
+    supersession:
+      supersedes: []
+      superseded_by: []
+    versions:
+      - version: "1.1.0"
+        approval_status: "approved"
+        lifecycle_status: "active"
+        created_at: "2026-09-28T00:00:00Z"
+        approved_at: "2026-09-28T00:00:00Z"
+        sources:
+          - document_id: "carzilla_completion_p1"
+            document_name: "CarZilla_Project_Completion_Document.md"
+            section_id: "sec_3_5"
+            section_title: "3.5 Admin Dashboard and Auction Management"
+        supersession:
+          supersedes: []
+          superseded_by: []
+
+  - feature_id: "feat:carzilla_out_of_scope"
+    canonical_name: "Scope Exclusions and Arabic Localization"
+    domain: "carzilla"
+    description: "Items explicitly out of original Proposal scope: native iOS/Android apps, Arabic language or right-to-left (RTL) layout (approved v5 design is English LTR), and vehicle logistics/RTA transfer/insurance."
+    aliases:
+      - "out of scope"
+      - "what is not included"
+      - "exclusions"
+      - "arabic language"
+    keywords:
+      - "arabic"
+      - "right-to-left"
+      - "rtl"
+      - "out of scope"
+      - "native ios"
+      - "rta"
+    current_approved_version: "1.0.0"
+    approval_status: "approved"
+    lifecycle_status: "active"
+    implementation_status: "implemented"
+    sources:
+      - document_id: "carzilla_proposal"
+        document_name: "CarZilla_Proposal.md"
+        section_id: "sec_out_of_scope"
+        section_title: "Out of Scope"
+    supersession:
+      supersedes: []
+      superseded_by: []
+    versions:
+      - version: "1.0.0"
+        approval_status: "approved"
+        lifecycle_status: "active"
+        created_at: "2026-08-21T00:00:00Z"
+        approved_at: "2026-08-21T00:00:00Z"
+        sources:
+          - document_id: "carzilla_proposal"
+            document_name: "CarZilla_Proposal.md"
+            section_id: "sec_out_of_scope"
+            section_title: "Out of Scope"
+        supersession:
+          supersedes: []
+          superseded_by: []
+
+  - feature_id: "feat:carzilla_delivery_timeline"
+    canonical_name: "Delivery Timeline and Weekly Outcomes"
+    domain: "carzilla"
+    description: "Original two-week delivery plan (Week 1 development, Week 2 testing and deployment) built directly against the already-approved v5 demo design with no discovery or design phase."
+    aliases:
+      - "delivery timeline & weekly outcomes"
+      - "delivery timeline and weekly outcomes"
+      - "week 1: development"
+      - "week 2: testing and deployment"
+      - "delivery timeline"
+    keywords:
+      - "two weeks"
+      - "two-week"
+      - "2 weeks"
+      - "20 to 21 days"
+      - "very few days"
+      - "week 1"
+      - "week 2"
+      - "v5 demo"
+      - "v5 design"
+      - "delivery timeline"
+    current_approved_version: "1.0.0"
+    approval_status: "approved"
+    lifecycle_status: "active"
+    implementation_status: "implemented"
+    sources:
+      - document_id: "carzilla_proposal"
+        document_name: "CarZilla_Proposal.md"
+        section_id: "sec_xii"
+        section_title: "XII. Delivery Timeline & Weekly Outcomes"
+    supersession:
+      supersedes: []
+      superseded_by: []
+    versions:
+      - version: "1.0.0"
+        approval_status: "approved"
+        lifecycle_status: "active"
+        created_at: "2026-08-21T00:00:00Z"
+        approved_at: "2026-08-21T00:00:00Z"
+        sources:
+          - document_id: "carzilla_proposal"
+            document_name: "CarZilla_Proposal.md"
+            section_id: "sec_xii"
+            section_title: "XII. Delivery Timeline & Weekly Outcomes"
+        supersession:
+          supersedes: []
+          superseded_by: []

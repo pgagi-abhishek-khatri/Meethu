@@ -169,7 +169,8 @@ Core copilot loop orchestrating decider and context pack.
       effectiveAt: 1000,
     });
 
-    assert.equal(embedder.getCallCount(), 2);
+    assert.equal(embedder.getCallCount(), 1, "Baseline 2 sections must be embedded in 1 batched call");
+    assert.equal(embedder.getEmbeddedTexts().length, 2, "Both baseline sections were embedded");
     const activePipelineV1 = temporalStore.getActiveFeatureChunks("proj_b", "feat:ingestion_pipeline")[0];
     const activeCopilotV1 = temporalStore.getActiveFeatureChunks("proj_b", "feat:copilot_orchestration")[0];
 
@@ -197,7 +198,8 @@ Core copilot loop orchestrating decider and context pack.
     assert.equal(resUpdate.summary.unchanged_features, 1);
     assert.equal(resUpdate.summary.embeddings_created, 1, "Only modified feature was embedded");
     assert.equal(resUpdate.summary.embeddings_reused, 1, "Unchanged feature reused embedding");
-    assert.equal(embedder.getCallCount(), 3, "Only 1 additional embedder call made");
+    assert.equal(embedder.getCallCount(), 2, "Only 1 additional embedder call made");
+    assert.equal(embedder.getEmbeddedTexts().length, 3, "Only 1 additional text embedded");
 
     // Verify Ingestion Pipeline is superseded and has v2 active
     const activePipelineV2 = temporalStore.getActiveFeatureChunks("proj_b", "feat:ingestion_pipeline")[0];

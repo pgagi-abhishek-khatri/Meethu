@@ -263,27 +263,42 @@ function validateOkfRegistry({ okfDir, fix = false } = {}) {
     } catch {}
   }
 
-  // Validate Feature Registry if present
+  // Validate all Feature Registry YAML files under OKF/registry/
   let checkedFeaturesCount = 0;
-  const featureRegistryPath = path.join(rootDir, "registry", "feature_registry.yaml");
-  if (fs.existsSync(featureRegistryPath)) {
-    try {
-      const featRaw = fs.readFileSync(featureRegistryPath, "utf8");
-      const featData = yaml.load(featRaw);
-      const featRes = validateFeatureRegistry(featData);
-      if (!featRes.valid) {
-        for (const err of featRes.errors) {
-          errors.push(`[feature_registry.yaml] ${err}`);
+  const registryDir = path.join(rootDir, "registry");
+  if (fs.existsSync(registryDir)) {
+    const registryFiles = fs
+      .readdirSync(registryDir)
+      .filter((f) => /\.ya?ml$/i.test(f))
+      .sort();
+    const seenFeatureIds = new Set();
+    for (const regFile of registryFiles) {
+      const regPath = path.join(registryDir, regFile);
+      try {
+        const featRaw = fs.readFileSync(regPath, "utf8");
+        const featData = yaml.load(featRaw);
+        const featRes = validateFeatureRegistry(featData);
+        if (!featRes.valid) {
+          for (const err of featRes.errors) {
+            errors.push(`[${regFile}] ${err}`);
+          }
         }
+        for (const warn of featRes.warnings) {
+          warnings.push(`[${regFile}] ${warn}`);
+        }
+        if (featData && Array.isArray(featData.features)) {
+          for (const f of featData.features) {
+            if (f?.feature_id && seenFeatureIds.has(f.feature_id.toLowerCase())) {
+              errors.push(`[${regFile}] Duplicate feature_id across registry files: '${f.feature_id}'`);
+            } else if (f?.feature_id) {
+              seenFeatureIds.add(f.feature_id.toLowerCase());
+            }
+          }
+          checkedFeaturesCount += featData.features.length;
+        }
+      } catch (err) {
+        errors.push(`[${regFile}] Failed to parse: ${err.message}`);
       }
-      for (const warn of featRes.warnings) {
-        warnings.push(`[feature_registry.yaml] ${warn}`);
-      }
-      if (featData && Array.isArray(featData.features)) {
-        checkedFeaturesCount = featData.features.length;
-      }
-    } catch (err) {
-      errors.push(`[feature_registry.yaml] Failed to parse: ${err.message}`);
     }
   }
 

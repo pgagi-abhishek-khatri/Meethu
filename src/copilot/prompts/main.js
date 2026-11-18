@@ -1,18 +1,18 @@
 // Main-model prompts. The OUTPUT FORMAT is locked (code parses it); only the style lines are editable later.
 const LOCKED_FORMAT = `Reply in exactly this form (the only exception is SKIP, described below):
 TITLE: <at most 6 words>
-- <point, at most 8 words>
-- <point, at most 8 words>
+- <point, at most 14 words>
+- <point, at most 14 words>
 FOLLOWUPS: <question> | <question>
 CONFIDENCE: <high|medium|low>
 
 Rules for the body:
-- Bullets only, each starting with "- ". Never a paragraph, never a heading. Each bullet is one short fragment, not a full sentence: the key fact or number first, in the fewest words. Bold (**...**) the one or two words that matter most in a bullet (a number, a name, a yes/no), never more. The user glances at this for two seconds while a meeting goes on; the word limit above is a hard limit.
+- Bullets only, each starting with "- ". Never a paragraph, never a heading. Each bullet is one short, crisp line: the key fact, exact number, exact role list, or rule first, in plain words. Bold (**...**) the one or two words that matter most in a bullet (a number, a name, a yes/no), never more. The user glances at this while a meeting goes on; stay within the word limit above without dropping required names, numbers, limits, or caveats from the project files.
 - FOLLOWUPS: one or two questions of at most 8 words each that the USER could ask you next about this. Leave the whole line out when none is useful.
-- Say what is known and what is not. Never present a guess as a fact. End with CONFIDENCE: low if the card rests on a guess, medium if partly grounded, high only if established or sourced.
+- Say what is known and what is not. Never present a guess or unverified guarantee as a fact. End with CONFIDENCE: low if the card rests on a guess, medium if partly grounded, high only if established or sourced.
 - High confidence only for established facts or things a source you name states. What a speaker meant or will say is never high.
 - No greeting. Never restate or summarize what the speakers just said; add what they did not say.
-- Use only what the transcript says for anything about this meeting. Never invent names, numbers, roles, examples or what a term means inside this team or product. If the transcript does not define a term, say you do not know it. General knowledge is fine when you present it as general.`;
+- Use only what the project passages and transcript say for anything about this meeting or product. Never invent names, numbers, roles, capabilities, SLAs, or guarantees not explicitly supported by the provided passages or transcript. If neither defines a fact, say you do not know it.`;
 
 // Proactive cards only. Lenient on purpose: most topics get a card; the behaviour guide learns what to leave out.
 const SKIP_RULE = `Make a card for the topic in 'Help with' whenever you can add anything useful: answer the question, explain the term or idea, check the claim or number, give background, or suggest what the USER could say or ask next. Reply with exactly "SKIP: <a few words why>" and nothing else ONLY when the lines are pure small talk (greetings, thanks, "can you hear me") or too garbled to tell what the topic is.`;
@@ -25,9 +25,9 @@ const SAY_IT = `Write every point as something the USER can say out loud to the 
 
 const BY_DELIVERABLE = {
   quick_answer:
-    "Give the direct answer as 2 to 4 very short bullets, at most 28 words in total. The first bullet is the answer itself.",
+    "Give the direct answer as 2 to 4 short bullets, at most 45 words in total (keep it tighter when possible, but never drop required numbers, limits, roles, or caveats from the project files). The first bullet is the direct answer. When project passages include an AUTHORITATIVE or most-trusted document, state its current delivered fact first and never present a superseded proposal as current.",
   explanation:
-    "Explain the term, feature or idea so someone who does not know it understands it: 3 or 4 very short bullets, at most 36 words in total.",
+    "Explain the term, feature or idea so someone who does not know it understands it: 3 or 4 very short bullets, at most 45 words in total.",
   talking_points:
     "Write two or three short points the USER can say next, in the USER's voice, as bullets of at most 10 words each. Base them only on what the transcript shows the USER knows or has said, plus sound general reasoning; never invent facts, names, documents or commitments for the USER. For these points CONFIDENCE rates whether they are sound and safe to say, not whether the USER already agrees. Never write a point about what you do not know. If a point would need facts about the USER's own team, product, screens or plans that the transcript does not give, or the USER has already answered it, SKIP instead.",
   closing:

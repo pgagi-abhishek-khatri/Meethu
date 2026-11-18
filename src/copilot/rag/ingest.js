@@ -11,6 +11,7 @@ const { mediaPart } = require("./embedClient");
 const { pool } = require("./openrouter");
 const { buildProfile } = require("./profileBuilder");
 const { PROFILE_VERSION } = require("./profile");
+const { docStanding } = require("./docPrecedence");
 
 const FRIENDLY = {
   no_key: "Add your OpenRouter key in the Copilot settings, then retry.",
@@ -52,6 +53,7 @@ function createIngestor({
   rag,
   clients,
   media,
+  deltaIngest = null,
   log = () => {},
   now = Date.now,
   cfg: baseCfg = RAG,
@@ -98,8 +100,10 @@ function createIngestor({
       // ---- prepare: chunks = [{ text, meta, native?: {...} }] and the text the summary reads
       let chunks = [];
       let note = null;
+      let extractedRawText = null;
       if (kind === "text" || kind === "office") {
         const r = kind === "text" ? readText(file.path) : await readOffice(file.path);
+        extractedRawText = r.text;
         if (r.partial) note = "Only the first part of this file was indexed (it is very long).";
         chunks = chunkText(r.text, {
           target: cfg.chunkChars,
@@ -121,6 +125,7 @@ function createIngestor({
           text: reads.map((x) => x.text).join("\n\n"),
           partial: reads.some((x) => x.partial),
         };
+        extractedRawText = r.text;
         if (r.partial) note = "Part of this PDF could not be read in full.";
         chunks = chunkText(r.text, {
           target: cfg.chunkChars,
@@ -243,21 +248,86 @@ function createIngestor({
           )
         );
 
-      // The file's profile (topics, facts, terms; sized to the file) is written beside the short summary.
-      // A failed profile leaves the file searchable; the catalog falls back to the summary.
-      const profileP = buildProfile({
-        ask: cl.analyze.ask,
-        name: file.name,
-        kind,
-        chunks,
-        log: ({ event, ...r }) => rec(event, r),
-        now,
-      })
-        .then((r) => (bill(r), r.profile))
-        .catch((e) => (rec("profile_failed", { error: e.message }), null));
+      // Skip slow LLM JSON profiling when OKF delta ingestion is active (unless catalogMode === "profile").
+      const wantsProfile =
+        (!deltaIngest || cfg.catalogMode === "profile") &&
+        !cfg.skipProfile &&
+        typeof cl.analyze?.ask === "function";
+      const profileP = wantsProfile
+        ? buildProfile({
+            ask: cl.analyze.ask,
+            name: file.name,
+            kind,
+            chunks,
+            log: ({ event, ...r }) => rec(event, r),
+            now,
+          })
+            .then((r) => (bill(r), r.profile))
+            .catch((e) => (rec("profile_failed", { error: e.message }), null))
+        : Promise.resolve(null);
 
-      const titleOf = (c) => `${file.name}${c.meta.heading ? ` · ${c.meta.heading}` : ""}`;
-      // chunks embedded from text: cache first (same words, same vector)
+      // Deterministic zero-LLM contextual header (document standing + heading) for higher retrieval recall
+      const standing = docStanding({ name: file.name });
+      const standingTag = [standing.phase ? `phase ${standing.phase}` : null, standing.label]
+        .filter(Boolean)
+        .join(", ");
+      const titleOf = (c) =>
+        `${file.name}${standingTag ? ` [${standingTag}]` : ""}${c.meta.heading ? ` · ${c.meta.heading}` : ""}`;
+      // When bi-temporal deltaIngest is wired for text/office/pdf documents, run batched delta ingestion
+      // so unchanged sections reuse cached vectors, modified features supersede predecessors atomically,
+      // and unmatched sections remain searchable with contextual headers.
+      if (deltaIngest && extractedRawText && (kind === "text" || kind === "office" || kind === "pdf")) {
+        const deltaRes = await deltaIngest.processDocument({
+          projectId: file.project_id,
+          fileId: file.id,
+          document: { text: extractedRawText, name: file.name },
+          source: file.name,
+          effectiveAt: standing.date || now(),
+          approved: true,
+          autoIndexUnmatched: true,
+          embedder: cl.embed,
+        });
+        if (deltaRes && deltaRes.status === "success") {
+          const [summary, profile] = await settleAll([summaryP, profileP]);
+          bill({
+            tokens: deltaRes.metrics?.embedding_tokens || 0,
+            cost: deltaRes.metrics?.embedding_cost || 0,
+          });
+          if (!rag.file(file.id)) return rec("removed");
+          const storedCount =
+            (deltaRes.summary?.new_features || 0) +
+            (deltaRes.summary?.modified_features || 0) +
+            (deltaRes.summary?.unchanged_features || 0) +
+            (deltaRes.summary?.unmatched_indexed || 0);
+          rec("embedded", {
+            mode: "delta",
+            texts: deltaRes.summary?.embeddings_created || 0,
+            cached: deltaRes.summary?.embeddings_reused || 0,
+            native: 0,
+            tokens,
+            cost,
+          });
+          set({
+            status: "ready",
+            stage: null,
+            summary,
+            profile: profile ? JSON.stringify(profile) : null,
+            profile_v: profile ? PROFILE_VERSION : null,
+            hash,
+            chunk_count: storedCount,
+            tokens,
+            cost,
+            indexed_at: now(),
+            note,
+            error: null,
+          });
+          rec("done", { chunks: storedCount, tokens, cost, summary: summary.slice(0, 120) });
+          return;
+        }
+        rec("delta_fallback", { error: deltaRes?.errors?.[0] || "delta ingest returned non-success" });
+      }
+
+      // Standard chunk embedding path (media, images, or when deltaIngest is not configured)
       const asText = chunks.filter((c) => !c.native);
       asText.forEach((c) => (c.hash = sha1(`${dims}|${titleOf(c)}|${c.text}`)));
       const cached = rag.cachedVectors(

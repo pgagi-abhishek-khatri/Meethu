@@ -26,6 +26,16 @@ function normalizeKeyword(k) {
   return k.trim().toLowerCase().replace(/[^a-z0-9-]+/g, "");
 }
 
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripSectionPrefix(s) {
+  return String(s || "")
+    .replace(/^\s*(?:[IVXLCDM]+\.|[0-9]+(?:\.[0-9]+)*\.?)\s+/i, "")
+    .trim();
+}
+
 function createFeatureRegistry({
   registryPath = null,
   okfDir = null,
@@ -34,7 +44,8 @@ function createFeatureRegistry({
   yaml = defaultYaml,
 } = {}) {
   const resolvedOkfDir = okfDir || path.resolve(__dirname, "../../../../OKF");
-  const resolvedRegistryPath = registryPath || path.join(resolvedOkfDir, "registry/feature_registry.yaml");
+  const resolvedRegistryDir = path.join(resolvedOkfDir, "registry");
+  const resolvedRegistryPath = registryPath || path.join(resolvedRegistryDir, "feature_registry.yaml");
 
   let rawData = null;
   let validationResult = { valid: false, errors: [], warnings: [] };
@@ -42,7 +53,31 @@ function createFeatureRegistry({
   let featuresByName = new Map();
   let featuresByAlias = new Map();
   let featuresByKeyword = new Map();
+  let featuresByKeywordPhrase = new Map();
   let loaded = false;
+
+  function resolveRegistryFiles() {
+    if (registryPath) {
+      return fs.existsSync(resolvedRegistryPath) ? [resolvedRegistryPath] : [];
+    }
+    if (typeof fs.readdirSync === "function" && fs.existsSync(resolvedRegistryDir)) {
+      try {
+        const files = fs
+          .readdirSync(resolvedRegistryDir)
+          .filter((f) => /\.ya?ml$/i.test(f))
+          .sort((a, b) => {
+            if (a === "feature_registry.yaml") return -1;
+            if (b === "feature_registry.yaml") return 1;
+            return a.localeCompare(b);
+          })
+          .map((f) => path.join(resolvedRegistryDir, f));
+        if (files.length > 0) return files;
+      } catch {
+        // Fall through to single-file path for mocked fs objects
+      }
+    }
+    return fs.existsSync(resolvedRegistryPath) ? [resolvedRegistryPath] : [];
+  }
 
   function load() {
     loaded = true;
@@ -50,8 +85,10 @@ function createFeatureRegistry({
     featuresByName.clear();
     featuresByAlias.clear();
     featuresByKeyword.clear();
+    featuresByKeywordPhrase.clear();
 
-    if (!fs.existsSync(resolvedRegistryPath)) {
+    const files = resolveRegistryFiles();
+    if (files.length === 0) {
       validationResult = {
         valid: false,
         errors: [`Registry file does not exist at '${resolvedRegistryPath}'`],
@@ -61,25 +98,56 @@ function createFeatureRegistry({
       return false;
     }
 
-    try {
-      const content = fs.readFileSync(resolvedRegistryPath, "utf8");
-      rawData = yaml.load(content);
-    } catch (err) {
-      validationResult = {
-        valid: false,
-        errors: [`Failed to parse YAML registry: ${err.message}`],
-        warnings: [],
-      };
-      rawData = null;
+    const mergedFeatures = [];
+    const allErrors = [];
+    const allWarnings = [];
+    let primaryMeta = null;
+
+    let lastParsed = null;
+    for (const filePath of files) {
+      let parsed = null;
+      try {
+        const content = fs.readFileSync(filePath, "utf8");
+        parsed = yaml.load(content);
+        lastParsed = parsed;
+      } catch (err) {
+        allErrors.push(`Failed to parse YAML registry '${filePath}': ${err.message}`);
+        continue;
+      }
+
+      const fileValidation = validateFeatureRegistry(parsed);
+      if (!fileValidation.valid) {
+        for (const err of fileValidation.errors) {
+          allErrors.push(err);
+        }
+        continue;
+      }
+      for (const warn of fileValidation.warnings || []) {
+        allWarnings.push(warn);
+      }
+
+      if (!primaryMeta) {
+        primaryMeta = {
+          schema_version: parsed.schema_version,
+          bundle_id: parsed.bundle_id,
+        };
+      }
+      for (const feat of parsed.features || []) {
+        mergedFeatures.push(feat);
+      }
+    }
+
+    if (allErrors.length > 0) {
+      validationResult = { valid: false, errors: allErrors, warnings: allWarnings };
+      rawData = files.length === 1 ? lastParsed : null;
       return false;
     }
 
-    // Run structural and semantic validation
-    validationResult = validateFeatureRegistry(rawData);
-    if (!validationResult.valid) {
-      // Do not index corrupted or invalid registry
-      return false;
-    }
+    rawData = {
+      ...(primaryMeta || { schema_version: "1.0.0", bundle_id: "merged" }),
+      features: mergedFeatures,
+    };
+    validationResult = { valid: true, errors: [], warnings: allWarnings };
 
     // Build in-memory deterministic indexes
     for (const feat of rawData.features) {
@@ -107,13 +175,21 @@ function createFeatureRegistry({
         }
       }
 
-      // 4. By Registered Keywords (normalized)
+      // 4. By Registered Keywords (compact + phrase-preserved normalized)
       if (Array.isArray(feat.keywords)) {
         for (const kw of feat.keywords) {
           const normKw = normalizeKeyword(kw);
-          if (!normKw) continue;
-          if (!featuresByKeyword.has(normKw)) featuresByKeyword.set(normKw, new Set());
-          featuresByKeyword.get(normKw).add(feat);
+          if (normKw) {
+            if (!featuresByKeyword.has(normKw)) featuresByKeyword.set(normKw, new Set());
+            featuresByKeyword.get(normKw).add(feat);
+          }
+          const normPhrase = normalizeTitle(kw);
+          if (normPhrase) {
+            if (!featuresByKeywordPhrase.has(normPhrase)) {
+              featuresByKeywordPhrase.set(normPhrase, new Set());
+            }
+            featuresByKeywordPhrase.get(normPhrase).add(feat);
+          }
         }
       }
     }
@@ -294,11 +370,61 @@ function createFeatureRegistry({
     };
   }
 
-  // Precedence Resolution: Exact feature_id -> Exact name -> Exact alias -> Keyword -> Fallback
+  function scoreTextMatches(text, projectId, { isTitle = false } = {}) {
+    const scores = new Map(); // feature_id -> { feature, score }
+    const norm = normalizeTitle(text);
+    if (!norm) return scores;
+
+    const addScore = (feat, pts) => {
+      if (!feat) return;
+      const cur = scores.get(feat.feature_id) || { feature: feat, score: 0 };
+      cur.score += pts;
+      scores.set(feat.feature_id, cur);
+    };
+
+    const weight = isTitle ? 3 : 1;
+
+    // Canonical name substring match (word-bounded)
+    for (const [normName, feats] of featuresByName.entries()) {
+      if (normName.length >= 5 && new RegExp(`\\b${escapeRegex(normName)}\\b`, "i").test(norm)) {
+        for (const f of filterByProject(feats, projectId)) {
+          addScore(f, 12 * weight);
+        }
+      }
+    }
+
+    // Registered alias substring match (word-bounded, multi-word aliases score higher)
+    for (const [normAlias, feats] of featuresByAlias.entries()) {
+      if (normAlias.length >= 4 && new RegExp(`\\b${escapeRegex(normAlias)}\\b`, "i").test(norm)) {
+        const multiWordBonus = normAlias.includes(" ") ? 4 : 0;
+        for (const f of filterByProject(feats, projectId)) {
+          addScore(f, (8 + multiWordBonus) * weight);
+        }
+      }
+    }
+
+    // Registered keyword phrase match (word-bounded, multi-word keywords score higher)
+    for (const [normPhrase, featSet] of featuresByKeywordPhrase.entries()) {
+      if (normPhrase.length >= 3 && new RegExp(`\\b${escapeRegex(normPhrase)}\\b`, "i").test(norm)) {
+        const multiWordBonus = normPhrase.includes(" ") ? 4 : 0;
+        const allowed = filterByProject([...featSet], projectId);
+        // Penalize shared keywords inversely by how many features share them
+        const specificity = allowed.length > 1 ? 0.5 : 1;
+        for (const f of allowed) {
+          addScore(f, (3 + multiWordBonus) * weight * specificity);
+        }
+      }
+    }
+
+    return scores;
+  }
+
+  // Precedence Resolution: Exact feature_id -> Exact name -> Exact alias -> Exact keyword -> Title-First Weighted Scoring -> Body Weighted Scoring -> Fallback
   function resolveFeature(queryOrTitle, textOrProjectId = null, maybeProjectId = null) {
     ensureLoaded();
     const isMultiArg = typeof textOrProjectId === "string";
     const q = String(queryOrTitle || "").trim();
+    const qStripped = stripSectionPrefix(q);
     const bodyText = isMultiArg ? String(textOrProjectId || "").trim() : "";
     const projectId = isMultiArg ? maybeProjectId : textOrProjectId;
 
@@ -337,9 +463,10 @@ function createFeatureRegistry({
       };
     }
 
-    // 2. Exact normalized canonical name (against title)
-    if (q) {
-      const byName = getFeatureByName(q, projectId);
+    // 2. Exact normalized canonical name (against title or section-number-stripped title)
+    for (const candidateQ of [q, qStripped]) {
+      if (!candidateQ) continue;
+      const byName = getFeatureByName(candidateQ, projectId);
       if (byName) {
         if (byName.ambiguous) return byName;
         return {
@@ -352,9 +479,10 @@ function createFeatureRegistry({
       }
     }
 
-    // 3. Exact normalized alias (against title)
-    if (q) {
-      const byAlias = getFeatureByAlias(q, projectId);
+    // 3. Exact normalized alias (against title or section-number-stripped title)
+    for (const candidateQ of [q, qStripped]) {
+      if (!candidateQ) continue;
+      const byAlias = getFeatureByAlias(candidateQ, projectId);
       if (byAlias) {
         if (byAlias.ambiguous) return byAlias;
         return {
@@ -367,9 +495,10 @@ function createFeatureRegistry({
       }
     }
 
-    // 4. Exact registered keyword (against title)
-    if (q) {
-      const byKw = findFeaturesByKeyword(q, projectId);
+    // 4. Exact registered keyword (against title or section-number-stripped title)
+    for (const candidateQ of [q, qStripped]) {
+      if (!candidateQ) continue;
+      const byKw = findFeaturesByKeyword(candidateQ, projectId);
       if (byKw.length === 1) {
         const feat = byKw[0];
         return {
@@ -385,12 +514,30 @@ function createFeatureRegistry({
           ambiguous: true,
           candidates: byKw.map((f) => f.feature_id),
           resolution: "requires_disambiguation",
-          reason: `Keyword '${q}' matches multiple registered features: ${byKw.map((f) => f.feature_id).join(", ")}`,
+          reason: `Keyword '${candidateQ}' matches multiple registered features: ${byKw.map((f) => f.feature_id).join(", ")}`,
         };
       }
     }
 
-    // 5. If bodyText is provided, check for explicit feature tag or unique keywords in body
+    // 4b. Title-First Weighted Specificity Scoring (handles natural section headings like "3.4 Live Bidding Engine and Real Time Updates")
+    const titleScores = q ? scoreTextMatches(qStripped || q, projectId, { isTitle: true }) : new Map();
+    if (titleScores.size > 0) {
+      const rankedTitle = [...titleScores.values()].sort(
+        (a, b) => b.score - a.score || a.feature.feature_id.localeCompare(b.feature.feature_id)
+      );
+      if (rankedTitle.length === 1 || rankedTitle[0].score >= 1.5 * rankedTitle[1].score) {
+        const feat = rankedTitle[0].feature;
+        return {
+          matched: true,
+          ambiguous: false,
+          matchTier: "title_scored",
+          feature: feat,
+          currentApproved: getCurrentApprovedVersion(feat.feature_id, projectId),
+        };
+      }
+    }
+
+    // 5. If bodyText is provided, check explicit feature tag or combined Title (3x) + Body (1x) weighted score
     if (bodyText) {
       const bodyIdMatch = bodyText.match(/\bfeat:[a-z0-9_:-]+\b/i);
       if (bodyIdMatch) {
@@ -406,18 +553,23 @@ function createFeatureRegistry({
         }
       }
 
-      // Check registered keywords in body if title did not produce a match
-      const matchedByBodyKw = new Set();
-      for (const [normKw, featSet] of featuresByKeyword.entries()) {
-        if (normKw.length >= 4 && new RegExp(`\\b${normKw}\\b`, "i").test(bodyText)) {
-          for (const f of filterByProject([...featSet], projectId)) {
-            matchedByBodyKw.add(f);
-          }
-        }
+      const bodyScores = scoreTextMatches(bodyText, projectId, { isTitle: false });
+      const combined = new Map();
+      for (const [id, entry] of titleScores.entries()) {
+        combined.set(id, { feature: entry.feature, score: entry.score });
+      }
+      for (const [id, entry] of bodyScores.entries()) {
+        const cur = combined.get(id) || { feature: entry.feature, score: 0 };
+        cur.score += entry.score;
+        combined.set(id, cur);
       }
 
-      if (matchedByBodyKw.size === 1) {
-        const feat = [...matchedByBodyKw][0];
+      const ranked = [...combined.values()].sort(
+        (a, b) => b.score - a.score || a.feature.feature_id.localeCompare(b.feature.feature_id)
+      );
+
+      if (ranked.length === 1) {
+        const feat = ranked[0].feature;
         return {
           matched: true,
           ambiguous: false,
@@ -425,13 +577,23 @@ function createFeatureRegistry({
           feature: feat,
           currentApproved: getCurrentApprovedVersion(feat.feature_id, projectId),
         };
-      } else if (matchedByBodyKw.size > 1) {
+      } else if (ranked.length > 1) {
+        if (ranked[0].score >= 1.5 * ranked[1].score && ranked[0].score >= 6) {
+          const feat = ranked[0].feature;
+          return {
+            matched: true,
+            ambiguous: false,
+            matchTier: "keyword_body",
+            feature: feat,
+            currentApproved: getCurrentApprovedVersion(feat.feature_id, projectId),
+          };
+        }
         return {
           matched: false,
           ambiguous: true,
-          candidates: [...matchedByBodyKw].map((f) => f.feature_id),
+          candidates: ranked.map((r) => r.feature.feature_id),
           resolution: "requires_disambiguation",
-          reason: `Body content matches multiple registered features: ${[...matchedByBodyKw].map((f) => f.feature_id).join(", ")}`,
+          reason: `Body content matches multiple registered features: ${ranked.map((r) => r.feature.feature_id).join(", ")}`,
         };
       }
     }
