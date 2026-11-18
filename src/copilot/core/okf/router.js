@@ -199,7 +199,9 @@ function createOkfRouter({ defaultBudget = 2800 } = {}) {
     }
 
     if (route === "rag") {
-      return clip(ragText || "", budget);
+      // the search already sized its passages; cutting them here would drop the newest ones and the note on
+      // which document wins
+      return ragText || "";
     }
 
     if (route === "mixed") {

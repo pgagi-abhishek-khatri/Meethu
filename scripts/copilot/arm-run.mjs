@@ -43,12 +43,78 @@ const arg = (n) => (args.includes(n) ? args[args.indexOf(n) + 1] : null);
 const armName = arg("--arm");
 const ragDir = arg("--rag");
 const outFile = arg("--out");
-const meetingFile = args.find((a) => a.endsWith(".jsonl"));
+const meetingFile = args.find((a) => a.endsWith(".jsonl") && a !== arg("--steps"));
 const arm = ARMS[armName];
 if (!arm || !ragDir || !outFile || !meetingFile)
   throw new Error("usage: arm-run.mjs --arm A0|P|T --rag <dir> --out <file> <meeting.jsonl>");
 
 const apiKey = process.env.OPENROUTER_API_KEY;
+
+// ---- step log: every engine event, model call, HTTP request and search, one JSON line each, as it happens
+// (--steps <file.jsonl>). Spending cap: no request goes out once CAP_CALLS requests were made or CAP_USD was
+// spent (defaults 400 and $3); the replay then stops early and says so.
+const stepsFile = arg("--steps");
+const stepsOut = stepsFile
+  ? (fs.mkdirSync(path.dirname(path.resolve(stepsFile)), { recursive: true }),
+    fs.createWriteStream(stepsFile))
+  : null;
+const wall0 = Date.now();
+let vtNow = () => 0;
+const step = (type, data) =>
+  stepsOut?.write(
+    JSON.stringify({ step: type, wallMs: Date.now() - wall0, meetingSec: vtNow(), ...data }) + "\n"
+  );
+const CAP_USD = Number(process.env.CAP_USD ?? 3);
+const CAP_CALLS = Number(process.env.CAP_CALLS ?? 400);
+const net = []; // every HTTP request to OpenRouter: { n, path, model, kind, ms, status, cost, tokens }
+let capped = null;
+let streamedCost = 0; // the answer model streams; its cost comes from its own record
+const spent = () => net.reduce((s, r) => s + (r.cost || 0), 0) + streamedCost;
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (url, init = {}) => {
+  const u = String(url);
+  if (!/openrouter\.ai/.test(u)) return realFetch(url, init);
+  let body = {};
+  try {
+    body = JSON.parse(init.body ?? "{}");
+  } catch {}
+  if (net.length >= CAP_CALLS || spent() >= CAP_USD) {
+    capped ??= { at: net.length, usd: Number(spent().toFixed(4)) };
+    step("cap_reached", capped);
+    throw Object.assign(new Error("spending cap reached"), { code: "cap_reached" });
+  }
+  const rec = {
+    n: net.length + 1,
+    path: u.replace(/^https?:\/\/[^/]+\/api\/v1/, ""),
+    model: body.model ?? null,
+    stream: !!body.stream,
+  };
+  net.push(rec);
+  const t = Date.now();
+  try {
+    const res = await realFetch(url, init);
+    rec.status = res.status;
+    rec.ms = Date.now() - t; // to the response headers (a stream keeps going after this)
+    if (!body.stream)
+      await res
+        .clone()
+        .json()
+        .then((j) => {
+          rec.cost = Number(j.usage?.cost) || 0;
+          rec.tokens = j.usage?.total_tokens ?? null;
+        })
+        .catch(() => {});
+    rec.totalMs = Date.now() - t;
+    step("http", rec);
+    return res;
+  } catch (e) {
+    rec.ms = Date.now() - t;
+    rec.error = e.name === "AbortError" ? "aborted" : (e.code ?? e.message);
+    step("http", rec);
+    throw e;
+  }
+};
+
 const rows = fs
   .readFileSync(meetingFile, "utf8")
   .trim()
@@ -58,9 +124,17 @@ const rows = fs
 const t0 = Date.parse(rows[0].at);
 const clock = fakeClock(t0);
 const vt = () => Math.round((clock.now() - t0) / 100) / 10; // virtual meeting seconds
+vtNow = vt;
 
 // ---- everything that costs, call by call
 const calls = []; // { model, kind, t, ms, inputTokens, outputTokens, cost, ...detail }
+calls.push = (...xs) => {
+  for (const x of xs) {
+    if (x.kind === "answer") streamedCost += Number(x.cost) || 0;
+    step("call", x);
+  }
+  return Array.prototype.push.apply(calls, xs);
+};
 let inflight = 0;
 const track =
   (fn) =>
@@ -181,6 +255,7 @@ const rag = {
     const r = await retriever.retrieve({ ...o, projectIds: [pid] });
     searches.push({
       t,
+      focus: o.query, // the card's focus: links this search to its card
       why: o.why,
       minScore: o.minScore,
       ms: r.ms,
@@ -190,7 +265,9 @@ const rag = {
       embedMs: r.embedMs,
       used: r.used,
       passageChars: r.text.length,
+      passages: r.text,
     });
+    step("search", searches[searches.length - 1]);
     return r;
   },
 };
@@ -214,12 +291,15 @@ const mainModel = track(async (r) => {
       )?.[0] ?? ""
     ).length,
     gateQueries: user.includes("Search queries a helper wrote for this moment"),
+    precedenceNote: /Most trusted first/.test(user),
+    focus: (/(?:Help with|The USER asks):\n([\s\S]*?)(?:\n\n|$)/.exec(user)?.[1] ?? "").slice(0, 300),
   };
   const t = Date.now();
   try {
     const res = await realMain(r);
     calls.push({
       ...rec,
+      reply: String(res.text ?? "").slice(0, 1500),
       ms: Date.now() - t,
       firstTokenMs: res.firstTokenMs,
       inputTokens: res.usage?.prompt_tokens ?? null,
@@ -235,12 +315,32 @@ const mainModel = track(async (r) => {
 
 // ---- the replay
 const out = { decisions: [], cards: [], skips: [] };
+// The app wires the OKF router in front of the answer (service.js); so does the replay, unless --no-okf.
+const okf = args.includes("--no-okf")
+  ? null
+  : {
+      registry: require(path.join(root, "src/copilot/core/okf/registry")).createOkfRegistry({
+        okfDir: path.join(root, "OKF"),
+      }),
+      router: require(path.join(root, "src/copilot/core/okf/router")).createOkfRouter(),
+    };
+const QUIET_EVENTS = new Set(["level", "partial", "activity"]);
 const cardStart = new Map();
 const engine = createEngine({
-  env: { ...process.env, COPILOT_MAIN: "1", COPILOT_RAG_TRIGGER: "" },
+  // with --steps, the engine's own full trace (scheduler verdicts, every D1 request and answer, the OKF route)
+  // goes to <steps folder>/sessions/
+  env: {
+    ...process.env,
+    COPILOT_MAIN: "1",
+    COPILOT_RAG_TRIGGER: "",
+    COPILOT_LOG: stepsFile ? "1" : "",
+  },
+  logDir: stepsFile ? path.dirname(path.resolve(stepsFile)) : undefined,
   decisionCfg: { ...DEFAULT_DECISION_CONFIG, ragTrigger: arm.ragTrigger },
+  okf,
   panel: {
     send(ev) {
+      if (!QUIET_EVENTS.has(ev.type)) step("event", ev);
       if (ev.type === "decision" && ev.jobId)
         decidedAt.set(ev.jobId, { wall: Date.now(), d1Ms: lastDecideMs });
       if (ev.type === "decision")
@@ -301,7 +401,9 @@ const advanceTo = async (target) => {
 };
 const started = Date.now();
 for (const r of rows) {
+  if (capped) break;
   await advanceTo(Date.parse(r.at));
+  step("segment", { id: rows.indexOf(r) + 1, source: r.source, text: r.text });
   engine.onFinal({ text: r.text, source: r.source, speaker: r.speaker, timestamp: clock.now() });
 }
 await advanceTo(clock.now() + 20000);
@@ -327,6 +429,13 @@ fs.writeFileSync(
       stats: { d1Calls: stats.d1Calls, d1InputTokens: stats.inputTokens, byKind: stats.byKind },
       calls,
       searches,
+      http: net,
+      totals: {
+        httpRequests: net.length,
+        costUsd: Number(spent().toFixed(4)),
+        cap: { usd: CAP_USD, calls: CAP_CALLS },
+        capped,
+      },
       ...out,
     },
     null,
@@ -335,6 +444,7 @@ fs.writeFileSync(
 );
 const by = (k) => calls.filter((c) => c.kind === k);
 console.log(
-  `${armName}: ${rows.length} segs, ${out.decisions.length} decisions, D1 ${by("decide").length}+${by("gate").length} gate, writer ${by("query_writer").length}, searches ${searches.length}, cards ${out.cards.length}, skips ${out.skips.length} -> ${outFile}`
+  `${armName}: ${rows.length} segs, ${out.decisions.length} decisions, D1 ${by("decide").length}+${by("gate").length} gate, writer ${by("query_writer").length}, searches ${searches.length}, cards ${out.cards.length}, skips ${out.skips.length}, ${net.length} HTTP requests, $${spent().toFixed(4)}${capped ? " (STOPPED AT CAP)" : ""} -> ${outFile}`
 );
+if (stepsOut) await new Promise((r) => stepsOut.end(r));
 process.exit(0);

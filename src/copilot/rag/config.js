@@ -30,6 +30,7 @@ const RAG = {
   deep: { k: 10, chars: 7000 },
   floor: 0.58, // measured: relevant passages score 0.60-0.80, unrelated ones in the same domain 0.48-0.60
   margin: 0.05, // and a passage this far under the best one is not about the same thing
+  newerSlack: 0.04, // a newer document's best match is shown beside an older one's down to floor - this
   autoScore: 0.69, // an unasked look at the files needs a match this close
   keywordFloor: 0.5, // an exact-word hit still needs at least this much closeness in meaning
   strongKeyword: 3, // an exact-term match this far from the top still counts without the embedding

@@ -5,6 +5,7 @@
 const { RAG } = require("./config");
 const { mmss } = require("./chunker");
 const { allocate, renderForDecider, renderForAnswer, renderForWriter } = require("./profile");
+const { standingMap, precedenceNote, passageTag } = require("./docPrecedence");
 
 const clip = (s, n) => (s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s);
 // the speaker label ("OTHER-1:") is not part of the question
@@ -70,8 +71,10 @@ function createRetriever({
     // Always in the answer prompt when the project has indexed files: what exists, so the model can tell
     // whether looking inside would help, and (profile mode) the key facts with their pages. No model call.
     catalog(projectIds) {
-      const head =
-        "The USER's project files (what each holds; the matching passages come below when they are needed):";
+      // When the files include a plan and what was later delivered, the model is told which one wins up front,
+      // so it never states an outdated plan as the current fact.
+      const order = precedenceNote([...standingMap(filesOf(projectIds)).values()]);
+      const head = `The USER's project files (what each holds; the matching passages come below when they are needed):${order ? `\n${order}` : ""}`;
       if (catalogMode === "profile") {
         const blocks = profiled(projectIds, cfg.profileBudget.answer, renderForAnswer);
         return blocks.length
@@ -82,7 +85,7 @@ function createRetriever({
       if (!rows.length) return "";
       return clip(
         `${head}\n${rows.map((r) => `- ${r.name}: ${clip(r.summary ?? r.kind ?? "", cfg.catalogChars)}`).join("\n")}`,
-        cfg.catalogBudget
+        cfg.catalogBudget + order.length
       );
     },
 
@@ -361,10 +364,45 @@ function createRetriever({
           );
         })
         .slice(0, lim.k);
+
+      // Documents of different standing (a proposal, then what was built): a passage from an older one may be
+      // outdated by a newer one the search ranked lower. The best match from each newer document is kept too,
+      // newer documents come first, and each passage says which document it is, so the answer gives what is
+      // true now. Files that are neither (a pricing sheet) keep their place and their plain label.
+      const standing = standingMap(filesOf(ids));
+      const fileNames = new Map();
+      const fileOf = (id) => {
+        if (!fileNames.has(id)) fileNames.set(id, rag.chunk(id)?.file ?? null);
+        return fileNames.get(id);
+      };
+      const picked = [...kept];
+      if (standing.size > 1 && kept.length) {
+        const keptFiles = new Set(kept.map((f) => fileOf(f.id)));
+        const lowest = Math.min(...[...keptFiles].map((n) => standing.get(n)?.order ?? Infinity));
+        if (Number.isFinite(lowest))
+          for (const [name, s] of standing) {
+            if (s.order <= lowest || keptFiles.has(name)) continue;
+            const extra = fused.find((f) => {
+              if (kept.includes(f) || fileOf(f.id) !== name) return false;
+              const c = cos.get(f.id) ?? -1;
+              const exact = (kwRank.get(f.id) ?? 99) < cfg.strongKeyword;
+              return c >= cfg.floor - cfg.newerSlack || (exact && mode === "keyword");
+            });
+            if (extra) picked.push(extra);
+          }
+        // most trusted first, in the places ranked files held (unranked files keep theirs)
+        const slots = picked.flatMap((f, i) => (standing.has(fileOf(f.id)) ? [i] : []));
+        const ranked = slots
+          .map((i) => picked[i])
+          .sort((a, b) => standing.get(fileOf(b.id)).order - standing.get(fileOf(a.id)).order);
+        slots.forEach((slot, j) => (picked[slot] = ranked[j]));
+      }
+
       let used = 0;
       const parts = [];
       const usedInfo = [];
-      for (const f of kept) {
+      const shownStandings = new Map();
+      for (const f of picked) {
         const c = rag.chunk(f.id);
         if (!c) continue;
         const where =
@@ -376,14 +414,18 @@ function createRetriever({
         const body = clip(c.text, 900);
         if (used + body.length > lim.chars && parts.length) break;
         used += body.length;
-        parts.push(`[${c.file}${where ? ` · ${where}` : ""}]\n${body}`);
+        const s = standing.get(c.file);
+        if (s) shownStandings.set(c.file, s);
+        parts.push(`[${c.file}${where ? ` · ${where}` : ""}${s ? ` · ${passageTag(s)}` : ""}]\n${body}`);
         usedInfo.push({
           file: c.file,
           where,
           score: Number((cos.get(f.id) ?? 0).toFixed(3)),
           kw: kwRank.get(f.id) ?? null,
+          ...(s ? { doc: s.kind, docOrder: s.order, addedNewer: !kept.includes(f) } : {}),
         });
       }
+      const note = precedenceNote([...shownStandings.values()]);
       if (temporalRouting && temporalRouting.passages) {
         parts.unshift(temporalRouting.passages);
         if (temporalRouting.evidence && temporalRouting.evidence.length) {
@@ -417,7 +459,7 @@ function createRetriever({
       }
 
       const text = parts.length
-        ? `Passages from the USER's project files that match this moment (use them when they answer it; say where a fact comes from in plain words, like "from the pricing sheet"; never quote a path):\n\n${parts.join("\n\n")}`
+        ? `Passages from the USER's project files that match this moment (use them when they answer it; say where a fact comes from in plain words, like "from the pricing sheet"; never quote a path):\n\n${note ? `${note}\n\n` : ""}${parts.join("\n\n")}`
         : "";
       return done({
         log: {
