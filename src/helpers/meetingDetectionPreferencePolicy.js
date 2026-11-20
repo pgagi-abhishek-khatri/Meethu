@@ -8,12 +8,17 @@ function deriveDetectorPreferences({
   notificationsEnabled,
   notifyMeetingDetection,
   meetingProcessDetection,
+  autoStartOnDetection,
 }) {
   const audioDetection = notificationsEnabled === true && notifyMeetingDetection === true;
-  return {
+  const result = {
     audioDetection,
     processDetection: audioDetection && meetingProcessDetection === true,
   };
+  if (typeof autoStartOnDetection === "boolean") {
+    result.autoStartOnDetection = autoStartOnDetection;
+  }
+  return result;
 }
 
 module.exports = { deriveDetectorPreferences };

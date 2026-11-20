@@ -14,6 +14,15 @@ export const MEETING_STREAMING_PROVIDER_IDS = [
   "soniox",
 ];
 
+// Soniox is the default note-recording route whenever its key is set (SONIOX_API_KEY in .env, or saved in
+// Settings), unless the user picked a route themselves. A saved OpenWhispr Cloud choice is also moved off
+// when this build has no OpenWhispr API configured, since every recording would fail there with no transcript.
+export function shouldDefaultMeetingToSoniox({ savedMode, hasSonioxKey, cloudConfigured }) {
+  if (!hasSonioxKey) return false;
+  if (!savedMode) return true;
+  return savedMode === "openwhispr" && !cloudConfigured;
+}
+
 export function filterMeetingStreamingProviders(providers) {
   return providers.filter((provider) => MEETING_STREAMING_PROVIDER_IDS.includes(provider.id));
 }

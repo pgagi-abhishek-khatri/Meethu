@@ -52,7 +52,8 @@ function createEngine() {
   const audioDetector = new EventEmitter();
   audioDetector.dismissals = 0;
   audioDetector.dismiss = () => audioDetector.dismissals++;
-  audioDetector.resetPrompt = () => {};
+  audioDetector.resetPrompts = 0;
+  audioDetector.resetPrompt = () => audioDetector.resetPrompts++;
   audioDetector.getExternalMicState = () => ({ reliable: true, externalMicActive: true });
   audioDetector.setUserRecording = () => {};
   audioDetector.setMicWarmHold = () => {};
@@ -106,6 +107,11 @@ test("an unanswered audio prompt expires without cooling down the mic detector",
   engine.handleNotificationTimeout();
 
   assert.equal(audioDetector.dismissals, 0, "a timeout is not a decline; no cooldown may start");
+  assert.equal(
+    audioDetector.resetPrompts,
+    0,
+    "a timeout keeps hasPrompted, so the ongoing call is not prompted again"
+  );
   assert.equal(engine.activeDetections.size, 0, "expired detections must be cleared");
 });
 
@@ -578,4 +584,79 @@ test("a card closing on its own during a dictation holds the queue until the dic
   engine.setUserRecording(false);
   t.mock.timers.tick(2500);
   assert.equal(shown.length, 2);
+});
+
+test("autoStartOnDetection starts a manual meeting immediately without showing a prompt", () => {
+  const { engine, audioDetector, shown } = createEngine();
+  let manualMeetingStarted = false;
+  let manualMeetingOptions = null;
+  engine.startManualMeeting = async (options) => {
+    manualMeetingStarted = true;
+    manualMeetingOptions = options;
+  };
+
+  engine.setPreferences({
+    audioDetection: true,
+    processDetection: true,
+    autoStartOnDetection: true,
+  });
+  audioDetector.emit("sustained-audio-detected", { durationMs: 2000, detectedAt: 0 });
+
+  assert.equal(shown.length, 0, "no notification prompt should be shown");
+  assert.equal(manualMeetingStarted, true, "manual meeting should be auto-started");
+  assert.deepEqual(manualMeetingOptions, { source: "auto-detection-audio" });
+});
+
+test("auto-start goes through the window manager's guarded start when it has one", async () => {
+  const { engine, windowManager, shown } = createEngine();
+  const guarded = [];
+  windowManager.startManualMeeting = async (options) => guarded.push(options);
+  let direct = 0;
+  engine.startManualMeeting = async () => direct++;
+
+  engine.setPreferences({
+    audioDetection: true,
+    processDetection: true,
+    autoStartOnDetection: true,
+  });
+  engine.audioActivityDetector.emit("sustained-audio-detected", {
+    durationMs: 2000,
+    detectedAt: 0,
+  });
+  await Promise.resolve();
+
+  assert.equal(shown.length, 0);
+  assert.deepEqual(guarded, [{ source: "auto-detection-audio" }]);
+  assert.equal(direct, 0, "the unguarded engine start must not be called directly");
+});
+
+test("auto-start is off by default: detection still prompts", () => {
+  const { engine, audioDetector, shown } = createEngine();
+  let started = 0;
+  engine.startManualMeeting = async () => started++;
+
+  engine.setPreferences({ audioDetection: true, processDetection: true });
+  audioDetector.emit("sustained-audio-detected", { durationMs: 2000, detectedAt: 0 });
+
+  assert.equal(started, 0);
+  assert.equal(shown.length, 1, "the user is asked first");
+});
+
+test("a failed meeting-note navigation clears meeting mode so detection keeps working", async () => {
+  const { engine, windowManager } = createEngine();
+  engine.databaseManager = {
+    getActiveEvents: () => [],
+    saveNote: () => ({ note: { id: 7 } }),
+    getMeetingsFolder: () => ({ id: 1 }),
+  };
+  windowManager.queueMeetingNoteNavigation = async () => {
+    throw new Error("Panel unavailable");
+  };
+
+  await assert.rejects(engine.startManualMeeting({}), /Panel unavailable/);
+  assert.equal(engine._meetingModeActive, false);
+
+  windowManager.queueMeetingNoteNavigation = async () => ({ success: false, code: "START_FAILED" });
+  await engine.startManualMeeting({});
+  assert.equal(engine._meetingModeActive, false);
 });

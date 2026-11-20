@@ -243,3 +243,50 @@ test("a replacement start waits for a deferred accepted stop to finish", async (
   assert.deepEqual(stops, ["meeting-1"]);
   assert.equal(activeCaptureSessionId, "meeting-2");
 });
+
+test("onStarted runs only after a successful start, never after a failed one", async () => {
+  const started = [];
+  const lifecycle = createMeetingTranscriptionLifecycle({
+    start: async ({ sessionId }) =>
+      sessionId === "bad"
+        ? { success: false, error: "No Soniox API key configured" }
+        : { success: true, sessionId },
+    stop: async () => ({ success: true }),
+    onStarted: (sessionId) => started.push(sessionId),
+  });
+
+  const failed = await lifecycle.startSession({
+    sessionId: "bad",
+    ownerWebContents: createOwnerWebContents(),
+    options: {},
+  });
+  assert.equal(failed.success, false);
+  assert.deepEqual(started, [], "a failed start must not begin the copilot");
+
+  await lifecycle.startSession({
+    sessionId: "good",
+    ownerWebContents: createOwnerWebContents(),
+    options: {},
+  });
+  assert.deepEqual(started, ["good"]);
+});
+
+test("a retired session's stop finishes before the new session's onStarted", async () => {
+  const events = [];
+  const owner = createOwnerWebContents();
+  const lifecycle = createMeetingTranscriptionLifecycle({
+    start: async ({ sessionId }) => ({ success: true, sessionId }),
+    stop: async (sessionId) => {
+      await new Promise((r) => setTimeout(r, 5));
+      events.push(`stop:${sessionId}`); // the copilot's endSession runs here
+      return { success: true };
+    },
+    onStarted: (sessionId) => events.push(`begin:${sessionId}`),
+  });
+
+  await lifecycle.startSession({ sessionId: "old", ownerWebContents: owner, options: {} });
+  // The same renderer reloads and starts again: the old session is retired first.
+  await lifecycle.startSession({ sessionId: "new", ownerWebContents: owner, options: {} });
+
+  assert.deepEqual(events, ["begin:old", "stop:old", "begin:new"]);
+});

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { API_ENDPOINTS } from "../config/constants";
+import { API_ENDPOINTS, OPENWHISPR_API_URL } from "../config/constants";
 import i18n, { normalizeUiLanguage } from "../i18n";
 import { ensureAgentNameInDictionary } from "../utils/agentName";
 import { chooseDictionaryStartupAction } from "../helpers/dictionaryStartup";
@@ -43,7 +43,10 @@ import { pickDefaultModelId } from "../models/providerDefaultModel";
 // cycle.
 import { readCachedTinfoilModels } from "../models/tinfoilModelCache";
 import { recordRetiredModelSwitch } from "./retiredModelSwitchStore";
-import { MEETING_STREAMING_PROVIDER_IDS } from "../helpers/meetingTranscriptionRouting";
+import {
+  MEETING_STREAMING_PROVIDER_IDS,
+  shouldDefaultMeetingToSoniox,
+} from "../helpers/meetingTranscriptionRouting";
 import { STREAMING_ONLY_PROVIDERS } from "../helpers/transcriptionRoute";
 import {
   getTranscriptionSelection,
@@ -317,6 +320,7 @@ const BOOLEAN_SETTINGS = new Set([
   "notificationsEnabled",
   "notifyMeetingDetection",
   "notifyCalendarReminders",
+  "autoStartOnDetection",
   "autoUpdatesEnabled",
   "gcalPrimaryOnly",
   "mcalPrimaryOnly",
@@ -920,6 +924,7 @@ export interface SettingsState
   notificationsEnabled: boolean;
   notifyMeetingDetection: boolean;
   notifyCalendarReminders: boolean;
+  autoStartOnDetection: boolean;
   autoUpdatesEnabled: boolean;
   gcalPrimaryOnly: boolean;
   mcalPrimaryOnly: boolean;
@@ -1250,6 +1255,7 @@ export interface SettingsState
   setNotificationsEnabled: (value: boolean) => void;
   setNotifyMeetingDetection: (value: boolean) => void;
   setNotifyCalendarReminders: (value: boolean) => void;
+  setAutoStartOnDetection: (value: boolean) => void;
   setAutoUpdatesEnabled: (enabled: boolean) => void;
   setGcalPrimaryOnly: (value: boolean) => void;
   setMcalPrimaryOnly: (value: boolean) => void;
@@ -1671,6 +1677,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   notificationsEnabled: readBoolean("notificationsEnabled", true),
   notifyMeetingDetection: readBoolean("notifyMeetingDetection", true),
   notifyCalendarReminders: readBoolean("notifyCalendarReminders", true),
+  autoStartOnDetection: readBoolean("autoStartOnDetection", false),
   autoUpdatesEnabled: readBoolean("autoUpdatesEnabled", true),
   ...(() => {
     let accounts: CalendarAccount[] = [];
@@ -2492,6 +2499,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   setNotificationsEnabled: createBooleanSetter("notificationsEnabled"),
   setNotifyMeetingDetection: createBooleanSetter("notifyMeetingDetection"),
   setNotifyCalendarReminders: createBooleanSetter("notifyCalendarReminders"),
+  setAutoStartOnDetection: createBooleanSetter("autoStartOnDetection"),
   setAutoUpdatesEnabled: (enabled: boolean) => {
     if (isBrowser) localStorage.setItem("autoUpdatesEnabled", String(enabled));
     set({ autoUpdatesEnabled: enabled });
@@ -3382,6 +3390,7 @@ export async function initializeSettings(): Promise<void> {
         notifyMeetingDetection: state.notifyMeetingDetection,
         notifyCalendarReminders: state.notifyCalendarReminders,
         meetingProcessDetection: state.meetingProcessDetection,
+        autoStartOnDetection: state.autoStartOnDetection,
       });
     } catch (err) {
       logger.warn(
@@ -3482,6 +3491,22 @@ export async function initializeSettings(): Promise<void> {
         assemblyaiApiKey: assemblyai || "",
         sonioxApiKey: soniox || "",
       });
+
+      // Note recording defaults to Soniox when its key is set (see shouldDefaultMeetingToSoniox).
+      if (
+        shouldDefaultMeetingToSoniox({
+          savedMode: localStorage.getItem("meetingTranscriptionMode"),
+          hasSonioxKey: Boolean((soniox || "").trim()),
+          cloudConfigured: Boolean(OPENWHISPR_API_URL),
+        })
+      ) {
+        const st = useSettingsStore.getState();
+        st.setMeetingTranscriptionMode("providers");
+        st.setMeetingUseLocalWhisper(false);
+        st.setMeetingCloudTranscriptionMode("byok");
+        st.setMeetingCloudTranscriptionProvider("soniox");
+        st.setMeetingCloudTranscriptionModel("stt-rt-v5");
+      }
 
       if (localStorage.getItem("_dictationAgentSeeded") === "key-pending") {
         const { chatAgentCustomApiKey, setDictationAgentCustomApiKey } =

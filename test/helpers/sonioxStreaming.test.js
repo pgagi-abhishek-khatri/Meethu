@@ -395,3 +395,59 @@ test("meeting mode: two instances stay independent (mic and system)", async () =
     await Promise.all([mic.disconnect(), system.disconnect()]);
   });
 });
+
+test("meeting mode: words pending past the limit are finalized, then again only after another interval", async () => {
+  await withSonioxServer(async (url, connections) => {
+    const s = client(url, { meetingFinalizeAfterMs: 4000 });
+    await s.connect(MEETING);
+    const sent = () => connections[0].received.filter((m) => m.type === "finalize").length;
+
+    // Nothing pending: never finalizes.
+    assert.equal(s.maybeFinalizePending(Date.now() + 60000), false);
+
+    // A long sentence: words keep arriving, nothing closes.
+    s.handleMessage(JSON.stringify({ tokens: [{ text: "And so my fellow", is_final: false }] }));
+    const t = s.pendingSince;
+    assert.ok(t > 0);
+    assert.equal(s.maybeFinalizePending(t + 3999), false, "not before the limit");
+    assert.equal(s.maybeFinalizePending(t + 4000), true);
+    assert.equal(s.maybeFinalizePending(t + 5000), false, "one finalize per interval");
+    s.handleMessage(JSON.stringify({ tokens: [{ text: " Americans ask not", is_final: false }] }));
+    assert.equal(
+      s.maybeFinalizePending(t + 8000),
+      true,
+      "still talking: the next interval finalizes again"
+    );
+    await wait(30);
+    assert.equal(sent(), 2);
+
+    // The server answers with final words and <fin>: the segment closes and nothing is pending.
+    const finals = [];
+    s.onFinalTranscript = (text) => finals.push(text);
+    s.handleMessage(
+      JSON.stringify({
+        tokens: [final("And so my fellow Americans", 0, 2000, "1"), final("<fin>")],
+      })
+    );
+    assert.deepEqual(finals, ["And so my fellow Americans"]);
+    assert.equal(s.pendingSince, null);
+    await s.disconnect();
+  });
+});
+
+test("meeting mode: finalize-after can be turned off, and dictation never uses it", async () => {
+  await withSonioxServer(async (url) => {
+    const off = client(url, { meetingFinalizeAfterMs: 0 });
+    await off.connect(MEETING);
+    off.handleMessage(JSON.stringify({ tokens: [{ text: "hello", is_final: false }] }));
+    assert.equal(off.meetingFinalizeTimer, null);
+    await off.disconnect();
+
+    const dictation = client(url);
+    await dictation.connect({ ...OPTIONS, mode: "byok" });
+    dictation.handleMessage(JSON.stringify({ tokens: [{ text: "hello", is_final: false }] }));
+    assert.equal(dictation.meetingFinalizeTimer, null);
+    assert.equal(dictation.maybeFinalizePending(Date.now() + 60000), false);
+    await dictation.disconnect();
+  });
+});

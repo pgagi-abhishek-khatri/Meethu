@@ -3536,6 +3536,7 @@ declare global {
         notifyMeetingDetection: boolean;
         notifyCalendarReminders: boolean;
         meetingProcessDetection: boolean;
+        autoStartOnDetection?: boolean;
       }) => Promise<{ success: boolean }>;
       setSpeakerDiarizationEnabled?: (
         enabled: boolean

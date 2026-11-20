@@ -2029,7 +2029,9 @@
         "meetingDetection": "Rilevamento riunioni",
         "meetingDetectionDescription": "Avvisa quando viene rilevata una riunione per avviare la registrazione",
         "calendarReminders": "Promemoria calendario",
-        "calendarRemindersDescription": "Avvisa quando una riunione programmata sta per iniziare"
+        "calendarRemindersDescription": "Avvisa quando una riunione programmata sta per iniziare",
+        "autoStartOnDetection": "Avvia la registrazione automaticamente",
+        "autoStartOnDetectionDescription": "Quando viene rilevato il parlato di una riunione, avvia subito una nota della riunione invece di chiedere"
       },
       "clipboard": {
         "title": "Appunti",

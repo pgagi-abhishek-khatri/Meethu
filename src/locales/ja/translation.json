@@ -2029,7 +2029,9 @@
         "meetingDetection": "会議の検出",
         "meetingDetectionDescription": "会議が検出されたときに通知して録音を開始できるようにする",
         "calendarReminders": "カレンダーリマインダー",
-        "calendarRemindersDescription": "予定された会議がまもなく始まるときに通知する"
+        "calendarRemindersDescription": "予定された会議がまもなく始まるときに通知する",
+        "autoStartOnDetection": "自動で録音を開始",
+        "autoStartOnDetectionDescription": "会議の音声を検出したら、確認せずにすぐ会議ノートを開始します"
       },
       "clipboard": {
         "title": "クリップボード",

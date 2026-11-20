@@ -2323,7 +2323,9 @@
         "meetingDetection": "Détection de réunion",
         "meetingDetectionDescription": "Prévenir quand une réunion est détectée pour lancer l'enregistrement",
         "calendarReminders": "Rappels de calendrier",
-        "calendarRemindersDescription": "Prévenir quand une réunion planifiée va commencer"
+        "calendarRemindersDescription": "Prévenir quand une réunion planifiée va commencer",
+        "autoStartOnDetection": "Démarrer l'enregistrement automatiquement",
+        "autoStartOnDetectionDescription": "Quand une réunion est détectée, créer la note de réunion tout de suite au lieu de demander"
       },
       "clipboard": {
         "title": "Presse-papiers",

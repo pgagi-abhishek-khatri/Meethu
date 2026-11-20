@@ -2323,7 +2323,9 @@
         "meetingDetection": "Meeting detection",
         "meetingDetectionDescription": "Notify when a meeting is detected so you can start recording",
         "calendarReminders": "Calendar reminders",
-        "calendarRemindersDescription": "Notify when a scheduled meeting is about to start"
+        "calendarRemindersDescription": "Notify when a scheduled meeting is about to start",
+        "autoStartOnDetection": "Start recording automatically",
+        "autoStartOnDetectionDescription": "When meeting speech is detected, start a meeting note right away instead of asking first"
       },
       "clipboard": {
         "title": "Clipboard",

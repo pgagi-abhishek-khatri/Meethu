@@ -125,3 +125,16 @@ test("a non-object payload is rejected without touching the detectors", async ()
   assert.deepEqual(await sync(null), { success: false, error: "Invalid preferences" });
   assert.deepEqual(applied, []);
 });
+
+test("autoStartOnDetection preference is synced to engine", async () => {
+  applied.length = 0;
+  await sync({ ...ENABLED_SNAPSHOT, autoStartOnDetection: true });
+  assert.equal(target.autoStartOnDetection, true);
+  assert.deepEqual(applied, [{ audioDetection: true, processDetection: true, autoStartOnDetection: true }]);
+
+  applied.length = 0;
+  await sync({ autoStartOnDetection: false });
+  assert.equal(target.autoStartOnDetection, false);
+  assert.deepEqual(applied, [{ audioDetection: true, processDetection: true, autoStartOnDetection: false }]);
+});
+

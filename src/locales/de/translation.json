@@ -2323,7 +2323,9 @@
         "meetingDetection": "Meeting-Erkennung",
         "meetingDetectionDescription": "Benachrichtigen, wenn ein Meeting erkannt wird, um die Aufnahme zu starten",
         "calendarReminders": "Kalendererinnerungen",
-        "calendarRemindersDescription": "Benachrichtigen, wenn ein geplantes Meeting bald beginnt"
+        "calendarRemindersDescription": "Benachrichtigen, wenn ein geplantes Meeting bald beginnt",
+        "autoStartOnDetection": "Aufnahme automatisch starten",
+        "autoStartOnDetectionDescription": "Wenn Meeting-Sprache erkannt wird, sofort eine Meeting-Notiz starten statt nachzufragen"
       },
       "clipboard": {
         "title": "Zwischenablage",

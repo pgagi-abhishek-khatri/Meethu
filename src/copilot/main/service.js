@@ -35,6 +35,15 @@ const NOT_REPLAYED = new Set([
 ]);
 const MAX_HISTORY = 1500;
 
+// The app's debug log when the copilot runs inside it; plain console in tests and scripts.
+function defaultLogError(message, error) {
+  try {
+    require("../../helpers/debugLogger").error(message, { error: error?.message }, "copilot");
+  } catch {
+    console.error(message, error);
+  }
+}
+
 function createCopilot({
   dir, // userData
   logDir = null,
@@ -46,6 +55,7 @@ function createCopilot({
   ffmpegPath = null, // bundled ffmpeg, for audio/video project files
   engineOptions = {}, // tests
   Database,
+  logError = defaultLogError,
 }) {
   const { BrowserWindow, screen, ipcMain, dialog, safeStorage } = electron;
   const settings = createSettings({ dir, safeStorage, env });
@@ -98,12 +108,14 @@ function createCopilot({
   const sink = {
     open() {
       const s = settings.view();
-      if (!(s.enabled && s.hasKey && s.autoOpen)) return;
+      // Opens without a key too: the window then shows the transcript and says the key is missing,
+      // instead of the meeting going by with no sign of the copilot at all.
+      if (!(s.enabled && s.autoOpen)) return;
       // A window that fails to open must never break the meeting itself.
       try {
         win.open({ focus: false, startMode: s.idleMode });
       } catch (error) {
-        console.error("Copilot window failed to open", error);
+        logError("Copilot window failed to open", error);
       }
     },
     send(e) {
@@ -119,7 +131,14 @@ function createCopilot({
         if (history.length > MAX_HISTORY) history.splice(0, history.length - MAX_HISTORY);
       }
       push(e);
-      if (started) announceMeeting();
+      if (started) {
+        announceMeeting();
+        if (!settings.view().hasKey) {
+          const problem = { type: "problem", kind: "no_key" };
+          history.push(problem);
+          push(problem);
+        }
+      }
     },
   };
 
@@ -565,7 +584,7 @@ function createCopilot({
       try {
         engine.begin();
       } catch (error) {
-        console.error("Copilot failed to begin", error);
+        logError("Copilot failed to begin", error);
       }
     },
     onLevel,

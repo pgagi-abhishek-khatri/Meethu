@@ -2033,7 +2033,9 @@
         "meetingDetection": "Обнаружение встреч",
         "meetingDetectionDescription": "Уведомлять при обнаружении встречи для начала записи",
         "calendarReminders": "Напоминания календаря",
-        "calendarRemindersDescription": "Уведомлять, когда запланированная встреча скоро начнётся"
+        "calendarRemindersDescription": "Уведомлять, когда запланированная встреча скоро начнётся",
+        "autoStartOnDetection": "Начинать запись автоматически",
+        "autoStartOnDetectionDescription": "Когда обнаружена речь встречи, сразу начинать заметку встречи, не спрашивая"
       },
       "clipboard": {
         "title": "Буфер обмена",

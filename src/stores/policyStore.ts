@@ -236,9 +236,16 @@ export const usePolicyStore = create<PolicyState>()((set, get) => {
           });
         } catch (error) {
           if (sequence !== fetchSequence) return;
-          if ((error as Error)?.message !== "OpenWhispr API URL not configured") {
-            logger.error("Failed to fetch workspace policy:", error);
+          // A build with no OpenWhispr API has no workspace server, so no organization can manage it:
+          // that is "unmanaged", not an unresolved policy. Failing closed here blocked every meeting
+          // recording ("restricted by your organization") even on your own keys, e.g. Soniox.
+          if ((error as Error)?.message === "OpenWhispr API URL not configured") {
+            const appVersion = await versionPromise;
+            if (sequence !== fetchSequence) return;
+            set({ accountId, status: "unmanaged", managed: false, policy: null, appVersion });
+            return;
           }
+          logger.error("Failed to fetch workspace policy:", error);
           const failureCode =
             error && typeof error === "object" && "code" in error && typeof error.code === "string"
               ? error.code

@@ -284,3 +284,44 @@ test("BYOK Soniox routes to its realtime client", async () => {
     { provider: "soniox-realtime", model: "stt-rt-v5", mode: "byok", language: "en" }
   );
 });
+
+test("note recording defaults to Soniox when its key is set and no route was chosen", async () => {
+  const { shouldDefaultMeetingToSoniox } = await load();
+  const base = { hasSonioxKey: true, cloudConfigured: false };
+
+  assert.equal(shouldDefaultMeetingToSoniox({ ...base, savedMode: null }), true, "never chosen");
+  assert.equal(
+    shouldDefaultMeetingToSoniox({ ...base, savedMode: "openwhispr" }),
+    true,
+    "OpenWhispr Cloud with no API configured would record nothing"
+  );
+  assert.equal(
+    shouldDefaultMeetingToSoniox({ ...base, savedMode: "openwhispr", cloudConfigured: true }),
+    false,
+    "a working cloud choice is kept"
+  );
+  assert.equal(shouldDefaultMeetingToSoniox({ ...base, savedMode: "local" }), false);
+  assert.equal(shouldDefaultMeetingToSoniox({ ...base, savedMode: "providers" }), false);
+  assert.equal(
+    shouldDefaultMeetingToSoniox({ hasSonioxKey: false, savedMode: null, cloudConfigured: false }),
+    false,
+    "no key, no change"
+  );
+});
+
+test("the Soniox default resolves to the soniox-realtime BYOK stream", async () => {
+  const { resolveMeetingTranscriptionOptions } = await load();
+  const options = resolveMeetingTranscriptionOptions({
+    transcriptionMode: "providers",
+    language: "en",
+    selectedProvider: "soniox",
+    selectedModel: "stt-rt-v5",
+    byokProviders: [{ id: "soniox", models: [{ id: "stt-rt-v5" }] }],
+  });
+  assert.deepEqual(options, {
+    provider: "soniox-realtime",
+    model: "stt-rt-v5",
+    mode: "byok",
+    language: "en",
+  });
+});

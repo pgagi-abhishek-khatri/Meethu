@@ -277,3 +277,39 @@ test("the meeting count is the real total, past the list's 50", sqlite, async ()
   assert.equal((await invoke("sessions-list")).length, 50);
   assert.equal(await invoke("sessions-count"), 55);
 });
+
+test(
+  "with no OpenRouter key the window still opens and says the key is missing",
+  sqlite,
+  async () => {
+    const { copilot, sent, listeners, windowCalls } = setup({
+      env: { COPILOT_QUERY_WRITER: "0" },
+    });
+    copilot.begin();
+    assert.deepEqual(windowCalls, ["create"], "the meeting is not silently ignored");
+    const problems = () =>
+      sent.filter(([c, e]) => c === "copilot:event" && e.type === "problem").map(([, e]) => e.kind);
+    // The transcript still reaches the window and the saved meeting.
+    copilot.onFinal({
+      text: "Hello there, can you hear me?",
+      source: "system",
+      timestamp: Date.now(),
+    });
+    await tick();
+
+    // The window loads after the start event; its ready replay carries the warning and the transcript.
+    sent.length = 0;
+    listeners.get("copilot:ready")();
+    assert.deepEqual(problems(), ["no_key"]);
+    assert.ok(sent.some(([, e]) => e?.type === "segment"));
+    copilot.endSession();
+  }
+);
+
+test("a failing begin is logged, never thrown into the meeting pipeline", sqlite, () => {
+  const { copilot } = setup();
+  copilot.engine.begin = () => {
+    throw new Error("boom");
+  };
+  assert.doesNotThrow(() => copilot.begin());
+});

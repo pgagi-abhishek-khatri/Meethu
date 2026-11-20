@@ -84,7 +84,7 @@ export interface CopilotState {
     name: string | null;
     event: { title: string; endsAt: number | null } | null;
   };
-  problem: "key" | "credits" | null; // the AI account refuses every call
+  problem: "key" | "credits" | "no_key" | null; // the AI account refuses every call, or no key is set
   busy: boolean; // the copilot is thinking about something right now
   stats: Record<string, unknown> | null;
 }

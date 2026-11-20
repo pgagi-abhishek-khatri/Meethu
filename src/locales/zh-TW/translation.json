@@ -2029,7 +2029,9 @@
         "meetingDetection": "會議偵測",
         "meetingDetectionDescription": "偵測到會議時通知您以便開始錄音",
         "calendarReminders": "行事曆提醒",
-        "calendarRemindersDescription": "預定會議即將開始時通知您"
+        "calendarRemindersDescription": "預定會議即將開始時通知您",
+        "autoStartOnDetection": "自動開始錄製",
+        "autoStartOnDetectionDescription": "偵測到會議語音時，立即開始會議筆記，而不是先詢問"
       },
       "clipboard": {
         "title": "剪貼簿",

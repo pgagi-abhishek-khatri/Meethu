@@ -28,6 +28,7 @@ const MEETING_APPS = {
   linux: [
     { processKey: "zoom", appName: "Zoom", imageName: "zoom" },
     { processKey: "teams", appName: "Microsoft Teams", imageName: "teams" },
+    { processKey: "webex", appName: "Webex", imageName: "webex" },
   ],
 };
 

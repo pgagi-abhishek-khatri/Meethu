@@ -2008,7 +2008,9 @@
         "meetingDetection": "Detecção de reuniões",
         "meetingDetectionDescription": "Notificar quando uma reunião for detectada para iniciar a gravação",
         "calendarReminders": "Lembretes do calendário",
-        "calendarRemindersDescription": "Notificar quando uma reunião agendada está prestes a começar"
+        "calendarRemindersDescription": "Notificar quando uma reunião agendada está prestes a começar",
+        "autoStartOnDetection": "Começar a gravar automaticamente",
+        "autoStartOnDetectionDescription": "Quando for detectada fala de reunião, iniciar a nota da reunião na hora em vez de perguntar"
       },
       "clipboard": {
         "title": "Área de transferência",

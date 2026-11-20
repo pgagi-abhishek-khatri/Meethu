@@ -1216,6 +1216,8 @@ export default function SettingsPage({
     setNotifyMeetingDetection,
     notifyCalendarReminders,
     setNotifyCalendarReminders,
+    autoStartOnDetection,
+    setAutoStartOnDetection,
     autoUpdatesEnabled,
     setAutoUpdatesEnabled,
     audioCuesEnabled,
@@ -1581,12 +1583,14 @@ export default function SettingsPage({
       notifyMeetingDetection,
       notifyCalendarReminders,
       meetingProcessDetection,
+      autoStartOnDetection,
     });
   }, [
     notificationsEnabled,
     notifyMeetingDetection,
     notifyCalendarReminders,
     meetingProcessDetection,
+    autoStartOnDetection,
   ]);
 
   const handleAutoStartChange = async (enabled: boolean) => {
@@ -3124,6 +3128,20 @@ export default function SettingsPage({
                       checked={notifyMeetingDetection}
                       onChange={setNotifyMeetingDetection}
                       disabled={!notificationsEnabled}
+                    />
+                  </SettingsRow>
+                </SettingsPanelRow>
+                <SettingsPanelRow>
+                  <SettingsRow
+                    label={t("settingsPage.general.notifications.autoStartOnDetection")}
+                    description={t(
+                      "settingsPage.general.notifications.autoStartOnDetectionDescription"
+                    )}
+                  >
+                    <Toggle
+                      checked={autoStartOnDetection}
+                      onChange={setAutoStartOnDetection}
+                      disabled={!notificationsEnabled || !notifyMeetingDetection}
                     />
                   </SettingsRow>
                 </SettingsPanelRow>

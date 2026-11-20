@@ -21,6 +21,13 @@ const MAX_KEYTERMS = 100;
 const CONNECT_TIMEOUT_MS = 10000;
 const FINISH_TIMEOUT_MS = 5000;
 const KEEPALIVE_INTERVAL_MS = 10000;
+// Meeting mode: Soniox keeps words non-final for about 5 s while someone keeps talking, and a segment
+// otherwise closes only at a pause, so a long sentence commits nothing for 10-15 s and the copilot waits
+// with it. Once words have been pending this long, ask the server to finalize them (measured on
+// stt-rt-v5: lines then trail speech by ~1-1.5 s and words stay intact; at 2.5 s phrases split badly).
+// Close to the 5 s cadence of local meeting transcription. 0 turns it off.
+const MEETING_FINALIZE_AFTER_MS = 4000;
+const MEETING_FINALIZE_CHECK_MS = 250;
 // An unused warm socket is closed after this long; the next dictation then
 // connects cold. Each warmup call (launch, after every dictation) renews it.
 const WARM_TTL_MS = 3 * 60 * 1000;
@@ -45,8 +52,17 @@ const LANGUAGE_PATTERN = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?$/;
 // dictation stops; only the idle warm socket outlives it, and only for WARM_TTL_MS.
 class SonioxStreaming {
   // `url` and `warmTtlMs` exist for tests; nothing from the renderer reaches them.
-  constructor({ url = null, warmTtlMs = WARM_TTL_MS, sessionRenewMs = SESSION_RENEW_MS } = {}) {
+  constructor({
+    url = null,
+    warmTtlMs = WARM_TTL_MS,
+    sessionRenewMs = SESSION_RENEW_MS,
+    meetingFinalizeAfterMs = MEETING_FINALIZE_AFTER_MS,
+  } = {}) {
     this.urlOverride = url;
+    this.meetingFinalizeAfterMs = meetingFinalizeAfterMs;
+    this.meetingFinalizeTimer = null;
+    this.pendingSince = null; // when the open segment's first uncommitted word arrived
+    this.lastFinalizeAt = 0;
     this.warmTtlMs = warmTtlMs;
     this.sessionRenewMs = sessionRenewMs;
     this.ws = null;
@@ -344,6 +360,25 @@ class SonioxStreaming {
       this.sessionRenewMs
     );
     this.sessionRenewTimer.unref();
+    this.pendingSince = null;
+    this.lastFinalizeAt = 0;
+    if (this.meetingFinalizeAfterMs > 0) {
+      this.meetingFinalizeTimer = setInterval(
+        () => this.maybeFinalizePending(),
+        Math.min(MEETING_FINALIZE_CHECK_MS, this.meetingFinalizeAfterMs)
+      );
+      this.meetingFinalizeTimer.unref();
+    }
+  }
+
+  // Meeting mode: finalize words that have waited too long for a pause (see MEETING_FINALIZE_AFTER_MS).
+  maybeFinalizePending(now = Date.now()) {
+    if (!this.meeting || this.isDisconnecting || this.pendingSince == null) return false;
+    const since = Math.max(this.pendingSince, this.lastFinalizeAt);
+    if (now - since < this.meetingFinalizeAfterMs) return false;
+    if (!this.finalize()) return false;
+    this.lastFinalizeAt = now;
+    return true;
   }
 
   emitSegment({ text, startMs, speaker }) {
@@ -372,6 +407,8 @@ class SonioxStreaming {
     }
     for (const segment of builder.push(finals)) this.emitSegment(segment);
     const partial = (builder.text + tail).trimStart();
+    if (!partial.trim()) this.pendingSince = null;
+    else if (this.pendingSince == null) this.pendingSince = Date.now();
     if (partial !== this.lastPartial) {
       this.lastPartial = partial;
       this.onPartialTranscript?.(partial);
@@ -504,8 +541,11 @@ class SonioxStreaming {
     this.ws = null;
     clearInterval(this.meetingKeepAlive);
     clearTimeout(this.sessionRenewTimer);
+    clearInterval(this.meetingFinalizeTimer);
     this.meetingKeepAlive = null;
     this.sessionRenewTimer = null;
+    this.meetingFinalizeTimer = null;
+    this.pendingSince = null;
     this.finishResolve = null;
     this.connecting = false;
     this.isConnected = false;
@@ -531,3 +571,4 @@ class SonioxStreaming {
 }
 
 module.exports = SonioxStreaming;
+module.exports.MEETING_FINALIZE_AFTER_MS = MEETING_FINALIZE_AFTER_MS;

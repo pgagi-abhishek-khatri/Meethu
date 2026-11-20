@@ -1,4 +1,11 @@
-function createMeetingTranscriptionLifecycle({ start, stop, onError = () => {} }) {
+// onStarted runs once a start really succeeded, inside the same queue as stops: a retired
+// session's stop always finishes before it, so whatever it begins can't be ended by that stop.
+function createMeetingTranscriptionLifecycle({
+  start,
+  stop,
+  onError = () => {},
+  onStarted = () => {},
+}) {
   let operationTail = Promise.resolve();
   const sessions = new Map();
 
@@ -102,6 +109,11 @@ function createMeetingTranscriptionLifecycle({ start, stop, onError = () => {} }
           removeSession(session);
         } else if (!session.stopRequested) {
           session.state = "active";
+          try {
+            onStarted(sessionId);
+          } catch (error) {
+            onError(error, sessionId);
+          }
         }
         return result;
       } catch (error) {

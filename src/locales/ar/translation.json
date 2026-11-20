@@ -3682,7 +3682,9 @@
         "meetingDetection": "اكتشاف الاجتماع",
         "meetingDetectionDescription": "إعلام عند اكتشاف اجتماع حتى تتمكن من بدء التسجيل",
         "calendarReminders": "تذكيرات التقويم",
-        "calendarRemindersDescription": "إعلام عند اقتراب موعد بدء اجتماع مجدول"
+        "calendarRemindersDescription": "إعلام عند اقتراب موعد بدء اجتماع مجدول",
+        "autoStartOnDetection": "بدء التسجيل تلقائيًا",
+        "autoStartOnDetectionDescription": "عند اكتشاف كلام اجتماع، ابدأ ملاحظة الاجتماع فورًا بدلًا من السؤال أولًا"
       },
       "clipboard": {
         "title": "الحافظة",

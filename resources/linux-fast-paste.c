@@ -8,7 +8,9 @@
 #include <X11/Xatom.h>
 #include <X11/Xutil.h>
 #include <X11/XKBlib.h>
+#ifdef HAVE_XTEST
 #include <X11/extensions/XTest.h>
+#endif
 #include <X11/extensions/shape.h>
 #include <X11/keysym.h>
 #include <dirent.h>
@@ -775,6 +777,7 @@ static int send_media_play_pause(void) {
     }
 #endif
 
+#ifdef HAVE_XTEST
     /* Fallback to XTest */
     Display *dpy = XOpenDisplay(NULL);
     if (!dpy) return 1;
@@ -800,6 +803,9 @@ static int send_media_play_pause(void) {
     usleep(20000);
     XCloseDisplay(dpy);
     return 0;
+#else
+    return 2;
+#endif
 }
 
 /* Resolve the paste key sequence. --shift-insert wins outright (used when the
@@ -1176,6 +1182,7 @@ int main(int argc, char *argv[]) {
 #endif
     }
 
+#ifdef HAVE_XTEST
     Display *dpy = XOpenDisplay(NULL);
     if (!dpy) return 1;
 
@@ -1226,4 +1233,8 @@ int main(int argc, char *argv[]) {
     XCloseDisplay(dpy);
     if (copy_mode) printf("COPY_OK\n");
     return 0;
+#else
+    fprintf(stderr, "XTest support not compiled in\n");
+    return 2;
+#endif
 }

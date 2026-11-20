@@ -7,7 +7,7 @@ export function ProblemBanner({
   kind,
   onFix,
 }: {
-  kind: "key" | "credits" | null;
+  kind: "key" | "credits" | "no_key" | null;
   onFix: () => void;
 }) {
   if (!kind) return null;
@@ -19,7 +19,9 @@ export function ProblemBanner({
     >
       {kind === "credits"
         ? "The OpenRouter key in use has no credits, so nothing can run. Add credits, or paste a different key in Settings."
-        : "OpenRouter refused the key, so nothing can run. Paste a working key in Settings."}
+        : kind === "no_key"
+          ? "No OpenRouter key is set, so the copilot can only show the transcript. Paste a key in Settings."
+          : "OpenRouter refused the key, so nothing can run. Paste a working key in Settings."}
     </button>
   );
 }

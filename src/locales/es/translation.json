@@ -2081,7 +2081,9 @@
         "meetingDetection": "Detección de reuniones",
         "meetingDetectionDescription": "Notificar cuando se detecta una reunión para iniciar la grabación",
         "calendarReminders": "Recordatorios del calendario",
-        "calendarRemindersDescription": "Notificar cuando una reunión programada está a punto de comenzar"
+        "calendarRemindersDescription": "Notificar cuando una reunión programada está a punto de comenzar",
+        "autoStartOnDetection": "Empezar a grabar automáticamente",
+        "autoStartOnDetectionDescription": "Cuando se detecte voz de una reunión, crear la nota de reunión enseguida en lugar de preguntar"
       },
       "clipboard": {
         "title": "Portapapeles",

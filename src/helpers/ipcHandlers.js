@@ -729,6 +729,7 @@ class IPCHandlers {
     // Default for the saved process-detection toggle. The engine keeps both detectors
     // off until the renderer syncs (see meetingDetectionPreferencePolicy.js).
     this.meetingProcessDetection = true;
+    this.autoStartOnDetection = false;
     this.activeMeetingSpeakerConfig = null;
     // Diarization session id → { noteId, ceiling }: speaker ids a stopped session's
     // diarization may still write to its note (see _resolveMeetingSpeakerIndexBase).
@@ -9849,6 +9850,9 @@ class IPCHandlers {
     const meetingTranscriptionLifecycle = createMeetingTranscriptionLifecycle({
       start: ({ sessionId, ownerWebContents, options }) =>
         startMeetingTranscription({ sender: ownerWebContents }, { ...options, sessionId }),
+      // The copilot begins only once the recording really started: a failed start (no Soniox key,
+      // an unreachable service) must not leave its window showing "Listening" on nothing.
+      onStarted: () => this.copilot?.begin(),
       stop: (sessionId) => stopMeetingTranscription(sessionId),
       onError: (error, sessionId) => {
         debugLogger.error(
@@ -9860,7 +9864,6 @@ class IPCHandlers {
     });
 
     ipcMain.handle("meeting-transcription-start", (event, options = {}) => {
-      this.copilot?.begin();
       const sessionId =
         typeof options.sessionId === "string" && options.sessionId.length > 0
           ? options.sessionId
@@ -12537,6 +12540,7 @@ class IPCHandlers {
       "notificationsEnabled",
       "notifyMeetingDetection",
       "notifyCalendarReminders",
+      "autoStartOnDetection",
     ]);
 
     ipcMain.handle("sync-notification-preferences", async (_event, prefs) => {
@@ -12552,6 +12556,9 @@ class IPCHandlers {
         if (typeof prefs.meetingProcessDetection === "boolean") {
           this.meetingProcessDetection = prefs.meetingProcessDetection;
         }
+        if (typeof prefs.autoStartOnDetection === "boolean") {
+          this.autoStartOnDetection = prefs.autoStartOnDetection;
+        }
         const { notificationsEnabled, notifyMeetingDetection } =
           this.windowManager.notificationPrefs;
         this.meetingDetectionEngine?.setPreferences(
@@ -12559,6 +12566,7 @@ class IPCHandlers {
             notificationsEnabled,
             notifyMeetingDetection,
             meetingProcessDetection: this.meetingProcessDetection,
+            autoStartOnDetection: this.autoStartOnDetection,
           })
         );
         return { success: true };

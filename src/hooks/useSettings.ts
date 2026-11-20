@@ -398,6 +398,8 @@ function useSettingsInternal() {
     setNotifyMeetingDetection: store.setNotifyMeetingDetection,
     notifyCalendarReminders: store.notifyCalendarReminders,
     setNotifyCalendarReminders: store.setNotifyCalendarReminders,
+    autoStartOnDetection: store.autoStartOnDetection,
+    setAutoStartOnDetection: store.setAutoStartOnDetection,
     autoUpdatesEnabled: store.autoUpdatesEnabled,
     setAutoUpdatesEnabled: store.setAutoUpdatesEnabled,
     audioCuesEnabled: store.audioCuesEnabled,

@@ -187,7 +187,9 @@ function main() {
 
   if (!tryCompile()) {
     console.warn(
-      "[linux-system-audio-helper] Native Linux system audio helper is unavailable. Linux system audio capture will be disabled."
+      "[linux-system-audio-helper] Native Linux system audio helper is unavailable. Linux system audio capture will be disabled.\n" +
+      "[linux-system-audio-helper] To enable capturing meeting audio from other participants, install the development headers:\n" +
+      "[linux-system-audio-helper]   sudo apt install -y libglib2.0-dev libpipewire-0.3-dev"
     );
   }
 }

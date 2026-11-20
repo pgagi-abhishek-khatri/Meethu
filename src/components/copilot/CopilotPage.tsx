@@ -19,6 +19,7 @@ import { SettingsGroup, SettingsRow, SettingsSection } from "../ui/SettingsSecti
 import { MeetingTranscriptionPanel } from "../settings/MeetingSettings";
 import { cn } from "../lib/utils";
 import { useSettingsStore } from "../../stores/settingsStore";
+import { fetchProviders } from "../../stores/streamingProvidersStore";
 import { getMeetingStreamingTranscriptionProviders } from "../../models/ModelRegistry";
 import { BlurField, useCopilotSettings } from "./CopilotFields";
 import CopilotSettingsTab, { DenoiseRow, OpenRouterKeySection } from "./CopilotSettingsTab";
@@ -44,14 +45,66 @@ const PACE: Record<string, string> = {
   chatty: "Lively",
 };
 
-function useMeetingAudio() {
+// The saved key each BYOK meeting provider authenticates with (Corti uses client credentials).
+const MEETING_PROVIDER_KEY: Record<string, string> = {
+  openai: "openaiApiKey",
+  deepgram: "deepgramApiKey",
+  assemblyai: "assemblyaiApiKey",
+  soniox: "sonioxApiKey",
+  tinfoil: "tinfoilApiKey",
+};
+
+// Whether a note recording can actually start with the chosen route, so the setup check never
+// shows a green tick for audio that will fail at the first recording (no key, cloud unreachable).
+function useMeetingAudio(): { label: string; ok: boolean; detail: string } {
   const mode = useSettingsStore((s) => s.meetingTranscriptionMode);
-  const provider = useSettingsStore((s) => s.meetingCloudTranscriptionProvider);
+  const provider = useSettingsStore(
+    (s) => s.meetingCloudTranscriptionProvider || s.cloudTranscriptionProvider
+  );
   const isSignedIn = useSettingsStore((s) => s.isSignedIn);
-  if (mode === "openwhispr") return { label: "OpenWhispr Cloud", needsSignIn: !isSignedIn };
-  if (mode === "local") return { label: "Local model", needsSignIn: false };
+  const keyField = MEETING_PROVIDER_KEY[provider];
+  const providerKey = useSettingsStore((s) =>
+    keyField ? String((s as unknown as Record<string, unknown>)[keyField] ?? "") : ""
+  );
+  const [cloudError, setCloudError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (mode !== "openwhispr") return;
+    let live = true;
+    void fetchProviders().then((r) => {
+      if (live) setCloudError(r && r.success === false ? r.error || "unavailable" : null);
+    });
+    return () => {
+      live = false;
+    };
+  }, [mode]);
+
+  if (mode === "local") return { label: "Local model", ok: true, detail: "Local model" };
+  if (mode === "openwhispr") {
+    if (!isSignedIn)
+      return {
+        label: "OpenWhispr Cloud",
+        ok: false,
+        detail: "Sign in, or pick a provider (e.g. Soniox)",
+      };
+    if (cloudError)
+      return {
+        label: "OpenWhispr Cloud",
+        ok: false,
+        detail: "Cloud unavailable here: pick Soniox or a local model",
+      };
+    return { label: "OpenWhispr Cloud", ok: true, detail: "OpenWhispr Cloud" };
+  }
+  if (mode !== "providers")
+    return { label: "Unsupported", ok: false, detail: "Pick a provider or a local model" };
   const name = getMeetingStreamingTranscriptionProviders().find((p) => p.id === provider)?.name;
-  return { label: name ?? "Your provider key", needsSignIn: false };
+  if (!name) return { label: "No provider", ok: false, detail: "Pick a provider" };
+  const hasKey = keyField ? !!providerKey.trim() : true;
+  return {
+    label: name,
+    ok: hasKey,
+    detail: hasKey ? name : `${name}: add its API key`,
+  };
 }
 
 function CheckRow({
@@ -168,9 +221,9 @@ function Overview({
             onClick={() => go("audio")}
           />
           <CheckRow
-            ok={!audio.needsSignIn}
+            ok={audio.ok}
             label="Meeting audio"
-            detail={audio.needsSignIn ? "Sign in, or pick another provider" : audio.label}
+            detail={audio.detail}
             onClick={() => go("audio")}
           />
           <CheckRow

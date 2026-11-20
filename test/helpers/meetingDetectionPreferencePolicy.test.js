@@ -32,3 +32,19 @@ test("the derived values are plain booleans even for missing inputs", () => {
     processDetection: false,
   });
 });
+
+test("autoStartOnDetection is preserved when specified as a boolean", () => {
+  assert.equal(
+    deriveDetectorPreferences({ autoStartOnDetection: true }).autoStartOnDetection,
+    true
+  );
+  assert.equal(
+    deriveDetectorPreferences({ autoStartOnDetection: false }).autoStartOnDetection,
+    false
+  );
+  assert.equal(
+    deriveDetectorPreferences({}).autoStartOnDetection,
+    undefined
+  );
+});
+

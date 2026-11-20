@@ -57,7 +57,11 @@ class MeetingDetectionEngine {
     this.databaseManager = databaseManager;
     this.activeDetections = new Map();
     // Saved renderer preferences arrive after engine startup.
-    this.preferences = { processDetection: false, audioDetection: false };
+    this.preferences = {
+      processDetection: false,
+      audioDetection: false,
+      autoStartOnDetection: false,
+    };
     this._userRecording = false;
     this._meetingModeActive = false;
     this._notificationQueue = [];
@@ -403,6 +407,35 @@ class MeetingDetectionEngine {
     const calendarEvent = data?.event ?? this._findCalendarEvent();
     const event = calendarEvent ?? placeholderEvent("__detected__");
 
+    if (
+      this.preferences.autoStartOnDetection &&
+      !this._meetingModeActive &&
+      !this._recordingSession
+    ) {
+      debugLogger.info(
+        "Auto-starting meeting on detection without prompt",
+        { detectionId, source, title: calendarEvent?.summary ?? null },
+        "meeting"
+      );
+      const detection = this.activeDetections.get(detectionId);
+      if (detection) {
+        detection.event = event;
+      }
+      this.audioActivityDetector.resetPrompt();
+      this.activeDetections.delete(detectionId);
+      // Through the window manager, so the same guards as the hotkey apply: no start while a
+      // push-to-talk dictation is held, nor when workspace policy blocks meeting input.
+      const opts = { source: `auto-detection-${source}` };
+      const start =
+        typeof this.windowManager?.startManualMeeting === "function"
+          ? this.windowManager.startManualMeeting(opts)
+          : this.startManualMeeting(opts);
+      void Promise.resolve(start).catch((error) =>
+        debugLogger.error("Auto-start meeting failed", { error: error?.message }, "meeting")
+      );
+      return;
+    }
+
     let variant = "detected";
     if (calendarEvent) {
       const started = new Date(calendarEvent.start_time).getTime() <= Date.now();
@@ -571,7 +604,7 @@ class MeetingDetectionEngine {
 
     broadcastToWindows("note-added", noteResult.note);
 
-    await this.windowManager.queueMeetingNoteNavigation(
+    return this._navigateToMeetingNote(
       {
         noteId: noteResult.note.id,
         folderId: meetingsFolder.id,
@@ -580,6 +613,19 @@ class MeetingDetectionEngine {
       },
       options
     );
+  }
+
+  // Meeting mode was set before the note opened; a navigation that throws or reports failure must
+  // clear it, or every later detection stays suppressed until the app restarts.
+  async _navigateToMeetingNote(payload, options) {
+    try {
+      const result = await this.windowManager.queueMeetingNoteNavigation(payload, options);
+      if (result?.success === false) this._meetingModeActive = false;
+      return result;
+    } catch (error) {
+      this._meetingModeActive = false;
+      throw error;
+    }
   }
 
   /** Navigates to the user's own note already linked to a calendar event, if any. */
@@ -640,7 +686,7 @@ class MeetingDetectionEngine {
 
     broadcastToWindows("note-added", updateResult?.note || noteResult.note);
 
-    await this.windowManager.queueMeetingNoteNavigation(
+    return this._navigateToMeetingNote(
       {
         noteId: noteResult.note.id,
         folderId: meetingsFolder.id,
@@ -768,6 +814,9 @@ class MeetingDetectionEngine {
     }
     if (typeof prefs?.audioDetection === "boolean") {
       this.preferences.audioDetection = prefs.audioDetection;
+    }
+    if (typeof prefs?.autoStartOnDetection === "boolean") {
+      this.preferences.autoStartOnDetection = prefs.autoStartOnDetection;
     }
 
     this._syncMeetingProcessDetector();

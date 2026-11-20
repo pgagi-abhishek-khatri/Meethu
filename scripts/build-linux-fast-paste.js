@@ -119,7 +119,22 @@ function getAtspiFlags() {
   return [];
 }
 
+function hasXtstHeaders() {
+  for (const compiler of ["gcc", "cc"]) {
+    try {
+      const result = spawnSync(compiler, ["-E", "-x", "c", "-"], {
+        input: "#include <X11/extensions/XTest.h>\n",
+        stdio: ["pipe", "pipe", "pipe"],
+        env: process.env,
+      });
+      if (result.status === 0) return true;
+    } catch {}
+  }
+  return false;
+}
+
 const uinputAvailable = hasUinputHeaders();
+const xtstAvailable = hasXtstHeaders();
 const gioAvailable = hasGio();
 const atspiAvailable = hasAtspi();
 
@@ -127,6 +142,7 @@ function computeBuildHash() {
   const sourceContent = fs.readFileSync(cSource, "utf8");
   const flags = [
     uinputAvailable ? "uinput" : "nouinput",
+    xtstAvailable ? "xtst" : "noxtst",
     gioAvailable ? "gio" : "nogio",
     atspiAvailable ? "atspi" : "noatspi",
   ].join("+");
@@ -167,7 +183,14 @@ function attemptCompile(command, args) {
   });
 }
 
-const compileArgs = ["-O2", cSource, "-o", outputBinary, "-lX11", "-lXtst", "-lXext", "-lm"];
+const compileArgs = ["-O2", cSource, "-o", outputBinary, "-lX11", "-lXext", "-lm"];
+
+if (xtstAvailable) {
+  log("XTest headers found, enabling XTest support");
+  compileArgs.push("-DHAVE_XTEST", "-lXtst");
+} else {
+  log("XTest headers not found, building without XTest support");
+}
 
 if (uinputAvailable) {
   log("uinput headers found, enabling uinput support");
@@ -198,7 +221,7 @@ if (result.status !== 0) {
 
 if (result.status !== 0) {
   console.warn(
-    "[linux-fast-paste] Failed to compile Linux fast-paste binary. Install libx11-dev and libxtst-dev to enable native paste. Falling back to system tools."
+    "[linux-fast-paste] Failed to compile Linux fast-paste binary. Install libx11-dev to enable native paste and input regions. Falling back to system tools."
   );
   process.exit(0);
 }

@@ -2029,7 +2029,9 @@
         "meetingDetection": "会议检测",
         "meetingDetectionDescription": "检测到会议时通知您以便开始录音",
         "calendarReminders": "日历提醒",
-        "calendarRemindersDescription": "预定会议即将开始时通知您"
+        "calendarRemindersDescription": "预定会议即将开始时通知您",
+        "autoStartOnDetection": "自动开始录制",
+        "autoStartOnDetectionDescription": "检测到会议语音时，立即开始会议笔记，而不是先询问"
       },
       "clipboard": {
         "title": "剪贴板",
