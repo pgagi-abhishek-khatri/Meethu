@@ -85,8 +85,9 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null, onMut
   // Ensure schema and indexes exist
   migrateTemporalSchema(db);
 
-  // Notifications raised inside activateSuccessorVersion are held until its transaction commits,
-  // so listeners never see (or re-read) uncommitted state and a rollback notifies nobody.
+  // Notifications raised inside activateSuccessorVersion are held until its own transaction
+  // returns (when nested, that is after the savepoint releases, not necessarily the outer commit),
+  // so a failure inside it notifies nobody.
   let deferDepth = 0;
   const deferredProjects = new Set();
 
@@ -483,47 +484,47 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null, onMut
 
     deferDepth += 1;
     try {
-    db.transaction(() => {
-      // 1. Insert new successor chunk as active
-      newChunk = insertTemporalChunk(
-        {
-          file_id: pred.file_id,
-          project_id: pred.project_id,
-          feature_id: pred.feature_id,
-          lifecycle_status: "active",
-          valid_from: effTime,
-          valid_to: null,
-          transaction_time: now(),
-          ...chunkOverrides,
-        }
-      );
-
-      // 2. Update primary predecessor (unless it is an unchanged sibling explicitly preserved)
-      if (!preservedSet || !pred.hash || !preservedSet.has(pred.hash)) {
-        supersedeChunk(predId, newChunk.id, effTime);
-      }
-
-      // 3. Atomically supersede older active chunks for this feature belonging to predecessor files or earlier validity,
-      // skipping any unchanged sibling section still present in preserveUnchangedHashes.
-      const targetFeat = newChunkData.feature_id || pred.feature_id;
-      const targetProj = newChunkData.project_id || pred.project_id;
-      if (targetFeat && targetProj) {
-        const olderChunks = db.prepare(
-          `SELECT id, valid_from, hash FROM copilot_chunks 
-           WHERE project_id = ? AND feature_id = ? AND lifecycle_status = 'active' AND id != ?
-             AND (file_id != ? OR (valid_from IS NOT NULL AND valid_from < ?))`
-        ).all(targetProj, targetFeat, newChunk.id, newChunk.file_id, effTime);
-
-        for (const oc of olderChunks) {
-          if (preservedSet && oc.hash && preservedSet.has(oc.hash)) {
-            continue;
+      db.transaction(() => {
+        // 1. Insert new successor chunk as active
+        newChunk = insertTemporalChunk(
+          {
+            file_id: pred.file_id,
+            project_id: pred.project_id,
+            feature_id: pred.feature_id,
+            lifecycle_status: "active",
+            valid_from: effTime,
+            valid_to: null,
+            transaction_time: now(),
+            ...chunkOverrides,
           }
-          // The query selects only active rows and ocEff > valid_from, so a throw here is a real bug.
-          const ocEff = (oc.valid_from != null && effTime > oc.valid_from) ? effTime : (oc.valid_from != null ? oc.valid_from + 1 : effTime);
-          supersedeChunk(oc.id, newChunk.id, ocEff);
+        );
+
+        // 2. Update primary predecessor (unless it is an unchanged sibling explicitly preserved)
+        if (!preservedSet || !pred.hash || !preservedSet.has(pred.hash)) {
+          supersedeChunk(predId, newChunk.id, effTime);
         }
-      }
-    })();
+
+        // 3. Atomically supersede older active chunks for this feature belonging to predecessor files or earlier validity,
+        // skipping any unchanged sibling section still present in preserveUnchangedHashes.
+        const targetFeat = newChunkData.feature_id || pred.feature_id;
+        const targetProj = newChunkData.project_id || pred.project_id;
+        if (targetFeat && targetProj) {
+          const olderChunks = db.prepare(
+            `SELECT id, valid_from, hash FROM copilot_chunks 
+             WHERE project_id = ? AND feature_id = ? AND lifecycle_status = 'active' AND id != ?
+               AND (file_id != ? OR (valid_from IS NOT NULL AND valid_from < ?))`
+          ).all(targetProj, targetFeat, newChunk.id, newChunk.file_id, effTime);
+
+          for (const oc of olderChunks) {
+            if (preservedSet && oc.hash && preservedSet.has(oc.hash)) {
+              continue;
+            }
+            // The query selects only active rows and ocEff > valid_from, so a throw here is a real bug.
+            const ocEff = (oc.valid_from != null && effTime > oc.valid_from) ? effTime : (oc.valid_from != null ? oc.valid_from + 1 : effTime);
+            supersedeChunk(oc.id, newChunk.id, ocEff);
+          }
+        }
+      })();
     } catch (err) {
       deferredProjects.clear();
       throw err;

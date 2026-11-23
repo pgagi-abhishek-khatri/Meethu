@@ -906,15 +906,32 @@ test("onMutate is called once after activateSuccessorVersion commits and not at 
   assert.equal(calls[0].p, 7);
   assert.equal(calls[0].inTx, false);
 
+  // Fail AFTER the successor insert queued a notification: the predecessor is already superseded,
+  // so the non-active guard throws at the primary supersede step.
+  // A different project from the later success, so a leaked queue entry shows up as an extra call.
+  const o1 = temporal.insertTemporalChunk({ file_id: 2, project_id: 8, text: "x", feature_id: "g", valid_from: 1000 });
+  const o2 = temporal.insertTemporalChunk({ file_id: 2, project_id: 8, text: "y", feature_id: "g", valid_from: 2000 });
+  temporal.supersedeChunk(o1.id, o2.id, 2000);
+  const sup = { id: o1.id };
+  const before = db.prepare("SELECT * FROM copilot_chunks ORDER BY id").all();
   calls.length = 0;
-  const b = db.prepare("SELECT id FROM copilot_chunks WHERE lifecycle_status='active'").get();
-  assert.throws(() =>
-    temporal.activateSuccessorVersion({
-      predecessorId: b.id,
-      newChunkData: { text: "c", lifecycle_status: "bogus" },
-      effectiveTime: 3000,
-    })
+  assert.throws(
+    () =>
+      temporal.activateSuccessorVersion({
+        predecessorId: sup.id,
+        newChunkData: { text: "c" },
+        effectiveTime: 3000,
+      }),
+    /is not active/
   );
   assert.equal(calls.length, 0);
+  assert.deepEqual(db.prepare("SELECT * FROM copilot_chunks ORDER BY id").all(), before);
+
+  // Leaked deferral state would swallow or duplicate this notification.
+  const live = db.prepare("SELECT id FROM copilot_chunks WHERE lifecycle_status='active' AND project_id = 7").get();
+  calls.length = 0;
+  temporal.activateSuccessorVersion({ predecessorId: live.id, newChunkData: { text: "d" }, effectiveTime: 4000 });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].p, 7);
   db.close();
 });
