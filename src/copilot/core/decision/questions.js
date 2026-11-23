@@ -72,6 +72,11 @@ function buildQuestions(ctx) {
     return { questions, plan };
   }
 
+  if (ctx.hasCards)
+    questions.already_answered = noul(
+      "Did a card in `cards` already answer the same need, in any wording?"
+    );
+
   // Measured on 642 labelled real-meeting moments (scratch bench): one broad "is there substance" question
   // plus a separate "is it only chatter" question, multiplied in interpret(), beat one long yes/no list
   // (AUC 0.98 vs 0.86). Narrow per-type questions (question? term? decision?) scored worse.
@@ -80,6 +85,12 @@ function buildQuestions(ctx) {
   );
   questions.chatter = noul(
     "Is new_text only small talk, greetings, thanks, acknowledgements, filler, or running the meeting itself (introductions, agenda, screen sharing, audio checks)?"
+  );
+  questions.answerable = noul(
+    "Is new_text a question or claim that a short factual answer would resolve?"
+  );
+  questions.gap = noul(
+    "Is key information the answer would depend on missing from new_text, summary and context?"
   );
   questions.asked_of_assistant = ASKED;
   questions.complete = noul("Is the last utterance a finished thought, not cut off mid-sentence?");

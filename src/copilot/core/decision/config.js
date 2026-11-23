@@ -3,7 +3,10 @@
 // so thresholds must be tuned on replayed meetings (Phase 15 eval) before trust.
 const DEFAULT_DECISION_CONFIG = {
   // Policy on D1's answers (all unvalidated defaults: tune on replayed meetings, scripts/copilot/replay-fast.mjs)
-  actThreshold: { quiet: 0.5, normal: 0.3, chatty: 0.15 }, // act x (1 - chatter) must reach this; low on purpose: most topics get a card, the behaviour guide learns what to leave out
+  actThreshold: { quiet: 0.6, normal: 0.45, chatty: 0.25 }, // act x (1 - chatter) must reach this; low on purpose: most topics get a card, the behaviour guide learns what to leave out
+  answerableMin: 0.5, // below this (and no gap) the moment is not something a short factual answer resolves: wait
+  alreadyAnsweredThreshold: 0.7, // "a card already answered the same need" at this probability skips
+  gapMin: 0.6, // key information missing at this probability (with answerable < answerableMin) asks gap questions
   explicitThreshold: 0.8, // "the USER asked the copilot" (judged by D1 on the USER's own words) bypasses quiet level, cooldown, already-handled
   alreadyHandledThreshold: 0.85, // "covered by a card or running analysis" at this probability skips
   replaceMin: 0.6, // "changes a running analysis" at this probability redoes it

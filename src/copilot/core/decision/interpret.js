@@ -79,6 +79,13 @@ function interpret(rawAnswers, plan, ctx, cfg) {
     act: noulOf(rawAnswers, "act"),
     relation: relation && [relation.key, relation.p],
   };
+  // Older responses lack the newer questions: neutral values leave the old behaviour.
+  const answerable = noulOf(rawAnswers, "answerable") ?? 1;
+  const alreadyAnswered = noulOf(rawAnswers, "already_answered") ?? 0;
+  const gap = noulOf(rawAnswers, "gap") ?? 0;
+  raw.answerable = answerable;
+  raw.alreadyAnswered = alreadyAnswered;
+  raw.gap = gap;
   const reasons = [];
   const supersede =
     relEntry?.kind === "supersede" && relation.p >= cfg.replaceMin ? relEntry.jobId : undefined;
@@ -165,6 +172,11 @@ function interpret(rawAnswers, plan, ctx, cfg) {
   if (supersede) return go();
   if (ctx.signals.sinceLastCardMs != null && ctx.signals.sinceLastCardMs < cfg.cooldownMs)
     return { kind: "wait", reasons: [...reasons, "cooldown"], raw };
+  if (alreadyAnswered >= cfg.alreadyAnsweredThreshold)
+    return { kind: "skip", reasons: [...reasons, `already_answered ${pct(alreadyAnswered)}%`], raw };
+  const needsGap = answerable < cfg.answerableMin;
+  if (needsGap && gap < cfg.gapMin)
+    return { kind: "wait", reasons: [...reasons, "not_answerable"], raw };
   if (act < cfg.actThreshold[ctx.settings.quiet]) {
     // Half a sentence scores low only because it is half a sentence: look again when it ends.
     if (canWait && act >= cfg.actThreshold[ctx.settings.quiet] * cfg.recheckBarFactor)
@@ -174,7 +186,7 @@ function interpret(rawAnswers, plan, ctx, cfg) {
   if (relEntry?.kind === "covered" && relation.p >= cfg.alreadyHandledThreshold)
     return { kind: "skip", reasons: [...reasons, `already_handled ${pct(relation.p)}%`], raw };
   if (canWait) return recheck(`unfinished (complete ${pct(complete)}%)`);
-  return go();
+  return needsGap ? go({ kind: "gap_questions" }) : go();
 }
 
 // A refused key or an empty account: every call would fail the same way, so nothing runs (the banner says why).

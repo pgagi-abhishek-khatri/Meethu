@@ -78,14 +78,18 @@ test("one call asks few questions; relation only when a card or analysis could c
   const base = Object.keys(d.buildQuestions(ctx()).questions);
   assert.deepEqual(base.sort(), [
     "act",
+    "answerable",
     "asked_of_assistant",
     "chatter",
     "complete",
+    "gap",
     "kind",
     "needs_web",
   ]);
   const withCard = d.buildQuestions(ctx({ hasCards: true })).questions;
   assert.ok("relation" in withCard);
+  assert.ok("already_answered" in withCard);
+  assert.ok(!("already_answered" in d.buildQuestions(ctx()).questions));
   const job = d.buildQuestions(ctx({ running: [{ id: "j1", topic: "GDP of France" }] })).questions;
   assert.deepEqual(Object.keys(job.relation.criteria), ["new", "covered", "replace_j1"]);
 });
@@ -118,12 +122,12 @@ test("a clear need runs; small talk waits", () => {
 });
 
 test("the quiet level moves the bar", () => {
-  const a = answers({ act: 0.4 });
+  const a = answers({ act: 0.5 });
   assert.equal(run(a, ctx({ settings: { ...d.DEFAULT_SETTINGS, quiet: "normal" } })).kind, "run");
   assert.equal(run(a, ctx({ settings: { ...d.DEFAULT_SETTINGS, quiet: "quiet" } })).kind, "wait");
   // chatter discounts substance: 0.9 x (1 - 0.8) is under the normal bar
   assert.equal(run(answers({ act: 0.9, chatter: N(0.8) })).kind, "wait");
-  const low = answers({ act: 0.2 });
+  const low = answers({ act: 0.3 });
   assert.equal(run(low, ctx({ settings: { ...d.DEFAULT_SETTINGS, quiet: "chatty" } })).kind, "run");
 });
 
@@ -185,6 +189,27 @@ test("inside the cooldown with a job running only a request or a change counts",
   assert.equal(quiet.updateCheck, true);
   assert.equal(run({ ...none, relation: C("replace_j1", keys, 0.9) }, c).cancelJobId, "j1");
   assert.equal(run({ ...none, asked_of_assistant: N(0.95) }, c).trigger, "explicit");
+});
+
+test("already_answered skips; not answerable waits; a gap yields gap_questions; explicit ignores them", () => {
+  const withCard = ctx({ hasCards: true });
+  const skip = run(answers({ already_answered: N(0.8) }), withCard);
+  assert.equal(skip.kind, "skip");
+  assert.ok(skip.reasons.includes("already_answered 80%"));
+  const wait = run(answers({ act: 0.4, answerable: N(0.2) }));
+  assert.equal(wait.kind, "wait");
+  assert.ok(wait.reasons.includes("not_answerable"));
+  const gap = run(answers({ act: 0.6, answerable: N(0.3), gap: N(0.7) }));
+  assert.equal(gap.kind, "run");
+  assert.equal(gap.deliverable, "gap_questions");
+  const c = ctx({ userInNew: true, hasCards: true });
+  const exp = run(
+    answers({ asked_of_assistant: N(0.95), already_answered: N(0.9), answerable: N(0.1) }),
+    c
+  );
+  assert.equal(exp.kind, "run");
+  assert.equal(exp.trigger, "explicit");
+  assert.equal(run(answers({ act: 0.6 })).kind, "run"); // missing new answers are neutral
 });
 
 test("an unfinished sentence is rechecked for a bounded time", () => {
