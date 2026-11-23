@@ -235,6 +235,7 @@ function createCopilot({
     okfRouter = createOkfRouter();
     const featReg = okfRegistry?.featureRegistry;
     if (featReg && featReg.hasRegistry() && store.rag?.temporal) {
+      store.rag.temporal.configure({ featureRegistry: featReg, log: ragLog });
       authoritativeLookup =
         typeof store.rag.createAuthoritativeLookup === "function"
           ? store.rag.createAuthoritativeLookup({ featureRegistry: featReg })

@@ -935,3 +935,52 @@ test("onMutate is called once after activateSuccessorVersion commits and not at 
   assert.equal(calls[0].p, 7);
   db.close();
 });
+
+// ============================================================================
+// Unregistered feature ids are surfaced, not rejected
+// ============================================================================
+
+function chunkFor(featureId, ord) {
+  return {
+    file_id: 1,
+    project_id: 10,
+    ord,
+    text: `chunk ${ord}`,
+    feature_id: featureId,
+    version: "1.0.0",
+    lifecycle_status: "active",
+    valid_from: 1700000000000,
+    valid_to: null,
+  };
+}
+
+test("inserting an unregistered feature_id logs unregistered_feature and still inserts", sqlite, () => {
+  const db = new Database(":memory:");
+  createRagStore(db);
+  const records = [];
+  const temporal = createTemporalStore(db, {
+    featureRegistry: { getFeatureById: () => null },
+    log: (r) => records.push(r),
+  });
+
+  const row = temporal.insertTemporalChunk(chunkFor("feat:dynamic", 0));
+  assert.ok(row.id > 0, "the chunk is still inserted");
+  assert.deepEqual(records, [{ event: "unregistered_feature", feature_id: "feat:dynamic" }]);
+
+  temporal.insertTemporalChunk(chunkFor("feat:dynamic", 1));
+  assert.equal(records.length, 1, "logged once per feature id, not per chunk");
+  db.close();
+});
+
+test("inserting a registered feature_id does not log", sqlite, () => {
+  const db = new Database(":memory:");
+  createRagStore(db);
+  const records = [];
+  const temporal = createTemporalStore(db, {
+    featureRegistry: { getFeatureById: (id) => ({ id }) },
+    log: (r) => records.push(r),
+  });
+  temporal.insertTemporalChunk(chunkFor("feat:known", 0));
+  assert.deepEqual(records, []);
+  db.close();
+});

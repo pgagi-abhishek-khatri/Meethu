@@ -81,7 +81,16 @@ function migrateTemporalSchema(db, { addColumn } = {}) {
  * @param {Object} [options.featureRegistry=null] - Canonical feature registry for validation
  * @returns {Object} Temporal store API
  */
-function createTemporalStore(db, { now = Date.now, featureRegistry = null, onMutate = null } = {}) {
+function createTemporalStore(
+  db,
+  { now = Date.now, featureRegistry: initialRegistry = null, onMutate = null, log: initialLog = () => {} } = {}
+) {
+  // The store is opened before the OKF registry and the RAG log exist, so both are bound late.
+  let featureRegistry = initialRegistry;
+  let log = initialLog;
+  // One record per feature id per store: a bulk ingest of a dynamically discovered feature
+  // would otherwise log once per chunk.
+  const reportedUnregistered = new Set();
   // Ensure schema and indexes exist
   migrateTemporalSchema(db);
 
@@ -218,8 +227,10 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null, onMut
       // If canonical feature registry is available, optionally check registration
       if (featureRegistry && typeof featureRegistry.getFeatureById === "function") {
         const canonical = featureRegistry.getFeatureById(feature_id);
-        if (!canonical) {
-          // Warning or permissible dynamic feature
+        // Features can be discovered dynamically, so an unknown id is surfaced rather than rejected.
+        if (!canonical && !reportedUnregistered.has(feature_id)) {
+          reportedUnregistered.add(feature_id);
+          log({ event: "unregistered_feature", feature_id });
         }
       }
     }
@@ -625,6 +636,10 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null, onMut
   }
 
   return {
+    configure({ featureRegistry: registry, log: logger } = {}) {
+      if (registry !== undefined) featureRegistry = registry;
+      if (typeof logger === "function") log = logger;
+    },
     migrateSchema: () => migrateTemporalSchema(db),
     insertTemporalChunk,
     getActiveFeatureChunks,
