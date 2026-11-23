@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "../icons";
 import MarkdownRenderer from "../ui/MarkdownRenderer";
 import type { Card as CardData } from "./copilotState";
@@ -20,6 +20,28 @@ interface Props {
 
 export default function Card({ card, onAsk, onDeeper, onFeedback }: Props) {
   const [openSource, setOpenSource] = useState<number | null>(null);
+  const [copied, setCopied] = useState<{ text: string; ok: boolean } | null>(null);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+    },
+    []
+  );
+  const copyGap = async (text: string) => {
+    let ok = false;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      }
+    } catch {
+      ok = false;
+    }
+    setCopied({ text, ok });
+    if (copyTimer.current) clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopied(null), 1500);
+  };
   const working = card.status === "queued" || card.status === "searching";
 
   return (
@@ -112,12 +134,15 @@ export default function Card({ card, onAsk, onDeeper, onFeedback }: Props) {
               key={q}
               type="button"
               title="Tap to copy"
-              onClick={() => {
-                navigator.clipboard.writeText(q).catch(() => {});
-              }}
+              onClick={() => void copyGap(q)}
               className="rounded-lg border border-white/10 px-2 py-1 text-start text-[12px] text-slate-300 hover:border-emerald-400/50 hover:text-emerald-200"
             >
               {q}
+              {copied?.text === q && (
+                <span className="ms-2 text-[11px] text-slate-500">
+                  {copied.ok ? "Copied" : "Copy failed"}
+                </span>
+              )}
             </button>
           ))}
         </div>

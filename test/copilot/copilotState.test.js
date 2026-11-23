@@ -143,9 +143,12 @@ test("gap questions on a done card are kept, replay is idempotent, and absent ga
   assert.equal(cards.length, 1);
   assert.deepEqual(cards[0].gaps, ["Which plan are they on?", "What is the budget?"]);
 
-  s = run([
-    { type: "card_start", id: "g2", threadId: "main", web: false },
-    { type: "card_done", id: "g2", threadId: "main", title: "T", body: "- y" },
-  ], s);
+  s = run(
+    [
+      { type: "card_start", id: "g2", threadId: "main", web: false },
+      { type: "card_done", id: "g2", threadId: "main", title: "T", body: "- y" },
+    ],
+    s
+  );
   assert.deepEqual(s.cards.find((c) => c.id === "g2").gaps, []);
 });
