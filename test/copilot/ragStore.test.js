@@ -241,3 +241,53 @@ test(
     store.close();
   }
 );
+
+const { createRagStore } = require("../../src/copilot/rag/ragStore");
+
+function ragWithVersionedFile() {
+  const Database = require("better-sqlite3");
+  const db = new Database(":memory:");
+  const rag = createRagStore(db);
+  rag.insertTemporalChunk({
+    file_id: 1,
+    project_id: 10,
+    ord: 0,
+    text: "zebrafish legacy-superseded pricing",
+    feature_id: "feat:pricing",
+    version: "1.0.0",
+    lifecycle_status: "superseded",
+    valid_from: 1700000000000,
+    valid_to: 1700000001000,
+  });
+  rag.insertTemporalChunk({
+    file_id: 1,
+    project_id: 10,
+    ord: 1,
+    text: "narwhal current pricing",
+    feature_id: "feat:pricing",
+    version: "2.0.0",
+    lifecycle_status: "active",
+    valid_from: 1700000001000,
+  });
+  return rag;
+}
+
+test("replaceChunks keeps superseded/versioned chunks of the file", sqlite, () => {
+  const rag = ragWithVersionedFile();
+  rag.replaceChunks(1, 10, [{ text: "plain legacy chunk" }], 0);
+  rag.replaceChunks(1, 10, [{ text: "plain legacy chunk again" }], 0);
+  assert.equal(rag.chunkCount(10), 3, "two versioned rows plus one legacy row");
+  assert.equal(rag.keyword(10, "zebrafish", 5, { includeInactive: true }).length, 1);
+  assert.equal(rag.keyword(10, "narwhal", 5, { includeInactive: true }).length, 1);
+  assert.equal(rag.keyword(10, "again", 5, { includeInactive: true }).length, 1);
+  assert.equal(rag.keyword(10, "plain", 5, { includeInactive: true }).length, 1);
+});
+
+test("removeFile deletes all chunks and FTS rows (count is 0)", sqlite, () => {
+  const rag = ragWithVersionedFile();
+  rag.replaceChunks(1, 10, [{ text: "plain legacy chunk" }], 0);
+  rag.removeFile(1, 10);
+  assert.equal(rag.chunkCount(10), 0);
+  for (const w of ["zebrafish", "narwhal", "plain"])
+    assert.equal(rag.keyword(10, w, 5, { includeInactive: true }).length, 0, w);
+});

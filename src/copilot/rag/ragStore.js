@@ -101,8 +101,15 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
     ),
     insertFts: db.prepare("INSERT INTO copilot_chunks_fts (rowid, text) VALUES (?, ?)"),
     ids: db.prepare("SELECT id FROM copilot_chunks WHERE file_id = ?"),
+    // Legacy rows only: versioned rows carry lineage that a legacy re-ingest must not erase.
+    legacyIds: db.prepare(
+      "SELECT id FROM copilot_chunks WHERE file_id = ? AND feature_id IS NULL AND version IS NULL"
+    ),
     delFts: db.prepare("DELETE FROM copilot_chunks_fts WHERE rowid = ?"),
     delChunks: db.prepare("DELETE FROM copilot_chunks WHERE file_id = ?"),
+    delLegacyChunks: db.prepare(
+      "DELETE FROM copilot_chunks WHERE file_id = ? AND feature_id IS NULL AND version IS NULL"
+    ),
     byHash: db.prepare(
       "SELECT hash, vec FROM copilot_chunks WHERE hash IN (SELECT value FROM json_each(?)) AND dims = ?"
     ),
@@ -200,8 +207,8 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
     // chunks: [{ text, meta, embed: "text"|"media", hash, vec: Float32Array|null }] replace the file's old ones in one step.
     replaceChunks(fileId, projectId, chunks, dims) {
       db.transaction(() => {
-        for (const { id } of q.ids.all(fileId)) q.delFts.run(id);
-        q.delChunks.run(fileId);
+        for (const { id } of q.legacyIds.all(fileId)) q.delFts.run(id);
+        q.delLegacyChunks.run(fileId);
         chunks.forEach((c, ord) => {
           const id = Number(
             q.insert.run(
@@ -221,8 +228,16 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
       })();
       invalidateMatrices(projectId);
     },
+    // Every chunk of the file, versioned or not: a deleted file must leave no searchable text behind.
+    deleteFileChunks(fileId, projectId) {
+      db.transaction(() => {
+        for (const { id } of q.ids.all(fileId)) q.delFts.run(id);
+        q.delChunks.run(fileId);
+      })();
+      invalidateMatrices(projectId);
+    },
     removeFile(fileId, projectId) {
-      this.replaceChunks(fileId, projectId, [], 0);
+      this.deleteFileChunks(fileId, projectId);
     },
     // hash -> Float32Array for chunks whose text was embedded before (an edited file re-embeds only what changed).
     cachedVectors(hashes, dims) {
