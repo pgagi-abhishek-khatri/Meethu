@@ -5,17 +5,27 @@ const STOP_WORDS = new Set([
   "a", "an", "the", "is", "are", "was", "were", "be", "to", "of", "in", "on", "for", "and", "or", "it", "its",
   "this", "that", "we", "you", "i", "me", "my", "our", "your", "do", "does", "did", "can", "could", "would",
   "what", "whats", "how", "which", "who", "when", "where", "why", "so", "just", "about", "with", "at", "by",
-  // "how much does X cost" restates "X price"; they carry no topic of their own
-  "much", "cost",
+  "much", // interrogative filler ("how much does X cost")
 ]);
 
+// "cost" and "price" ask for the same thing, so they count as one word.
+const PRICE_WORDS = new Set(["price", "prices", "pricing", "priced", "cost", "costs", "costing"]);
+
 function contentWords(text) {
-  const words = String(text || "")
+  const words = normalize(text)
+    .split(" ")
+    .filter((w) => w && !STOP_WORDS.has(w))
+    .map((w) => (PRICE_WORDS.has(w) ? "price" : w));
+  return new Set(words);
+}
+
+function normalize(text) {
+  return String(text || "")
     .toLowerCase()
     .replace(/['’]/g, "")
     .split(/[^a-z0-9]+/)
-    .filter((w) => w && !STOP_WORDS.has(w));
-  return new Set(words);
+    .filter(Boolean)
+    .join(" ");
 }
 
 function jaccard(a, b) {
@@ -26,17 +36,21 @@ function jaccard(a, b) {
 }
 
 function isDuplicate({ text, cards = [], asked = new Set(), now, windowMs, minOverlap }) {
+  const norm = normalize(text);
+  if (!norm) return { duplicate: false, score: 0 };
   const words = contentWords(text);
-  if (!words.size) return { duplicate: false, score: 0 };
+  // Text made only of stop words has no word set to compare: fall back to an exact repeat.
+  const similarity = (other) =>
+    words.size ? jaccard(words, contentWords(other)) : normalize(other) === norm ? 1 : 0;
 
   let best = { score: 0 };
   for (const c of cards) {
     if (now - c.shownAt > windowMs) continue;
-    const score = jaccard(words, contentWords([c.gist, c.title, c.body].filter(Boolean).join(" ")));
+    const score = similarity([c.gist, c.title, c.body].filter(Boolean).join(" "));
     if (score > best.score) best = { score, matchedJobId: c.jobId };
   }
   for (const q of asked) {
-    const score = jaccard(words, contentWords(q));
+    const score = similarity(q);
     if (score > best.score) best = { score };
   }
 

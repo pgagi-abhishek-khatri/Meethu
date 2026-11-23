@@ -42,3 +42,20 @@ test("matches a previously asked question", () => {
   assert.strictEqual(r.duplicate, true);
   assert.strictEqual(r.matchedJobId, undefined);
 });
+
+test("a verbatim repeat of a cost question is a duplicate", () => {
+  const r = isDuplicate({ text: "what is the cost?", cards: [card("what is the cost?")], asked: new Set(), ...opts });
+  assert.strictEqual(r.duplicate, true);
+});
+
+test("cost and price phrasing of the same subject is a duplicate", () => {
+  const r = isDuplicate({ text: "how much does shipping cost", cards: [card("price of shipping")], asked: new Set(), ...opts });
+  assert.strictEqual(r.duplicate, true);
+});
+
+test("stop-word-only text matches only an exact repeat", () => {
+  const same = isDuplicate({ text: "what is it", cards: [card("What is it?")], asked: new Set(), ...opts });
+  const other = isDuplicate({ text: "what is it", cards: [card("how does it")], asked: new Set(), ...opts });
+  assert.strictEqual(same.duplicate, true);
+  assert.strictEqual(other.duplicate, false);
+});
