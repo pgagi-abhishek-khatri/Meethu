@@ -11,9 +11,9 @@ const DEFAULT_DECISION_CONFIG = {
   maxWaitForCompleteMs: 2500, // never defer longer than this for an unfinished sentence
   recheckAfterMs: 800,
   recheckBarFactor: 0.6, // an unfinished sentence is rechecked if it already scores this share of the bar
-  cooldownMs: 4000, // min gap between proactive cards
+  cooldownMs: 2000, // min gap between proactive cards (a question from the others skips it: engine.runDecision)
   holdWhileUserSpeaking: true,
-  holdMaxMs: 4000, // never hold others' words longer than this while the user speaks (they would starve)
+  holdMaxMs: 2000, // never hold others' words longer than this while the user speaks (they would starve)
   weakCardBelow: 0.7, // proactive card with less confidence than this ...
   weakCardMemoryMs: 30000, // ... stops counting as "already handled" after this
   cardMemoryMs: 120000, // a card older than this no longer counts as "already handled"
@@ -38,7 +38,7 @@ const DEFAULT_DECISION_CONFIG = {
   // Liquid's own API, which is https://api.liquid.ai/decisions/v1/systemone).
   url: "https://openrouter.ai/api/v1/systemone",
   model: "perplexity/pplx-decider-v1.2", // v1.1-27b was withdrawn from OpenRouter (404); liquid/d1 also works
-  timeoutMs: 2500,
+  timeoutMs: 1500, // measured p90 965 ms; a slower call falls back (interpret.js fallbackDecision) instead of holding the card
 };
 
 // Key: COPILOT_DECISION_KEY, else OPENROUTER_API_KEY (the same key as the AI layer).

@@ -8,17 +8,21 @@
 // Pure apart from the injected clock and timers, so it is tested with a fake clock.
 const { questionish } = require("../transcript/utterances");
 
+// Latency budget (docs/copilot/LATENCY_1S_PLAN.md, Phase 1): a FINAL already lands at a pause (Soniox endpoint,
+// or its 4 s finalize during long speech), so these waits only batch what arrives together. The old values
+// (1.6 s debounce, 1.5 s turn gap, 4.5 s gap) added ~1.4 s median before D1 was even asked.
 const DEFAULT_TRIGGER_CONFIG = {
   minWords: 4,
-  debounceMs: 1600, // quiet time after the last statement before D1 is asked (statements batch; they are rarely urgent)
-  questionDebounceMs: 400, // a question mark shortens it
-  maxBatchWaitMs: 3000, // never hold the first pending segment longer than this
-  minGapMs: 4500, // between the START of two calls
-  questionMinGapMs: 2000, // the same, when a question is waiting
+  // Each debounce is at least its turn gap below, so a call fires when the debounce ends instead of re-arming.
+  debounceMs: 600, // quiet time after the last statement before D1 is asked (batches the lines of one thought)
+  questionDebounceMs: 150, // a question mark shortens it
+  maxBatchWaitMs: 2000, // never hold the first pending segment longer than this
+  minGapMs: 2500, // between the START of two calls
+  questionMinGapMs: 800, // the same, when a question is waiting
   // Turn taking: D1 is asked when a speaker has finished, not while they are still talking.
-  turnGapMs: 1500, // quiet time (no partial or final from that voice) that ends a turn
-  questionTurnGapMs: 300, // a question mark means they handed over: a shorter wait
-  maxTurnWaitMs: 20000, // a long monologue is still looked at this often
+  turnGapMs: 600, // quiet time (no partial or final from that voice) that ends a turn
+  questionTurnGapMs: 150, // a question mark means they handed over: a shorter wait
+  maxTurnWaitMs: 8000, // a long monologue is still looked at this often
 };
 
 const FILLER =

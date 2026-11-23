@@ -315,7 +315,7 @@ test("system prompt: SKIP rule only for proactive cards", () => {
   assert.doesNotMatch(buildSystemPrompt({ proactive: false }), /reply with exactly "SKIP/);
 });
 
-test("runner: a proactive card is shown only when done, low confidence included; asked cards stream", async () => {
+test("runner: a proactive card streams once it is clearly not a SKIP, low confidence included; asked cards stream", async () => {
   const events = [];
   const mk = (text) =>
     createAnswerRunner({
@@ -335,7 +335,7 @@ test("runner: a proactive card is shown only when done, low confidence included;
   }).done;
   assert.deepEqual(
     events.map((e) => e.type),
-    ["card_start", "card_done"]
+    ["card_start", "card_update", "card_update", "card_done"]
   );
   assert.equal(r.confidence, "low");
 
@@ -349,8 +349,8 @@ test("runner: a proactive card is shown only when done, low confidence included;
   }).done;
   assert.deepEqual(
     events.map((e) => e.type),
-    ["card_start", "card_done"]
-  ); // no streaming for proactive
+    ["card_start", "card_update", "card_update", "card_done"]
+  ); // proactive cards stream too (docs/copilot/LATENCY_1S_PLAN.md, Phase 1)
   assert.equal(card.body, "Body");
 
   events.length = 0;
@@ -363,7 +363,7 @@ test("runner: a proactive card is shown only when done, low confidence included;
   }).done;
   assert.deepEqual(
     events.map((e) => e.type),
-    ["card_start", "card_done"]
+    ["card_start", "card_update", "card_update", "card_done"]
   ); // unlabeled is shown, marked low
 
   events.length = 0;
@@ -469,4 +469,78 @@ test("mainCall: a model override and the deep tier use the override model, Claud
   await stream({ messages: [], tier: "fast", web: false });
   assert.equal(req.model, "qwen/x");
   assert.deepEqual(req.reasoning, { enabled: false }, "qwen does not think in the fast tier");
+});
+
+test("runner: a proactive card never shows a SKIP prefix, and a late SKIP removes a shown card", async () => {
+  const events = [];
+  const runner = (deltas, final) =>
+    createAnswerRunner({
+      model: async ({ onDelta }) => {
+        for (const d of deltas) onDelta(d);
+        return { text: final, sources: [] };
+      },
+      emit: (e) => events.push(e),
+    });
+  // "S", "SK", "SKI" never reach the window; the SKIP ends with nothing shown.
+  await runner(["S", "SK", "SKI", "SKIP: off topic"], "SKIP: off topic").run({
+    id: "a",
+    proactive: true,
+    web: false,
+    focus: "f",
+    context: {},
+  }).done;
+  assert.deepEqual(
+    events.map((e) => e.type),
+    ["card_skip"]
+  );
+  assert.equal(events[0].shown, false);
+
+  // A card that streamed and then came back empty is taken away again (the window removes it on card_skip/error).
+  events.length = 0;
+  await runner(["TITLE: Pricing"], "SKIP: changed my mind").run({
+    id: "b",
+    proactive: true,
+    web: false,
+    focus: "f",
+    context: {},
+  }).done;
+  assert.deepEqual(
+    events.map((e) => e.type),
+    ["card_start", "card_update", "card_skip"]
+  );
+  assert.equal(events.at(-1).shown, true);
+});
+
+test("runner: a streamed proactive card cut off by the token cap stays, marked truncated; firstVisibleMs is reported", async () => {
+  const events = [];
+  let t = 1000;
+  const runner = createAnswerRunner({
+    now: () => t,
+    model: async ({ onDelta }) => {
+      t += 400; // first words 400 ms after the job started
+      onDelta("TITLE: Pricing\n- Starter is");
+      t += 300;
+      return { text: "TITLE: Pricing\n- Starter is", finishReason: "length", sources: [] };
+    },
+    emit: (e) => events.push(e),
+  });
+  const card = await runner.run({ id: "a", proactive: true, web: false, focus: "f", context: {} })
+    .done;
+  assert.equal(events.at(-1).type, "card_done");
+  assert.equal(card.truncated, true);
+  assert.equal(card.timing.firstVisibleMs, 400);
+
+  // Never shown and cut off: still dropped, as before.
+  events.length = 0;
+  const hidden = createAnswerRunner({
+    model: async () => ({ text: "TITLE: X\n- a", finishReason: "length", sources: [] }),
+    emit: (e) => events.push(e),
+  });
+  const r = await hidden.run({ id: "b", proactive: true, web: false, focus: "f", context: {} })
+    .done;
+  assert.equal(r.skipped, true);
+  assert.deepEqual(
+    events.map((e) => e.type),
+    ["card_skip"]
+  );
 });

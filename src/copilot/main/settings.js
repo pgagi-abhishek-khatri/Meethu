@@ -66,6 +66,12 @@ function sanitize(patch, current) {
   return out;
 }
 
+// OpenRouter keys start with "sk-or-". Anything else (a Soniox key "snx_…", an OpenAI key) is refused on save and
+// ignored if it was saved before, or it would override a working .env key and every model call would fail with 401.
+const isOpenRouterKey = (key) => /^sk-or-/.test(String(key ?? "").trim());
+const WRONG_KEY =
+  "That is not an OpenRouter key (they start with sk-or-). Get one at openrouter.ai/keys; your Soniox key goes in Note Recording.";
+
 function createSettings({ dir, safeStorage = null, env = process.env }) {
   const file = path.join(dir, "copilot-settings.json");
   const keyFile = path.join(dir, "copilot-key.bin");
@@ -96,26 +102,39 @@ function createSettings({ dir, safeStorage = null, env = process.env }) {
     fs.writeFileSync(keyFile, data, { mode: 0o600 });
   };
   let apiKey = readKey();
+  let keyError = ""; // the last key the user tried to save was refused
 
   const save = () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(file, JSON.stringify(values, null, 2));
   };
 
+  // The saved key counts only when it is an OpenRouter key; otherwise the .env one is used.
+  const savedKey = () => (isOpenRouterKey(apiKey) ? apiKey : "");
+  const envKey = () => (env.OPENROUTER_API_KEY ?? "").trim();
+
   return {
     // What the engine reads: the saved key wins over the .env one (development).
-    engine: () => ({ ...values, apiKey: apiKey || (env.OPENROUTER_API_KEY ?? "").trim() }),
+    engine: () => ({ ...values, apiKey: savedKey() || envKey() }),
     // What the window reads: never the key itself.
     view: () => ({
       ...values,
-      hasKey: !!(apiKey || (env.OPENROUTER_API_KEY ?? "").trim()),
-      keyFromEnv: !apiKey && !!env.OPENROUTER_API_KEY,
+      hasKey: !!(savedKey() || envKey()),
+      keyFromEnv: !savedKey() && !!envKey(),
+      // A key saved before this check that is not an OpenRouter key: it is ignored, and the page says so.
+      keyWarning: apiKey && !isOpenRouterKey(apiKey) ? WRONG_KEY : "",
+      keyError,
     }),
     update(patch = {}) {
       values = { ...values, ...sanitize(patch, values) };
+      keyError = "";
       if (typeof patch.apiKey === "string") {
-        apiKey = patch.apiKey.trim();
-        writeKey(apiKey);
+        const next = patch.apiKey.trim();
+        if (next && !isOpenRouterKey(next)) keyError = WRONG_KEY;
+        else {
+          apiKey = next;
+          writeKey(apiKey);
+        }
       }
       save();
       return this.view();
@@ -123,4 +142,4 @@ function createSettings({ dir, safeStorage = null, env = process.env }) {
   };
 }
 
-module.exports = { createSettings, DEFAULTS };
+module.exports = { createSettings, DEFAULTS, isOpenRouterKey };

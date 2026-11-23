@@ -111,3 +111,19 @@ test("marking a card not helpful sticks to that card only", () => {
   s = reduce(s, { type: "feedback", id: "a", value: null });
   assert.equal(s.cards.find((c) => c.id === "a").feedback, null);
 });
+
+test("a proactive card streams into the feed, and a late SKIP takes it away again", () => {
+  let s = run([
+    { type: "session", state: "start" },
+    { type: "card_start", id: "j9", threadId: "main", web: false, proactive: true, focus: "q" },
+    { type: "card_update", id: "j9", title: "Pricing", body: "- Starter is", confidence: null },
+  ]);
+  const card = s.cards.find((c) => c.id === "j9");
+  assert.ok(card, "the streaming proactive card is on screen");
+  assert.equal(card.body, "- Starter is");
+  s = run([{ type: "card_skip", id: "j9", reason: "off topic", shown: true }], s);
+  assert.equal(
+    s.cards.some((c) => c.id === "j9"),
+    false
+  );
+});

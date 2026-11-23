@@ -239,6 +239,18 @@ export function OpenRouterKeySection() {
             Save
           </Button>
         </div>
+        {(s.keyError || s.keyWarning) && (
+          <div className="flex items-start gap-2 rounded-md bg-destructive/10 px-2.5 py-2 text-xs text-destructive">
+            <span className="flex-1">
+              {s.keyError || `${s.keyWarning} The saved key is ignored.`}
+            </span>
+            {s.keyWarning && !s.keyError && (
+              <Button size="sm" variant="outline" onClick={() => update({ apiKey: "" })}>
+                Remove saved key
+              </Button>
+            )}
+          </div>
+        )}
         <button
           type="button"
           onClick={() => window.electronAPI?.openExternal?.("https://openrouter.ai/keys")}

@@ -19,7 +19,7 @@ const { createScheduler, DEFAULT_TRIGGER_CONFIG } = require("../core/trigger/sch
 const { getCopilotAiConfig } = require("../config/aiDefaults");
 const { createMainModel } = require("./mainCall");
 const { createAnswerRunner } = require("./answerRunner");
-const { toUtterances, realQuestion } = require("../core/transcript/utterances");
+const { toUtterances, realQuestion, questionish } = require("../core/transcript/utterances");
 const {
   createRollingSummary,
   createOpenRouterLlm,
@@ -305,7 +305,9 @@ function createEngine({
     const st = liveSettings();
     const keyEnv = { ...env, ...(st.apiKey ? { OPENROUTER_API_KEY: st.apiKey } : {}) };
     const dec = getDecisionEnv(keyEnv);
-    baseD1 = client ?? (dec.apiKey ? createLiquidClient({ ...dec, timeoutMs: 5000 }) : null);
+    baseD1 =
+      client ??
+      (dec.apiKey ? createLiquidClient({ ...dec, timeoutMs: decisionCfg.timeoutMs }) : null);
     d1 = baseD1 ? wrapD1(baseD1) : null;
     summaryLlm =
       llm ??
@@ -500,7 +502,15 @@ function createEngine({
                         : "asked"
                     : "auto",
                   minScore: spec.project ? 0 : AUTO_SCORE,
-                  expand: writer ? writeQueries(spec) : spec.deep && summaryLlm ? expandQuery : null,
+                  // The query writer is a whole model call: only for a moment that needs the files (D1 said so),
+                  // a typed question or a high-effort rerun. An unasked look searches with the moment's own words,
+                  // whose vector the prefetch warmed while D1 decided.
+                  expand:
+                    writer && (spec.project || !spec.proactive || spec.deep)
+                      ? writeQueries(spec)
+                      : spec.deep && summaryLlm
+                        ? expandQuery
+                        : null,
                 });
                 trace({
                   type: "context",
@@ -516,7 +526,11 @@ function createEngine({
                   passages: r.text,
                 });
                 resolvedByTemporal = Boolean(r.temporalRouting?.passages);
-                ragResult = { text: r.text, used: r.used, files: [...new Set(r.used.map((u) => u.file))] };
+                ragResult = {
+                  text: r.text,
+                  used: r.used,
+                  files: [...new Set(r.used.map((u) => u.file))],
+                };
               }
 
               // If temporalRouter already resolved authoritative project chunks from SQLite, return directly
@@ -550,7 +564,10 @@ function createEngine({
               }
 
               return ragResult
-                ? { passages: ragResult.text || ragResult.passages || "", files: ragResult.files || [] }
+                ? {
+                    passages: ragResult.text || ragResult.passages || "",
+                    files: ragResult.files || [],
+                  }
                 : { passages: "", files: [] };
             }
           : null,
@@ -840,15 +857,18 @@ function createEngine({
     // Asking D1 first and then dropping the answer would throw the moment away for good.
     const running = runningJobs(s);
     const cooldownMs = decisionCfg.cooldownMs;
+    // A question is the moment a card is most wanted: it is judged at once, not after the cooldown or the user's
+    // words. D1's "already handled" still keeps it from repeating a card that answered it.
+    const asking = fresh.some((seg) => !seg.noise && questionish(seg.text));
     {
       const sinceCard = s.lastRunAt == null ? Infinity : now() - s.lastRunAt;
       // With an analysis running, new words may have to replace it, so the cooldown does not apply.
-      if (sinceCard < cooldownMs && !running.length)
+      if (sinceCard < cooldownMs && !running.length && !asking)
         return deferred(s, "cooldown", cooldownMs - sinceCard + 50);
       // Holding is for someone else's words while the user talks; the user's own lines are the point.
       // Capped, or a long talker would starve everything the others say.
       const othersOnly = fresh.every((seg) => seg.source !== "mic");
-      if (s.userSpeaking && othersOnly && decisionCfg.holdWhileUserSpeaking) {
+      if (s.userSpeaking && othersOnly && !asking && decisionCfg.holdWhileUserSpeaking) {
         s.holdSince ??= now();
         if (now() - s.holdSince < decisionCfg.holdMaxMs) return deferred(s, "user_speaking", 800);
       }

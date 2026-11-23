@@ -162,9 +162,10 @@ test("a deferral keeps the text pending and retries without spending a call or l
 test("a speaker still talking (partials) is let finish before D1 is asked", async () => {
   const { clock, runs, scheduler } = make();
   scheduler.noteFinal(sys(LONG));
-  // the same voice keeps going: every partial pushes the call back
-  for (let i = 0; i < 6; i++) {
-    await clock.advance(1000);
+  // the same voice keeps going: every partial pushes the call back (Soniox sends ~3 partials a second while
+  // someone talks; measured 36 in 11 s)
+  for (let i = 0; i < 20; i++) {
+    await clock.advance(300);
     scheduler.notePartial("system");
   }
   assert.equal(runs.length, 0);
@@ -191,4 +192,25 @@ test("a long monologue is still looked at after maxTurnWaitMs", async () => {
     scheduler.notePartial("system");
   }
   assert.ok(runs.length >= 1);
+});
+
+test("a question is judged within questionTurnGapMs when the speaker stops", async () => {
+  const { clock, runs, scheduler } = make();
+  scheduler.noteFinal(sys("What is the price for the premium plan?"));
+  await clock.advance(DEFAULT_TRIGGER_CONFIG.questionTurnGapMs);
+  assert.equal(runs.length, 1);
+  assert.ok(DEFAULT_TRIGGER_CONFIG.questionTurnGapMs <= 200, "a question is asked within 200 ms");
+});
+
+test("a monologue with partials every 300 ms is still judged by maxTurnWaitMs", async () => {
+  const { clock, runs, scheduler } = make();
+  scheduler.noteFinal(sys(LONG));
+  let firedAt = null;
+  for (let t = 0; t < 12000 && firedAt == null; t += 300) {
+    await clock.advance(300);
+    scheduler.notePartial("system");
+    if (runs.length) firedAt = t + 300;
+  }
+  assert.ok(firedAt != null, "judged during the monologue");
+  assert.ok(firedAt <= DEFAULT_TRIGGER_CONFIG.maxTurnWaitMs + 300, `fired at ${firedAt} ms`);
 });

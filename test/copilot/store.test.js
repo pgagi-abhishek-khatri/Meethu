@@ -93,13 +93,23 @@ test("settings: the key stays out of the view, a saved key beats .env, bad value
   const s = createSettings({ dir, env: { OPENROUTER_API_KEY: "env-key" } });
   assert.equal(s.engine().apiKey, "env-key");
   assert.equal(s.view().keyFromEnv, true);
-  s.update({ apiKey: "saved-key", quiet: "loud", maxParallel: 99, opacity: 0.01, plan: "Goal" });
-  assert.equal(s.engine().apiKey, "saved-key");
-  assert.equal(JSON.stringify(s.view()).includes("saved-key"), false);
+  s.update({
+    apiKey: "sk-or-saved-key",
+    quiet: "loud",
+    maxParallel: 99,
+    opacity: 0.01,
+    plan: "Goal",
+  });
+  assert.equal(s.engine().apiKey, "sk-or-saved-key");
+  assert.equal(JSON.stringify(s.view()).includes("sk-or-saved-key"), false);
   assert.equal(s.view().quiet, "normal");
   assert.equal(s.view().maxParallel, 6);
   assert.equal(s.view().opacity, 0.3);
-  assert.equal(createSettings({ dir, env: {} }).engine().apiKey, "saved-key", "survives a restart");
+  assert.equal(
+    createSettings({ dir, env: {} }).engine().apiKey,
+    "sk-or-saved-key",
+    "survives a restart"
+  );
   assert.equal(createSettings({ dir, env: {} }).view().plan, "Goal");
   s.update({ apiKey: "" });
   assert.equal(s.engine().apiKey, "env-key");

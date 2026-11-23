@@ -119,8 +119,14 @@ export default function CopilotApp() {
     []
   );
   const doneCount = state.cards.filter((c) => c.status === "done").length;
+  // Main-thread cards that have words on screen (streaming or finished): the orb peeks at the first words of a
+  // card, not only once it is done (docs/copilot/LATENCY_1S_PLAN.md, Phase 1).
+  const shownCount = state.cards.filter(
+    (c) => c.threadId === "main" && (c.status === "streaming" || c.status === "done")
+  ).length;
   const [seenDone, setSeenDone] = useState(0); // finished cards already looked at (orb badge)
   const lastDone = useRef(doneCount);
+  const lastShown = useRef(shownCount);
   const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearPeek = () => {
     if (peekTimer.current) clearTimeout(peekTimer.current);
@@ -131,12 +137,16 @@ export default function CopilotApp() {
     peekTimer.current = setTimeout(() => setMode("orb"), ms);
   };
   const peekMs = (settings?.peekSeconds ?? 8) * 1000;
-  // A new card while small: peek at it, then shrink again.
+  // A new card while small: peek at it as soon as its first words arrive; shrink again once it is done (below).
   useEffect(() => {
-    if (doneCount > lastDone.current && mode !== "full") {
+    if (shownCount > lastShown.current && mode !== "full") {
+      clearPeek();
       setMode("peek");
-      backToOrb(peekMs);
     }
+    lastShown.current = shownCount;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shownCount]);
+  useEffect(() => {
     lastDone.current = doneCount;
     if (doneCount > 0 && tab !== "copilot") setUnseen(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -151,7 +161,15 @@ export default function CopilotApp() {
   }, [mode]);
   useEffect(() => clearPeek, []);
   const newest =
-    [...state.cards].reverse().find((c) => c.status === "done" && c.threadId === "main") ?? null;
+    [...state.cards]
+      .reverse()
+      .find((c) => (c.status === "done" || c.status === "streaming") && c.threadId === "main") ??
+    null;
+  // The peek stays open while the card is still being written, and shrinks back a while after it is done.
+  useEffect(() => {
+    if (mode === "peek" && newest?.status === "done") backToOrb(peekMs);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newest?.id, newest?.status, mode]);
 
   // The meeting stopped: close the window, shrink it, or leave it, as set. A recap still being written is awaited.
   const ended = state.phase === "ended";

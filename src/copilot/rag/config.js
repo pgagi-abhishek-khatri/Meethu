@@ -6,7 +6,10 @@ const RAG = {
   embedModel: "google/gemini-embedding-2",
   analysisModel: "google/gemini-3.8-flash",
   queryModel: "google/gemma-4-31b-it:nitro", // writes the search queries for every card that searches the files
-  queryWaitMs: { fast: null, deep: null }, // null: the search waits for the written queries (a number caps the wait)
+  // Fast cards wait at most 700 ms for the written queries (measured: the writer takes p50 ~620 ms, p90 ~950 ms), then
+  // search with the moment's own vector and keywords; deep ones always wait (null). Lower it once the writer starts
+  // alongside D1 (docs/copilot/LATENCY_1S_PLAN.md, Phase 2).
+  queryWaitMs: { fast: 700, deep: null },
   queryTimeoutMs: 10000, // the query model's own network timeout: a hung call fails, the card searches without it
   dims: 768, // Matryoshka cut of the 3072 default: 4x smaller, same quality for this size of corpus
   embedBatch: 100, // API maximum per request

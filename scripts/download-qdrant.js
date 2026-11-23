@@ -60,12 +60,25 @@ function getDownloadUrl(release, archiveName) {
   return asset?.url || null;
 }
 
-function isCurrentVersion(markerPath, version) {
+// How often an installed binary asks GitHub for a newer release. Every `npm run dev` runs this script, and GitHub
+// allows 60 unauthenticated API calls an hour: checking on every start used up the limit (HTTP 403) and then
+// failed the whole dev start, even with the binary already installed.
+const RELEASE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+function readMarker(markerPath) {
   try {
-    return JSON.parse(fs.readFileSync(markerPath, "utf8")).version === version;
+    return JSON.parse(fs.readFileSync(markerPath, "utf8"));
   } catch {
-    return false;
+    return null;
   }
+}
+
+function writeMarker(markerPath, version) {
+  fs.writeFileSync(markerPath, JSON.stringify({ version, checkedAt: Date.now() }));
+}
+
+function isCurrentVersion(markerPath, version) {
+  return readMarker(markerPath)?.version === version;
 }
 
 async function downloadBinary(platformArch, config, release, isForce = false) {
@@ -78,6 +91,7 @@ async function downloadBinary(platformArch, config, release, isForce = false) {
   const markerPath = path.join(BIN_DIR, `.qdrant-${platformArch}.json`);
 
   if (fs.existsSync(outputPath) && !isForce && isCurrentVersion(markerPath, release.tag)) {
+    writeMarker(markerPath, release.tag); // checked now: no new check for a day
     console.log(`  [qdrant] ${platformArch}: Already up to date (${release.tag})`);
     return true;
   }
@@ -102,7 +116,7 @@ async function downloadBinary(platformArch, config, release, isForce = false) {
     if (binaryPath) {
       fs.copyFileSync(binaryPath, outputPath);
       setExecutable(outputPath);
-      fs.writeFileSync(markerPath, JSON.stringify({ version: release.tag }));
+      writeMarker(markerPath, release.tag);
       console.log(`  [qdrant] ${platformArch}: Extracted to ${config.outputName}`);
     } else {
       console.error(
@@ -122,6 +136,29 @@ async function downloadBinary(platformArch, config, release, isForce = false) {
 }
 
 async function main() {
+  const args = parseArgs();
+  // The binary this run needs (--current), when it is already installed.
+  const current = args.isCurrent ? BINARIES[args.platformArch] : null;
+  const installedPath = current ? path.join(BIN_DIR, current.outputName) : null;
+  const markerPath = current ? path.join(BIN_DIR, `.qdrant-${args.platformArch}.json`) : null;
+  const installed = installedPath && fs.existsSync(installedPath) ? readMarker(markerPath) : null;
+  const installedVersion =
+    installed?.version ??
+    (installedPath && fs.existsSync(installedPath) ? "unknown version" : null);
+
+  // Installed and checked recently: no GitHub call at all.
+  if (
+    installedVersion &&
+    !args.isForce &&
+    !VERSION_OVERRIDE &&
+    Date.now() - (installed?.checkedAt ?? 0) < RELEASE_CHECK_INTERVAL_MS
+  ) {
+    console.log(
+      `\n[qdrant] ${args.platformArch}: ${current.outputName} ${installedVersion} is installed (checked for updates in the last 24 h)`
+    );
+    return;
+  }
+
   if (VERSION_OVERRIDE) {
     console.log(`\n[qdrant] Using pinned version: ${VERSION_OVERRIDE}`);
   } else {
@@ -130,8 +167,19 @@ async function main() {
   const release = await getRelease();
 
   if (!release) {
+    // GitHub unreachable or rate-limited (HTTP 403): an installed binary keeps working, so the dev start goes on.
+    if (installedVersion && !args.isForce) {
+      console.warn(
+        `[qdrant] Could not check ${QDRANT_REPO} for updates (GitHub rate limit or offline); keeping the installed ${current.outputName} (${installedVersion}).`
+      );
+      if (installed?.version) writeMarker(markerPath, installed.version); // try again tomorrow, not on every start
+      return;
+    }
     console.error(`[qdrant] Could not fetch release from ${QDRANT_REPO}`);
     console.log(`\nMake sure release exists: https://github.com/${QDRANT_REPO}/releases`);
+    console.log(
+      "If GitHub returned HTTP 403 (60 requests/hour without a token), set GITHUB_TOKEN or wait for the limit to reset."
+    );
     process.exitCode = 1;
     return;
   }
@@ -139,8 +187,6 @@ async function main() {
   console.log(`\nDownloading qdrant binaries (${release.tag})...\n`);
 
   fs.mkdirSync(BIN_DIR, { recursive: true });
-
-  const args = parseArgs();
 
   if (args.isCurrent) {
     if (!BINARIES[args.platformArch]) {

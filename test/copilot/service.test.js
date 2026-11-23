@@ -140,9 +140,9 @@ test(
 
 test("settings go through IPC, the key is never returned, and projects work", sqlite, async () => {
   const { invoke } = setup();
-  const view = await invoke("settings-update", { quiet: "chatty", apiKey: "secret-123" });
+  const view = await invoke("settings-update", { quiet: "chatty", apiKey: "sk-or-secret-123" });
   assert.equal(view.quiet, "chatty");
-  assert.equal(JSON.stringify(view).includes("secret-123"), false);
+  assert.equal(JSON.stringify(view).includes("sk-or-secret-123"), false);
   const pid = await invoke("project-create", "Acme");
   await invoke("project-active", pid, true);
   assert.equal((await invoke("projects-list"))[0].active, true);

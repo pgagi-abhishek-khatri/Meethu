@@ -215,9 +215,17 @@ function Overview({
       <Block title="Setup">
         <div className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border/70 bg-card/50 dark:divide-border-subtle/50 dark:border-border-subtle dark:bg-surface-2/50">
           <CheckRow
-            ok={s.hasKey}
+            ok={s.hasKey && !s.keyWarning}
             label="OpenRouter key"
-            detail={s.hasKey ? (s.keyFromEnv ? "From .env" : "Saved") : "Needed to answer"}
+            detail={
+              s.keyWarning
+                ? "Saved key is not an OpenRouter key: open to fix"
+                : s.hasKey
+                  ? s.keyFromEnv
+                    ? "From .env"
+                    : "Saved"
+                  : "Needed to answer"
+            }
             onClick={() => go("audio")}
           />
           <CheckRow

@@ -412,3 +412,29 @@ test("client sends the documented request and maps errors", async () => {
   });
   await assert.rejects(slow.systemOne({}), (e) => e.code === "timeout");
 });
+
+test("the decider gives up after the configured 1.5 s instead of holding a card for 5 s", async () => {
+  const { DEFAULT_DECISION_CONFIG } = require("../../src/copilot/core/decision/config");
+  assert.ok(DEFAULT_DECISION_CONFIG.timeoutMs <= 1500, "measured p90 is ~965 ms");
+  // A call that never answers is aborted at the timeout (the engine then takes the fallback decision).
+  const hanging = (url, init) =>
+    new Promise((_, reject) =>
+      init.signal.addEventListener("abort", () =>
+        reject(Object.assign(new Error("aborted"), { name: "AbortError" }))
+      )
+    );
+  const client = d.createLiquidClient({
+    apiKey: "k",
+    url: "x",
+    model: "d1",
+    timeoutMs: DEFAULT_DECISION_CONFIG.timeoutMs,
+    fetchImpl: hanging,
+  });
+  const t0 = Date.now();
+  await assert.rejects(client.systemOne({ state: {}, questions: {} }));
+  const took = Date.now() - t0;
+  assert.ok(
+    took >= DEFAULT_DECISION_CONFIG.timeoutMs - 50 && took < 2000,
+    `gave up after ${took} ms`
+  );
+});

@@ -83,7 +83,8 @@
     "i18n:check": "node scripts/check-i18n.js",
     "preview": "cd src && vite preview",
     "clean": "node cleanup.js",
-    "test:e2e:desktop": "electron scripts/copilot/desktop-e2e.js"
+    "test:e2e:desktop": "electron scripts/copilot/desktop-e2e.js",
+    "copilot:latency-report": "node scripts/copilot/latency-report.mjs"
   },
   "keywords": [
     "dictation",

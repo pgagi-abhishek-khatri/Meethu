@@ -79,6 +79,14 @@ function setup(extraEnv = {}, mainModel = null, extra = {}) {
   });
   return { clock, client, events, logDir, service, summaryCalls };
 }
+// The default cooldown (2 s) is shorter than the scheduler's gap between calls (2.5 s), so a statement rarely meets
+// it; tests of the cooldown mechanism use a longer one.
+const LONG_COOLDOWN = {
+  decisionCfg: {
+    ...require("../../src/copilot/core/decision/config").DEFAULT_DECISION_CONFIG,
+    cooldownMs: 6000,
+  },
+};
 const say = (service, source, text) =>
   service.onFinal({
     text,
@@ -169,28 +177,52 @@ test("a decision is logged and ending the session logs stats", async () => {
 });
 
 test("during the card cooldown nothing is judged and the text is kept for the next call", async () => {
-  const { clock, client, service } = setup({ COPILOT_SIM_JOB_MS: "1" }); // no analysis running to replace
+  // no analysis running to replace
+  const { clock, client, service } = setup({ COPILOT_SIM_JOB_MS: "1" }, null, LONG_COOLDOWN);
   say(service, "system", "What was the revenue for the last quarter?");
-  await clock.advance(1500);
+  await clock.advance(1000);
   const calls = client.calls.length;
-  say(service, "system", "And what about the quarter before that one?");
-  await clock.advance(2000); // inside the 4 s cooldown
+  // a statement (a question would skip the cooldown, see the next test)
+  say(service, "system", "The quarter before that one was a lot weaker for us.");
+  await clock.advance(3000); // past the scheduler's gap, inside the 6 s cooldown
   assert.equal(client.calls.length, calls, "no D1 call during the cooldown");
   assert.equal(service.stats().scheduler.deferrals >= 1, true);
   await clock.advance(10_000);
   const gate = client.calls.slice(calls).find((c) => "act" in c.questions);
+  assert.deepEqual(gate.state.new_text, [
+    "OTHER-1: The quarter before that one was a lot weaker for us.",
+  ]);
+});
+
+test("a question inside the card cooldown is judged at once", async () => {
+  const { clock, client, service } = setup({ COPILOT_SIM_JOB_MS: "1" });
+  say(service, "system", "What was the revenue for the last quarter?");
+  await clock.advance(1000);
+  const calls = client.calls.length;
+  say(service, "system", "And what about the quarter before that one?");
+  await clock.advance(900); // still inside the 2 s cooldown
+  const gate = client.calls.slice(calls).find((c) => "act" in c.questions);
+  assert.ok(gate, "the question was judged without waiting for the cooldown");
   assert.deepEqual(gate.state.new_text, ["OTHER-1: And what about the quarter before that one?"]);
 });
 
 test("while the user is speaking judging others' words waits", async () => {
   const { clock, client, service } = setup();
   service.onPartial({ source: "mic", text: "so I think we should" });
-  say(service, "system", "What was the revenue for the last quarter?");
-  await clock.advance(2000);
+  say(service, "system", "The revenue for the last quarter came in well below the plan.");
+  await clock.advance(1500); // inside holdMaxMs (2 s)
   assert.equal(client.calls.length, 0);
   service.onPartial({ source: "mic", text: "" });
   await clock.advance(3000);
   assert.ok(client.calls.length >= 1);
+});
+
+test("a question from the others is judged even while the user is speaking", async () => {
+  const { clock, client, service } = setup();
+  service.onPartial({ source: "mic", text: "so I think we should" });
+  say(service, "system", "What was the revenue for the last quarter?");
+  await clock.advance(1000);
+  assert.ok(client.calls.length >= 1, "a question is not held behind the user's words");
 });
 
 test("the panel opens when note taking begins, but D1 is not called until speech arrives", async () => {
@@ -259,18 +291,20 @@ test("filler in a batch does not push the real words out of what D1 reads", asyn
 });
 
 test("a cooldown update check that finds nothing costs one small call and keeps the text pending", async () => {
-  const { clock, client, service } = setup();
+  const { clock, client, service } = setup({}, null, LONG_COOLDOWN);
   say(service, "system", "What was the revenue for the last quarter?");
-  await clock.advance(1500);
+  await clock.advance(1000);
   const before = client.calls.length;
-  say(service, "system", "And what about the quarter before that one?");
-  await clock.advance(2600); // cooldown, job running, nothing changes
+  say(service, "system", "The quarter before that one was a lot weaker for us.");
+  await clock.advance(3000); // cooldown, job running, nothing changes
   const calls = client.calls.slice(before);
   assert.equal(calls.length, 1, "one small call");
   assert.ok("relation" in calls[0].questions && !("act" in calls[0].questions));
   await clock.advance(10_000); // cooldown over: the same text is judged properly
   const gate = client.calls.slice(before).find((c) => "act" in c.questions);
-  assert.deepEqual(gate.state.new_text, ["OTHER-1: And what about the quarter before that one?"]);
+  assert.deepEqual(gate.state.new_text, [
+    "OTHER-1: The quarter before that one was a lot weaker for us.",
+  ]);
 });
 
 test("a weak proactive card stops counting as handled after the short memory, a sure one lasts", async () => {
@@ -370,7 +404,8 @@ test("a run decision starts a real card that stays 'running' for D1 until it fin
   await clock.advance(1500);
   assert.ok(client.calls.at(-1).state.running?.[0].startsWith("j1"));
 
-  main.calls[0].finish();
+  // A follow-up question is judged at once (no cooldown for questions) and may get its own card.
+  for (const c of main.calls) c.finish();
   await clock.advance(10);
   const done = events.find((e) => e.type === "card_done");
   assert.equal(done.title, "Answer");
@@ -877,4 +912,30 @@ test("a refused key starts no proactive cards, even with nothing running", async
   say(service, "system", "And what about the quarter before that one?");
   await clock.advance(6000);
   assert.equal(main.calls.length, 0);
+});
+
+test("the query writer runs only when the files are needed or asked about, never for an unasked look", async () => {
+  const main = fakeMain();
+  const rag = fakeRag();
+  const writes = [];
+  const queryWriter = async (args) => (
+    writes.push(args),
+    { text: "refund period", queries: ["refund period"], cost: 0 }
+  );
+  const { clock, service } = setup({}, main, { rag, queryWriter });
+  // D1 says the contract question needs the files: the search may use written queries.
+  say(service, "system", "What does the contract say about the refund period?");
+  await clock.advance(5000);
+  await tick();
+  assert.equal(typeof rag.calls.retrieve[0].expand, "function");
+  main.calls[0].finish();
+  await tick();
+  await clock.advance(30000);
+  // Not about the files: an unasked look with the moment's own words only (no extra model call).
+  say(service, "system", "What was the revenue for the last quarter?");
+  await clock.advance(5000);
+  await tick();
+  const auto = rag.calls.retrieve.at(-1);
+  assert.equal(auto.why, "auto");
+  assert.equal(auto.expand, null, "no query writer for an unasked look");
 });

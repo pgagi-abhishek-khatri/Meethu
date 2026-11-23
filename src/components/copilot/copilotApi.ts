@@ -31,6 +31,8 @@ export interface CopilotSettings {
   mediaEmbedMinutes: number; // minutes of each audio/video file embedded as sound/picture
   hasKey: boolean;
   keyFromEnv: boolean;
+  keyWarning?: string; // a saved key that is not an OpenRouter key (ignored; the .env key is used)
+  keyError?: string; // the key just pasted was refused
 }
 
 export type FileStatus = "queued" | "reading" | "analysing" | "embedding" | "ready" | "error";

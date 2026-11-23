@@ -4,6 +4,16 @@
 const { buildAnswerMessages } = require("../core/answer/contextPack");
 const { parseAnswer } = require("../core/answer/parseAnswer");
 
+// True while a proactive answer could still be a SKIP: nothing yet, or a prefix of "SKIP" ("S", "SK", "SKI").
+// Text that starts with SKIP itself is caught by parseAnswer.
+const maybeSkip = (text) => {
+  const head = String(text ?? "")
+    .trimStart()
+    .slice(0, 4)
+    .toUpperCase();
+  return head.length < 4 && "SKIP".startsWith(head);
+};
+
 function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
   // job: { id, deliverable, tier, web, proactive, focus, context: {meeting, summary, transcript, contextSeconds, thread} }
   function run(job) {
@@ -23,9 +33,11 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
     // A proactive card may turn out to be a SKIP, so it appears only once its first words are known
     // (a web card shows "searching" at once: its wait is long and the user should see work happening).
     let started = false;
+    let firstVisibleMs = null; // when the card first reached the window (latency report)
     const start = () => {
       if (started) return;
       started = true;
+      firstVisibleMs = now() - t0;
       emit({ type: "card_start", ...base, focus: job.focus });
     };
     if (!job.proactive || job.web) start();
@@ -59,8 +71,10 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
             if (cancelled) return;
             const a = parseAnswer(text);
             if (a.skip) return; // the call is finished off below
-            // A proactive card is shown only when it is done (it may still turn out a SKIP). Asked cards stream.
-            if (job.proactive) return;
+            // A proactive card streams as soon as its first words show it is not a SKIP (a late SKIP removes it,
+            // see below). Waiting for the whole answer used to hide every card until it was finished.
+            // (Also for a web card that is already shown: "SK" on its way to "SKIP" is never displayed.)
+            if (job.proactive && maybeSkip(text)) return;
             start();
             emit({ type: "card_update", id: job.id, ...a });
           },
@@ -69,8 +83,9 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
             settled = true;
             if (cancelled) return null;
             const a = parseAnswer(r.text);
-            // Cut off by the token cap: an unfinished card is worse than none when nobody asked for it.
-            if (r.finishReason === "length" && job.proactive) {
+            // Cut off by the token cap: an unfinished card is worse than none when nobody asked for it, unless the
+            // user is already reading it (it streamed): then it stays, marked truncated.
+            if (r.finishReason === "length" && job.proactive && !started) {
               emit({ type: "card_skip", id: job.id, reason: "truncated", shown: started });
               return { skipped: true, reason: "truncated" };
             }
@@ -91,6 +106,7 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
                 firstTokenMs: r.firstTokenMs,
                 totalMs: r.totalMs,
                 sinceTriggerMs: now() - t0,
+                firstVisibleMs: firstVisibleMs ?? now() - t0,
               },
               usage: r.usage,
               files, // which project files the answer was given passages from
