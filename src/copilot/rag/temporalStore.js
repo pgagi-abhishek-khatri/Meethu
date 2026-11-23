@@ -85,7 +85,16 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null, onMut
   // Ensure schema and indexes exist
   migrateTemporalSchema(db);
 
+  // Notifications raised inside activateSuccessorVersion are held until its transaction commits,
+  // so listeners never see (or re-read) uncommitted state and a rollback notifies nobody.
+  let deferDepth = 0;
+  const deferredProjects = new Set();
+
   const notifyMutate = (projectId) => {
+    if (deferDepth > 0) {
+      deferredProjects.add(projectId);
+      return;
+    }
     if (typeof onMutate === "function") {
       try {
         onMutate(projectId);
@@ -361,6 +370,14 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null, onMut
       throw new Error(`Predecessor chunk #${predId} does not exist`);
     }
 
+    // A superseded/deprecated/draft predecessor already has its valid_to (or never went live);
+    // overwriting would rewrite history.
+    if (pred.lifecycle_status != null && pred.lifecycle_status !== "active") {
+      throw new Error(
+        `Predecessor chunk #${predId} is not active (status=${pred.lifecycle_status})`
+      );
+    }
+
     const succ = q.getChunkById.get(succId);
     if (!succ) {
       throw new Error(`Successor chunk #${succId} does not exist`);
@@ -459,6 +476,13 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null, onMut
 
     let newChunk = null;
 
+    // An explicit `valid_from: undefined` would override effTime in the spread and insert NULL.
+    const chunkOverrides = Object.fromEntries(
+      Object.entries(newChunkData).filter(([, v]) => v !== undefined)
+    );
+
+    deferDepth += 1;
+    try {
     db.transaction(() => {
       // 1. Insert new successor chunk as active
       newChunk = insertTemporalChunk(
@@ -470,7 +494,7 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null, onMut
           valid_from: effTime,
           valid_to: null,
           transaction_time: now(),
-          ...newChunkData,
+          ...chunkOverrides,
         }
       );
 
@@ -494,15 +518,24 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null, onMut
           if (preservedSet && oc.hash && preservedSet.has(oc.hash)) {
             continue;
           }
-          try {
-            const ocEff = (oc.valid_from != null && effTime > oc.valid_from) ? effTime : (oc.valid_from != null ? oc.valid_from + 1 : effTime);
-            supersedeChunk(oc.id, newChunk.id, ocEff);
-          } catch (e) {
-            // Ignore if already superseded
-          }
+          // The query selects only active rows and ocEff > valid_from, so a throw here is a real bug.
+          const ocEff = (oc.valid_from != null && effTime > oc.valid_from) ? effTime : (oc.valid_from != null ? oc.valid_from + 1 : effTime);
+          supersedeChunk(oc.id, newChunk.id, ocEff);
         }
       }
     })();
+    } catch (err) {
+      deferredProjects.clear();
+      throw err;
+    } finally {
+      deferDepth -= 1;
+    }
+
+    if (deferDepth === 0) {
+      const projects = [...deferredProjects];
+      deferredProjects.clear();
+      projects.forEach(notifyMutate);
+    }
 
     return {
       predecessor_id: predId,

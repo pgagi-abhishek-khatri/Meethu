@@ -855,3 +855,66 @@ test("getActiveFeatureChunks and keyword search agree on a future-dated chunk", 
   assert.equal(rag.temporal.countActiveFeatureChunks(7, "feat:q"), 1);
   db.close();
 });
+
+// ============================================================================
+// Task 4: lifecycle guards in supersession
+// ============================================================================
+
+test("supersedeChunk rejects an already-superseded predecessor and leaves valid_to unchanged", sqlite, () => {
+  const db = new Database(":memory:");
+  const temporal = createRagStore(db).temporal;
+  const a = temporal.insertTemporalChunk({ file_id: 1, project_id: 1, text: "a", feature_id: "f", valid_from: 1000 });
+  const b = temporal.insertTemporalChunk({ file_id: 1, project_id: 1, text: "b", feature_id: "f", valid_from: 2000 });
+  const c = temporal.insertTemporalChunk({ file_id: 1, project_id: 1, text: "c", feature_id: "f", valid_from: 3000 });
+  temporal.supersedeChunk(a.id, b.id, 2000);
+
+  assert.throws(
+    () => temporal.supersedeChunk(a.id, c.id, 3000),
+    new RegExp(`Predecessor chunk #${a.id} is not active \\(status=superseded\\)`)
+  );
+  const row = db.prepare("SELECT valid_to, superseded_by_id FROM copilot_chunks WHERE id = ?").get(a.id);
+  assert.equal(row.valid_to, 2000);
+  assert.equal(row.superseded_by_id, b.id);
+  db.close();
+});
+
+test("activateSuccessorVersion honours effectiveTime when newChunkData.valid_from is undefined", sqlite, () => {
+  const db = new Database(":memory:");
+  const temporal = createRagStore(db).temporal;
+  const a = temporal.insertTemporalChunk({ file_id: 1, project_id: 1, text: "a", feature_id: "f", valid_from: 1000 });
+  const res = temporal.activateSuccessorVersion({
+    predecessorId: a.id,
+    newChunkData: { text: "b", valid_from: undefined },
+    effectiveTime: 5000,
+  });
+  assert.equal(res.successor.valid_from, 5000);
+  db.close();
+});
+
+test("onMutate is called once after activateSuccessorVersion commits and not at all when it rolls back", sqlite, () => {
+  const db = new Database(":memory:");
+  const calls = [];
+  createRagStore(db);
+  const temporal = createTemporalStore(db, {
+    onMutate: (p) => calls.push({ p, inTx: db.inTransaction }),
+  });
+  const a = temporal.insertTemporalChunk({ file_id: 1, project_id: 7, text: "a", feature_id: "f", valid_from: 1000 });
+  calls.length = 0;
+
+  temporal.activateSuccessorVersion({ predecessorId: a.id, newChunkData: { text: "b" }, effectiveTime: 2000 });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].p, 7);
+  assert.equal(calls[0].inTx, false);
+
+  calls.length = 0;
+  const b = db.prepare("SELECT id FROM copilot_chunks WHERE lifecycle_status='active'").get();
+  assert.throws(() =>
+    temporal.activateSuccessorVersion({
+      predecessorId: b.id,
+      newChunkData: { text: "c", lifecycle_status: "bogus" },
+      effectiveTime: 3000,
+    })
+  );
+  assert.equal(calls.length, 0);
+  db.close();
+});
