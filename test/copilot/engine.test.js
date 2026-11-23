@@ -981,3 +981,15 @@ test("an explicit request to the assistant is never held back as a repeat", asyn
   await clock.advance(3000);
   assert.equal(main.calls.length, 2);
 });
+
+test("a replacement similar to the running job still runs and cancels the old one", async () => {
+  const main = fakeMain();
+  const { clock, service } = setup({}, main);
+  say(service, "system", "What was the revenue for the last quarter?");
+  await clock.advance(1500);
+  assert.equal(main.calls.length, 1);
+  say(service, "system", "Sorry, what was the revenue for the last quarter, I meant the whole year?");
+  await clock.advance(3000);
+  assert.equal(main.calls.length, 2);
+  assert.equal(main.calls[0].aborted, true);
+});

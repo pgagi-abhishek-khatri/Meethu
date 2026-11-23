@@ -958,7 +958,8 @@ function createEngine({
     if (decision.kind === "run" && decision.trigger !== "explicit") {
       const dup = isDuplicate({
         text: pick?.text ?? newText,
-        cards: s.cards,
+        // A replacement is meant to resemble the job it replaces.
+        cards: s.cards.filter((c) => c.jobId !== decision.cancelJobId),
         asked: s.asked,
         now: now(),
         windowMs: decisionCfg.duplicateWindowMs,
@@ -1222,7 +1223,7 @@ function createEngine({
             jobId: job.id,
             weak: false,
           },
-        ].slice(-2);
+        ].slice(-MAX_CARD_MEMORY);
       }
       launchAsked(s, job, {
         deliverable: "quick_answer",

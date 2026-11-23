@@ -46,7 +46,14 @@ function isDuplicate({ text, cards = [], asked = new Set(), now, windowMs, minOv
   let best = { score: 0 };
   for (const c of cards) {
     if (now - c.shownAt > windowMs) continue;
-    const score = similarity([c.gist, c.title, c.body].filter(Boolean).join(" "));
+    // The answer body is left out: its words would swell the union and hide a reworded repeat.
+    const gist = c.gist || "";
+    const title = c.title || "";
+    const score = Math.max(
+      gist ? similarity(gist) : 0,
+      title ? similarity(title) : 0,
+      gist && title ? similarity(`${gist} ${title}`) : 0
+    );
     if (score > best.score) best = { score, matchedJobId: c.jobId };
   }
   for (const q of asked) {

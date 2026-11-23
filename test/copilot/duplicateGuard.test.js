@@ -59,3 +59,14 @@ test("stop-word-only text matches only an exact repeat", () => {
   assert.strictEqual(same.duplicate, true);
   assert.strictEqual(other.duplicate, false);
 });
+
+test("a reworded repeat of a card's gist is a duplicate even when the card body is long", () => {
+  const body = "Revenue grew steadily across regions driven by enterprise renewals, expansion deals and lower churn throughout the period under review.";
+  const r = isDuplicate({
+    text: "What's the revenue for last quarter?",
+    cards: [{ jobId: "j1", gist: "What was the revenue for the last quarter?", title: "Answer", body, shownAt: NOW - 1000 }],
+    asked: new Set(),
+    ...opts,
+  });
+  assert.strictEqual(r.duplicate, true);
+});
