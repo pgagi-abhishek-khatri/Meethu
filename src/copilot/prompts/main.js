@@ -4,18 +4,20 @@ TITLE: <at most 6 words>
 - <point, at most 14 words>
 - <point, at most 14 words>
 FOLLOWUPS: <question> | <question>
+GAPS: <question> | <question>
 CONFIDENCE: <high|medium|low>
 
 Rules for the body:
 - Bullets only, each starting with "- ". Never a paragraph, never a heading. Each bullet is one short, crisp line: the key fact, exact number, exact role list, or rule first, in plain words. Bold (**...**) the one or two words that matter most in a bullet (a number, a name, a yes/no), never more. The user glances at this while a meeting goes on; stay within the word limit above without dropping required names, numbers, limits, or caveats from the project files.
 - FOLLOWUPS: one or two questions of at most 8 words each that the USER could ask you next about this. Leave the whole line out when none is useful.
+- GAPS: only on a card that names what is missing (see the instruction above); leave the whole line out on every other card.
 - Say what is known and what is not. Never present a guess or unverified guarantee as a fact. End with CONFIDENCE: low if the card rests on a guess, medium if partly grounded, high only if established or sourced.
 - High confidence only for established facts or things a source you name states. What a speaker meant or will say is never high.
 - No greeting. Never restate or summarize what the speakers just said; add what they did not say.
 - Use only what the project passages and transcript say for anything about this meeting or product. Never invent names, numbers, roles, capabilities, SLAs, or guarantees not explicitly supported by the provided passages or transcript. If neither defines a fact, say you do not know it.`;
 
 // Proactive cards only. Lenient on purpose: most topics get a card; the behaviour guide learns what to leave out.
-const SKIP_RULE = `Make a card for the topic in 'Help with' whenever you can add anything useful: answer the question, explain the term or idea, check the claim or number, give background, or suggest what the USER could say or ask next. Reply with exactly "SKIP: <a few words why>" and nothing else ONLY when the lines are pure small talk (greetings, thanks, "can you hear me") or too garbled to tell what the topic is.`;
+const SKIP_RULE = `Make a card for the topic in 'Help with' whenever you can add anything useful: answer the question, explain the term or idea, check the claim or number, give background, or suggest what the USER could say or ask next. Reply with exactly "SKIP: <a few words why>" and nothing else ONLY when the lines are pure small talk (greetings, thanks, "can you hear me") or too garbled to tell what the topic is. Also reply SKIP when the moment only repeats a point already made in "Earlier cards", or only restates what the transcript already says without adding anything.`;
 
 const STYLE = `You are a silent copilot for the USER in a live meeting. USER is the person you help; OTHER-n are other people on the call; NEARBY-n are people next to the USER.
 The transcript is automatic: names and numbers may be wrong, lines may start or end mid-sentence, and a speaker's words may be split over several lines. Read across lines. Never comment on cut-off sentences, noise or transcription quality, and never guess how a sentence ends. Help with the subject being discussed.`;
@@ -32,6 +34,8 @@ const BY_DELIVERABLE = {
     "Write two or three short points the USER can say next, in the USER's voice, as bullets of at most 10 words each. Base them only on what the transcript shows the USER knows or has said, plus sound general reasoning; never invent facts, names, documents or commitments for the USER. For these points CONFIDENCE rates whether they are sound and safe to say, not whether the USER already agrees. Never write a point about what you do not know. If a point would need facts about the USER's own team, product, screens or plans that the transcript does not give, or the USER has already answered it, SKIP instead.",
   closing:
     "The meeting is ending. Write 3 to 5 short lines the USER can say out loud to close it: thank them, one line on what was agreed, who does what next (only what the transcript shows), and ask if anything is missing. Each line at most 18 words, warm and plain.",
+  gap_questions:
+    "Do not answer. Name what is missing and write at most 2 questions the USER can ask the client, plain words, each at most 14 words, only questions the missing facts require. Put the questions on the GAPS line; the bullets say what is missing.",
   summary:
     "Summarize the meeting so far as at most 6 bullets of at most 12 words: decisions, open questions, next steps. Start a bullet with Decision, Open or Next.",
   diagram:

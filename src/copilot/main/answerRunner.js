@@ -99,6 +99,7 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
               title: a.title,
               body: a.body,
               followups: a.followups ?? [],
+              gaps: a.gaps ?? [],
               confidence: a.confidence ?? "low", // an asked card with no label is not trusted
               truncated: r.finishReason === "length",
               sources: r.sources,

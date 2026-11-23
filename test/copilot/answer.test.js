@@ -11,6 +11,7 @@ test("parseAnswer: confidence right after the title, and still streaming", () =>
     body: "Guess.",
     confidence: "low",
     followups: [],
+    gaps: [],
   });
   assert.equal(parseAnswer("TITLE: X\nCONFIDENCE: hi").body, "");
   assert.equal(parseAnswer("TITLE: X\nCONFIDENCE: high\nBody\nmore").body, "Body\nmore");
@@ -20,7 +21,7 @@ test("parseAnswer: narration before TITLE (web search) is dropped", () => {
   const a = parseAnswer(
     "I'll search for the current rule.\nLet me check.\n\nTITLE: Rule\nBody here.\nCONFIDENCE: high"
   );
-  assert.deepEqual(a, { title: "Rule", body: "Body here.", confidence: "high", followups: [] });
+  assert.deepEqual(a, { title: "Rule", body: "Body here.", confidence: "high", followups: [], gaps: [] });
   assert.equal(parseAnswer("Still searching…").body, "Still searching…"); // nothing to cut yet
 });
 
@@ -31,6 +32,7 @@ test("parseAnswer: full reply", () => {
     body: "It is 4%.\nSee the report.",
     confidence: "medium",
     followups: [],
+    gaps: [],
   });
 });
 
@@ -47,6 +49,7 @@ test("parseAnswer: a reply that ignored the format is a plain body", () => {
     body: "Just an answer.",
     confidence: null,
     followups: [],
+    gaps: [],
   });
   assert.equal(parseAnswer("TITLE: T\nBody\n**CONFIDENCE: high**").confidence, "high");
 });
@@ -543,4 +546,21 @@ test("runner: a streamed proactive card cut off by the token cap stays, marked t
     events.map((e) => e.type),
     ["card_skip"]
   );
+});
+
+test("parseAnswer: GAPS line gives up to 2 questions and stays out of the body", () => {
+  const a = parseAnswer("TITLE: x\n- a\nGAPS: Which plan? | By when? | Third one?");
+  assert.deepEqual(a.gaps, ["Which plan?", "By when?"]);
+  assert.equal(a.body, "- a");
+  assert.equal(parseAnswer("TITLE: x\n- a\nGA").body, "- a");
+  assert.equal(parseAnswer("TITLE: x\n- a\nGAPS: Which pl").body, "- a");
+  assert.deepEqual(parseAnswer("TITLE: x\n- a").gaps, []);
+});
+
+test("buildSystemPrompt: gap_questions says not to answer; skip rule covers repeats", () => {
+  const { buildSystemPrompt } = require("../../src/copilot/prompts/main");
+  const p = buildSystemPrompt({ deliverable: "gap_questions" });
+  assert.match(p, /Do not answer\. Name what is missing/);
+  assert.match(p, /GAPS: <question> \| <question>/);
+  assert.match(p, /Earlier cards/);
 });

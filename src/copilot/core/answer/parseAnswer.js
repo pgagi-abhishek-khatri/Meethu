@@ -54,7 +54,19 @@ function parseAnswer(text) {
     /(?:^|\n)[ \t]*\**F(?:O(?:L(?:L(?:O(?:W(?:-?(?:U(?:P(?:S?)?)?)?)?)?)?)?)?)?\**[ \t]*$/i,
     ""
   );
-  return { title, body: rest.trim(), confidence, followups };
+  // GAPS: a | b  (gap_questions cards; same tolerance as FOLLOWUPS)
+  let gaps = [];
+  const g = /(?:^|\n)[ \t]*\**GAPS?:\**[ \t]*([^\n]*)/i.exec(rest);
+  if (g) {
+    gaps = g[1]
+      .split("|")
+      .map((q) => q.trim().replace(/^[-•]\s*/, ""))
+      .filter((q) => q.length > 3)
+      .slice(0, 2);
+    rest = rest.replace(g[0], "");
+  }
+  rest = rest.replace(/(?:^|\n)[ \t]*\**G(?:A(?:P(?:S)?)?)?\**[ \t]*$/i, "");
+  return { title, body: rest.trim(), confidence, followups, gaps };
 }
 
 module.exports = { parseAnswer };
