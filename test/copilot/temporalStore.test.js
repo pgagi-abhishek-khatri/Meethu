@@ -730,3 +730,70 @@ test("T13: Existing replaceChunks and removeFile operations continue functioning
 
   db.close();
 });
+
+// ============================================================================
+// DRAFT EXCLUSION IN HISTORICAL READS
+// ============================================================================
+
+test("getFeatureAt excludes draft chunks", sqlite, () => {
+  const db = new Database(":memory:");
+  const rag = createRagStore(db);
+  const temporal = rag.temporal;
+  temporal.insertTemporalChunk({
+    file_id: 1, project_id: 7, text: "unapproved draft", feature_id: "feat:x", version: "1.0.0",
+    lifecycle_status: "draft", valid_from: 100, valid_to: null,
+  });
+  assert.deepEqual(temporal.getFeatureAt(7, "feat:x", 200), []);
+  assert.deepEqual(temporal.getFeatureInRange(7, "feat:x", 100, 300), []);
+  db.close();
+});
+
+test("getFeatureAt at valid_to returns only successor", sqlite, () => {
+  const db = new Database(":memory:");
+  const temporal = createRagStore(db).temporal;
+  temporal.insertTemporalChunk({
+    file_id: 1, project_id: 7, text: "old", feature_id: "feat:x", version: "1.0.0",
+    lifecycle_status: "superseded", valid_from: 100, valid_to: 150,
+  });
+  const next = temporal.insertTemporalChunk({
+    file_id: 2, project_id: 7, text: "new", feature_id: "feat:x", version: "2.0.0",
+    lifecycle_status: "active", valid_from: 150, valid_to: null,
+  });
+  const at = temporal.getFeatureAt(7, "feat:x", 150);
+  assert.deepEqual(at.map((c) => c.id), [next.id]);
+  db.close();
+});
+
+test("getFeatureAt still returns superseded chunk inside its window", sqlite, () => {
+  const db = new Database(":memory:");
+  const temporal = createRagStore(db).temporal;
+  const old = temporal.insertTemporalChunk({
+    file_id: 1, project_id: 7, text: "old", feature_id: "feat:x", version: "1.0.0",
+    lifecycle_status: "superseded", valid_from: 100, valid_to: 150,
+  });
+  assert.deepEqual(temporal.getFeatureAt(7, "feat:x", 120).map((c) => c.id), [old.id]);
+  assert.deepEqual(temporal.getFeatureAt(7, "feat:x", 150), []);
+  db.close();
+});
+
+test("historical keyword/vector search excludes drafts", sqlite, () => {
+  const db = new Database(":memory:");
+  const rag = createRagStore(db);
+  const temporal = rag.temporal;
+  const vec = dummyVec(1);
+  const draft = temporal.insertTemporalChunk({
+    file_id: 1, project_id: 7, text: "zebra pricing draft", vec, feature_id: "feat:x", version: "1.0.0",
+    lifecycle_status: "draft", valid_from: 100, valid_to: null,
+  });
+  const dep = temporal.insertTemporalChunk({
+    file_id: 1, project_id: 7, ord: 1, text: "zebra pricing deprecated", vec, feature_id: "feat:y", version: "1.0.0",
+    lifecycle_status: "deprecated", valid_from: 100, valid_to: 400,
+  });
+  const opts = { asOfStart: 200, asOfEnd: 200 };
+  const kw = rag.keyword(7, "zebra", 12, opts);
+  assert.deepEqual(kw, [dep.id]);
+  assert.ok(!kw.includes(draft.id));
+  const m = rag.matrix(7, vec.length, opts);
+  assert.deepEqual(m.ids, [dep.id]);
+  db.close();
+});

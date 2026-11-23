@@ -6,6 +6,7 @@ const {
   migrateTemporalSchema,
   CHUNK_TEMPORAL_COLUMNS,
   TEMPORAL_INDEXES,
+  NOT_DRAFT_SQL,
 } = require("./temporalStore");
 const { createDeltaIngest } = require("./deltaIngest");
 const { createAuthoritativeLookup } = require("./authoritativeLookup");
@@ -115,11 +116,12 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
          AND vec IS NOT NULL`
     ),
     historicalVectors: db.prepare(
-      `SELECT id, vec FROM copilot_chunks 
-       WHERE project_id = ? AND dims = ?
-         AND (valid_from IS NULL OR valid_from <= ?)
-         AND (valid_to IS NULL OR valid_to > ?)
-         AND vec IS NOT NULL`
+      `SELECT c.id, c.vec FROM copilot_chunks c
+       WHERE c.project_id = ? AND c.dims = ?
+         AND (c.valid_from IS NULL OR c.valid_from <= ?)
+         AND (c.valid_to IS NULL OR c.valid_to > ?)
+         AND ${NOT_DRAFT_SQL}
+         AND c.vec IS NOT NULL`
     ),
     count: db.prepare("SELECT COUNT(*) AS n FROM copilot_chunks WHERE project_id = ?"),
     countAll: db.prepare("SELECT COUNT(*) AS n FROM copilot_chunks"),
@@ -144,6 +146,7 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
        WHERE copilot_chunks_fts MATCH ? AND c.project_id = ?
          AND (c.valid_from IS NULL OR c.valid_from <= ?)
          AND (c.valid_to IS NULL OR c.valid_to > ?)
+         AND ${NOT_DRAFT_SQL}
        ORDER BY bm25(copilot_chunks_fts) LIMIT ?`
     ),
     chunk: db.prepare(

@@ -23,6 +23,10 @@ const TEMPORAL_INDEXES = [
 
 const VALID_LIFECYCLE_STATUSES = new Set(["active", "superseded", "deprecated", "draft"]);
 
+// Drafts are inserted with valid_to = NULL, so the time window alone would treat unapproved text as authoritative.
+// IS NOT keeps NULL (legacy active) rows; superseded/deprecated stay visible historically, bounded by valid_to.
+const NOT_DRAFT_SQL = "c.lifecycle_status IS NOT 'draft'";
+
 /**
  * Idempotently migrates the copilot_chunks table with temporal columns and indexes.
  * Preserves all existing records, embeddings, vector dimensions, and FTS5 data.
@@ -112,6 +116,7 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null, onMut
        LEFT JOIN copilot_project_files f ON f.id = c.file_id
        WHERE c.project_id = ? AND c.feature_id = ?
          AND c.valid_from <= ? AND (c.valid_to IS NULL OR c.valid_to > ?)
+         AND ${NOT_DRAFT_SQL}
        ORDER BY c.version DESC, c.ord ASC`
     ),
     getFeatureInRange: db.prepare(
@@ -120,6 +125,7 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null, onMut
        LEFT JOIN copilot_project_files f ON f.id = c.file_id
        WHERE c.project_id = ? AND c.feature_id = ?
          AND c.valid_from <= ? AND (c.valid_to IS NULL OR c.valid_to > ?)
+         AND ${NOT_DRAFT_SQL}
        ORDER BY c.valid_from DESC, c.version DESC, c.ord ASC`
     ),
     getFeatureLineage: db.prepare(
@@ -598,4 +604,5 @@ module.exports = {
   CHUNK_TEMPORAL_COLUMNS,
   TEMPORAL_INDEXES,
   VALID_LIFECYCLE_STATUSES,
+  NOT_DRAFT_SQL,
 };
