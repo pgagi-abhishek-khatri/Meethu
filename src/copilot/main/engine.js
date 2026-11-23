@@ -27,6 +27,7 @@ const {
   createOpenRouterLlm,
   DEFAULT_SUMMARY_CONFIG,
   DEFAULT_SUMMARY_MODEL,
+  extrasBlocks,
 } = require("../core/summary/rollingSummary");
 const { createQueryWriter, parseQueryLines } = require("../rag/queryWriter");
 const { RAG } = require("../rag/config");
@@ -670,6 +671,7 @@ function createEngine({
         if (kept) {
           kept.title = card.title;
           kept.body = card.body;
+          kept.gaps = card.gaps ?? [];
         }
         thread.answers.push({ id: job.id, title: card.title, body: card.body });
         if (thread.answers.length > MAX_THREAD_ANSWERS) thread.answers.shift();
@@ -713,6 +715,28 @@ function createEngine({
       startAnswer(s, job, spec);
     }
   }
+  // Finished cards (title/body) plus their gap questions. A gap counts as answered, and is dropped,
+  // when any LATER finished card's title duplicates it (isDuplicate); older cards' gaps age out with the card.
+  function summaryExtras(s) {
+    const done = s.cards.filter((c) => c.title && c.body);
+    const gaps = [];
+    done.forEach((c, i) => {
+      const later = done
+        .slice(i + 1)
+        .map((l) => ({ gist: l.title, title: l.title, shownAt: 0, jobId: l.jobId }));
+      for (const g of c.gaps ?? []) {
+        const hit = isDuplicate({
+          text: g,
+          cards: later,
+          now: 0,
+          windowMs: Infinity,
+          minOverlap: decisionCfg.duplicateOverlap,
+        });
+        if (!hit.duplicate) gaps.push(g);
+      }
+    });
+    return { cards: done.map((c) => ({ title: c.title, body: c.body })), gaps };
+  }
   // The recap runs on the ended session's own state; D1 and the scheduler are already stopped.
   function startRecap(s, focus) {
     const job = { id: nextJobId(), topic: "Meeting recap", real: true, threadId: MAIN };
@@ -723,7 +747,7 @@ function createEngine({
       web: false,
       proactive: false,
       label: "Meeting recap",
-      focus,
+      focus: focus + extrasBlocks(summaryExtras(s)),
       contextSeconds: 0,
     });
   }
@@ -1245,7 +1269,8 @@ function createEngine({
         trigger: verdict.trigger,
         reason: verdict.reason ?? "candidate",
       });
-      const update = active && summaryLlm ? s.summary.maybeUpdate(s.transcript) : null;
+      const update =
+        active && summaryLlm ? s.summary.maybeUpdate(s.transcript, summaryExtras(s)) : null;
       update?.then((r) => {
         if (!r) return;
         log({

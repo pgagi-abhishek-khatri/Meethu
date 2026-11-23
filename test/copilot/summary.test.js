@@ -201,3 +201,41 @@ test("shipped setting: the last 15 messages stay verbatim and one summary call r
     "10 more: not yet, however much time passed"
   );
 });
+
+const LINES = ["USER: hello", "OTHER-1: budget?"];
+test("extras: card facts and open gaps are appended to the update request", () => {
+  const msgs = buildSummaryMessages("prev", LINES, 100, 0, {
+    cards: [{ title: "Pricing", body: "Plan A costs 10 per seat." }],
+    gaps: ["What is the discount for 50 seats?"],
+  });
+  const u = msgs[1].content;
+  assert.match(u, /Facts already shown from the project files:\n.*Pricing.*Plan A costs 10/s);
+  assert.match(u, /Still unanswered:\n.*discount for 50 seats/);
+  assert.match(msgs[0].content, /never restate a card verbatim/);
+});
+
+test("extras: empty or absent extras leave the messages identical", () => {
+  const base = buildSummaryMessages("prev", LINES, 100, 0);
+  assert.deepEqual(buildSummaryMessages("prev", LINES, 100, 0, undefined), base);
+  assert.deepEqual(buildSummaryMessages("prev", LINES, 100, 0, { cards: [], gaps: [] }), base);
+  assert.ok(!base[1].content.includes("Facts already shown"));
+});
+
+test("extras: each block is clipped to 600 characters", () => {
+  const msgs = buildSummaryMessages("", LINES, 100, 0, {
+    cards: [{ title: "T", body: "x".repeat(2000) }],
+    gaps: ["g".repeat(2000)],
+  });
+  const u = msgs[1].content;
+  const facts = u.split("Facts already shown from the project files:\n")[1].split("\n\n")[0];
+  const open = u.split("Still unanswered:\n")[1].split("\n\n")[0];
+  assert.ok(facts.length <= 600 && open.length <= 600);
+});
+
+test("extras reach the llm call through maybeUpdate; word cap is unchanged", async () => {
+  const { calls, summary } = make();
+  await summary.maybeUpdate(segs(12), { cards: [{ title: "Fact", body: "B" }], gaps: ["Q?"] });
+  assert.match(calls[0].messages[1].content, /Facts already shown/);
+  assert.match(calls[0].messages[1].content, /Still unanswered:\nQ\?/);
+  assert.match(calls[0].messages[0].content, new RegExp(`at most ${CFG.maxWords} words`));
+});

@@ -23,9 +23,25 @@ const DEFAULT_SUMMARY_CONFIG = {
   failureBackoffMs: 60000,
 };
 
-const SYSTEM = `You keep a running summary of a live meeting for a silent assistant. Update the summary with the new lines. Keep EVERY topic discussed so far, each with its key points: who said what, positions, numbers, names, decisions, commitments, open questions. When space runs short, shorten old topics instead of dropping them. Drop only pleasantries, filler and repetition. Plain text, at most {words} words, no bullet points, no preamble. Speakers: USER is the person the assistant helps; OTHER-n are other participants.`;
+const SYSTEM = `You keep a running summary of a live meeting for a silent assistant. Update the summary with the new lines. Keep EVERY topic discussed so far, each with its key points: who said what, positions, numbers, names, decisions, commitments, open questions. When space runs short, shorten old topics instead of dropping them. Drop only pleasantries, filler and repetition. Keep decisions, commitments, answered facts and open questions separate, and never restate a card verbatim. Plain text, at most {words} words, no bullet points, no preamble. Speakers: USER is the person the assistant helps; OTHER-n are other participants.`;
 
-function buildSummaryMessages(previous, lines, maxWords, skipped = 0) {
+const MAX_EXTRAS_CHARS = 600;
+const clipBlock = (t) => (t.length > MAX_EXTRAS_CHARS ? t.slice(0, MAX_EXTRAS_CHARS - 1) + "…" : t);
+
+// Optional context from the cards already shown; absent or empty extras add nothing.
+function extrasBlocks(extras) {
+  const facts = (extras?.cards ?? [])
+    .map((c) => `${c.title ?? ""}: ${c.body ?? ""}`.replace(/\s+/g, " ").trim())
+    .filter((t) => t && t !== ":")
+    .join("\n");
+  const open = (extras?.gaps ?? []).filter(Boolean).join("\n");
+  return (
+    (facts ? `\n\nFacts already shown from the project files:\n${clipBlock(facts)}` : "") +
+    (open ? `\n\nStill unanswered:\n${clipBlock(open)}` : "")
+  );
+}
+
+function buildSummaryMessages(previous, lines, maxWords, skipped = 0, extras) {
   const gap = skipped
     ? `\n(${skipped} earlier lines were skipped and are not covered. Do not guess about them.)`
     : "";
@@ -33,7 +49,7 @@ function buildSummaryMessages(previous, lines, maxWords, skipped = 0) {
     { role: "system", content: SYSTEM.replace("{words}", String(maxWords)) },
     {
       role: "user",
-      content: `Current summary:\n${previous || "(none yet)"}\n\nNew lines:${gap}\n${lines.join("\n")}\n\nUpdated summary:`,
+      content: `Current summary:\n${previous || "(none yet)"}\n\nNew lines:${gap}\n${lines.join("\n")}${extrasBlocks(extras)}\n\nUpdated summary:`,
     },
   ];
 }
@@ -79,7 +95,7 @@ function createRollingSummary({ llm, label, cfg = DEFAULT_SUMMARY_CONFIG, now = 
   const enough = (list) =>
     list.length >= cfg.minSegments || list.reduce((n, s) => n + s.text.length, 0) >= cfg.minChars;
 
-  function start(catchUp) {
+  function start(catchUp, extras) {
     let waiting = aged();
     if (updating || now() < blockedUntil || !enough(waiting)) return null;
     if (!catchUp && now() - lastUpdateAt < cfg.minIntervalMs) return null;
@@ -99,7 +115,8 @@ function createRollingSummary({ llm, label, cfg = DEFAULT_SUMMARY_CONFIG, now = 
         text,
         chunk.map((s) => `${label(s)}: ${s.text}`),
         cfg.maxWords,
-        skipped
+        skipped,
+        extras
       ),
     })
       .then((reply) => {
@@ -140,15 +157,15 @@ function createRollingSummary({ llm, label, cfg = DEFAULT_SUMMARY_CONFIG, now = 
     },
     // Returns the update promise when one starts (tests await it), else null. Never throws.
     // A successful chunk that leaves a backlog chains the next one at once, up to maxChain.
-    maybeUpdate(transcript) {
+    maybeUpdate(transcript, extras) {
       live = transcript;
       chain = 0;
-      const first = start(false);
+      const first = start(false, extras);
       if (!first) return null;
       const follow = async (promise) => {
         const result = await promise;
         if (result && ++chain < cfg.maxChain) {
-          const more = start(true);
+          const more = start(true, extras);
           if (more) return [result, ...(await follow(more))];
         }
         return result ? [result] : [];
@@ -211,4 +228,5 @@ module.exports = {
   DEFAULT_SUMMARY_CONFIG,
   DEFAULT_SUMMARY_MODEL,
   buildSummaryMessages,
+  extrasBlocks,
 };

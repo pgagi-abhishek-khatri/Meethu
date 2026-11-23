@@ -773,9 +773,37 @@ test("sufficiency: a search D1 asked for that finds nothing turns a proactive fa
   );
   await tick();
   const done = events.find((e) => e.type === "card_done");
-  assert.deepEqual(done.gaps, ["What refund period did you agree?", "Is it from delivery or invoice?"]);
+  assert.deepEqual(done.gaps, [
+    "What refund period did you agree?",
+    "Is it from delivery or invoice?",
+  ]);
   assert.equal(done.deliverable, "gap_questions");
   assert.ok(rag.calls.log.some((r) => r.event === "sufficiency" && r.verdict === "none"));
+});
+
+test("summary: finished cards and their open gaps reach the rolling-summary call", async () => {
+  const main = fakeMain();
+  const rag = fakeRag({ result: EMPTY_RETRIEVAL });
+  const { clock, service, summaryCalls } = setup({}, main, { rag });
+  say(service, "system", "What does the contract say about the refund period?");
+  await clock.advance(5000);
+  await tick();
+  main.calls[0].finish(
+    "TITLE: Refund period not in the files\n- The files do not give a refund period.\nGAPS: What refund period did you agree?\nCONFIDENCE: high"
+  );
+  await tick();
+  for (let i = 0; i < 8; i++)
+    say(service, i % 2 ? "mic" : "system", `Filler discussion number ${i} about nothing much`);
+  await clock.advance(100);
+  const withExtras = summaryCalls
+    .map((c) => c.messages[1].content)
+    .find((c) => c.includes("Still unanswered:"));
+  assert.ok(withExtras, "a summary call carried the open gap");
+  assert.match(withExtras, /What refund period did you agree\?/);
+  assert.match(
+    withExtras,
+    /Facts already shown from the project files:\nRefund period not in the files/
+  );
 });
 
 test("sufficiency: a typed question the files cannot answer is still answered, with the caveat", async () => {
@@ -1090,7 +1118,11 @@ test("a replacement similar to the running job still runs and cancels the old on
   say(service, "system", "What was the revenue for the last quarter?");
   await clock.advance(1500);
   assert.equal(main.calls.length, 1);
-  say(service, "system", "Sorry, what was the revenue for the last quarter, I meant the whole year?");
+  say(
+    service,
+    "system",
+    "Sorry, what was the revenue for the last quarter, I meant the whole year?"
+  );
   await clock.advance(3000);
   assert.equal(main.calls.length, 2);
   assert.equal(main.calls[0].aborted, true);
