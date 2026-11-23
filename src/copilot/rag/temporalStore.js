@@ -107,7 +107,7 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null, onMut
        FROM copilot_chunks c
        LEFT JOIN copilot_project_files f ON f.id = c.file_id
        WHERE c.project_id = ? AND c.feature_id = ? AND c.lifecycle_status = 'active'
-         AND (c.valid_to IS NULL OR c.valid_to > ?)
+         AND c.valid_from <= ? AND (c.valid_to IS NULL OR c.valid_to > ?)
        ORDER BY c.valid_from DESC, c.version DESC, c.ord ASC`
     ),
     getFeatureAt: db.prepare(
@@ -147,7 +147,7 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null, onMut
       "SELECT id, version, lifecycle_status, superseded_by_id, valid_from, valid_to FROM copilot_chunks WHERE project_id = ? AND feature_id = ?"
     ),
     countActiveFeatureChunks: db.prepare(
-      "SELECT COUNT(*) as count FROM copilot_chunks WHERE project_id = ? AND feature_id = ? AND lifecycle_status = 'active' AND (valid_to IS NULL OR valid_to > ?)"
+      "SELECT COUNT(*) as count FROM copilot_chunks WHERE project_id = ? AND feature_id = ? AND lifecycle_status = 'active' AND valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)"
     ),
   };
 
@@ -300,8 +300,14 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null, onMut
   function getActiveFeatureChunks(projectId, featureId) {
     if (!featureId) return [];
     const currentTime = now();
-    const rows = q.getActiveFeatureChunks.all(projectId, featureId, currentTime);
+    const rows = q.getActiveFeatureChunks.all(projectId, featureId, currentTime, currentTime);
     return rows.map(formatChunkRow);
+  }
+
+  function countActiveFeatureChunks(projectId, featureId) {
+    if (!featureId) return 0;
+    const currentTime = now();
+    return q.countActiveFeatureChunks.get(projectId, featureId, currentTime, currentTime).count;
   }
 
   /**
@@ -588,6 +594,7 @@ function createTemporalStore(db, { now = Date.now, featureRegistry = null, onMut
     migrateSchema: () => migrateTemporalSchema(db),
     insertTemporalChunk,
     getActiveFeatureChunks,
+    countActiveFeatureChunks,
     getFeatureAt,
     getFeatureInRange,
     getFeatureLineage,

@@ -797,3 +797,61 @@ test("historical keyword/vector search excludes drafts", sqlite, () => {
   assert.deepEqual(m.ids, [dep.id]);
   db.close();
 });
+
+// ============================================================================
+// Time-aware "active": the clock alone must start or retire a chunk
+// ============================================================================
+
+function clockedRag() {
+  const db = new Database(":memory:");
+  const clock = { t: 1000 };
+  const rag = createRagStore(db, { now: () => clock.t });
+  return { db, rag, clock };
+}
+const ins = (rag, over) =>
+  rag.temporal.insertTemporalChunk({
+    file_id: 1, project_id: 7, ord: 0, text: "quokka pricing", vec: dummyVec(1),
+    feature_id: "feat:q", version: "1.0.0", lifecycle_status: "active", ...over,
+  });
+
+test("future-dated active chunk is not searchable before valid_from", sqlite, () => {
+  const { db, rag } = clockedRag();
+  const c = ins(rag, { valid_from: 2000, valid_to: null });
+  assert.deepEqual(rag.matrix(7, 4).ids, []);
+  assert.deepEqual(rag.keyword(7, "quokka"), []);
+  assert.equal(c.lifecycle_status, "active");
+  db.close();
+});
+
+test("becomes searchable once clock passes valid_from without any write", sqlite, () => {
+  const { db, rag, clock } = clockedRag();
+  const c = ins(rag, { valid_from: 2000, valid_to: null });
+  assert.deepEqual(rag.matrix(7, 4).ids, []); // cached with expiresAt = 2000
+  clock.t = 2000;
+  assert.deepEqual(rag.matrix(7, 4).ids, [c.id]);
+  assert.deepEqual(rag.keyword(7, "quokka"), [c.id]);
+  db.close();
+});
+
+test("chunk with elapsed valid_to leaves active matrix without a write", sqlite, () => {
+  const { db, rag, clock } = clockedRag();
+  const c = ins(rag, { valid_from: 500, valid_to: 3000 });
+  assert.deepEqual(rag.matrix(7, 4).ids, [c.id]);
+  clock.t = 3000; // valid_to is exclusive
+  assert.deepEqual(rag.matrix(7, 4).ids, []);
+  assert.deepEqual(rag.keyword(7, "quokka"), []);
+  db.close();
+});
+
+test("getActiveFeatureChunks and keyword search agree on a future-dated chunk", sqlite, () => {
+  const { db, rag, clock } = clockedRag();
+  ins(rag, { valid_from: 2000, valid_to: null });
+  assert.deepEqual(rag.temporal.getActiveFeatureChunks(7, "feat:q"), []);
+  assert.deepEqual(rag.keyword(7, "quokka"), []);
+  assert.equal(rag.temporal.countActiveFeatureChunks(7, "feat:q"), 0);
+  clock.t = 2500;
+  assert.equal(rag.temporal.getActiveFeatureChunks(7, "feat:q").length, 1);
+  assert.equal(rag.keyword(7, "quokka").length, 1);
+  assert.equal(rag.temporal.countActiveFeatureChunks(7, "feat:q"), 1);
+  db.close();
+});

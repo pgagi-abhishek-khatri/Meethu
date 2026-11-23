@@ -113,7 +113,19 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
       `SELECT id, vec FROM copilot_chunks
        WHERE project_id = ? AND dims = ?
          AND (lifecycle_status IS NULL OR lifecycle_status = 'active')
+         AND (valid_from IS NULL OR valid_from <= ?)
+         AND (valid_to IS NULL OR valid_to > ?)
          AND vec IS NOT NULL`
+    ),
+    // Next instant at which the active set changes by time alone (a chunk starts or expires).
+    nextActiveBoundary: db.prepare(
+      `SELECT MIN(t) AS t FROM (
+         SELECT valid_from AS t FROM copilot_chunks
+          WHERE project_id = ? AND valid_from > ? AND lifecycle_status IS NOT 'draft'
+         UNION ALL
+         SELECT valid_to AS t FROM copilot_chunks
+          WHERE project_id = ? AND valid_to > ? AND lifecycle_status IS NOT 'draft'
+       )`
     ),
     historicalVectors: db.prepare(
       `SELECT c.id, c.vec FROM copilot_chunks c
@@ -139,6 +151,8 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
       `SELECT c.id AS id FROM copilot_chunks_fts f JOIN copilot_chunks c ON c.id = f.rowid
        WHERE copilot_chunks_fts MATCH ? AND c.project_id = ?
          AND (c.lifecycle_status IS NULL OR c.lifecycle_status = 'active')
+         AND (c.valid_from IS NULL OR c.valid_from <= ?)
+         AND (c.valid_to IS NULL OR c.valid_to > ?)
        ORDER BY bm25(copilot_chunks_fts) LIMIT ?`
     ),
     historicalFts: db.prepare(
@@ -232,13 +246,17 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
       }
       const mode = includeInactive ? "all" : "active";
       const key = `${projectId}:${dims}:${mode}`;
-      if (matrices.has(key)) return matrices.get(key);
+      const cached = matrices.get(key);
+      // Time alone can start or retire a chunk, so an active matrix is only reusable until its next boundary.
+      if (cached && !(cached.expiresAt != null && now() >= cached.expiresAt)) return cached;
+      const at = now();
       const rows = includeInactive
         ? q.vectors.all(projectId, dims)
-        : q.activeVectors.all(projectId, dims);
+        : q.activeVectors.all(projectId, dims, at, at);
       const data = new Float32Array(rows.length * dims);
       rows.forEach((r, i) => data.set(fromBuffer(r.vec), i * dims));
       const m = { ids: rows.map((r) => r.id), data };
+      if (!includeInactive) m.expiresAt = q.nextActiveBoundary.get(projectId, at, projectId, at).t ?? null;
       matrices.set(key, m);
       return m;
     },
@@ -253,7 +271,7 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
         }
         return includeInactive
           ? q.fts.all(query, projectId, k).map((r) => r.id)
-          : q.activeFts.all(query, projectId, k).map((r) => r.id);
+          : q.activeFts.all(query, projectId, now(), now(), k).map((r) => r.id);
       } catch {
         return []; // a syntax edge case must never break an answer
       }
