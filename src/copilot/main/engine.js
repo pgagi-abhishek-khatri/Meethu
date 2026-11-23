@@ -15,6 +15,7 @@ const {
   DEFAULT_SETTINGS,
 } = require("../core/decision");
 const { speakerLabel, clip, oneLine } = require("../core/decision/buildState");
+const { isDuplicate } = require("../core/decision/duplicateGuard");
 const { createScheduler, DEFAULT_TRIGGER_CONFIG } = require("../core/trigger/scheduler");
 const { getCopilotAiConfig } = require("../config/aiDefaults");
 const { createMainModel } = require("./mainCall");
@@ -35,6 +36,7 @@ const MAX_SPECS = 60; // job specs kept for "rerun with high effort"
 const MAX_ASKED = 150; // lines already turned into cards or offered
 const MAX_THREAD_ANSWERS = 24; // finished cards a thread remembers (the model sees only the last few)
 const MAX_TIMINGS = 200;
+const MAX_CARD_MEMORY = 6; // cards kept for the duplicate guard (the decider is shown only the last 2)
 const MAX_SKIPPED = 12; // skipped moments kept for the user to tap
 const SKIPPED_TTL_MS = 30 * 60 * 1000;
 const MODEL_TRANSCRIPT = 120; // newest segments handed to the answer model (it reads a few hundred characters of them)
@@ -576,6 +578,11 @@ function createEngine({
     handle.done.then((card) => {
       job.finished = true;
       if (card && !card.error && !card.skipped) {
+        const kept = s.cards.find((c) => c.jobId === job.id);
+        if (kept) {
+          kept.title = card.title;
+          kept.body = card.body;
+        }
         thread.answers.push({ id: job.id, title: card.title, body: card.body });
         if (thread.answers.length > MAX_THREAD_ANSWERS) thread.answers.shift();
       }
@@ -946,6 +953,23 @@ function createEngine({
         pick.text,
         decision.reasons.find((r) => SKIP_REASON.test(r) || UNJUDGED.test(r))
       );
+    // The same need was already answered or asked a moment ago: no new card, and nothing for the Skipped box.
+    // An explicit request to the assistant is always honoured.
+    if (decision.kind === "run" && decision.trigger !== "explicit") {
+      const dup = isDuplicate({
+        text: pick?.text ?? newText,
+        cards: s.cards,
+        asked: s.asked,
+        now: now(),
+        windowMs: decisionCfg.duplicateWindowMs,
+        minOverlap: decisionCfg.duplicateOverlap,
+      });
+      if (dup.duplicate) {
+        decision.kind = "skip";
+        decision.reasons = [...(decision.reasons ?? []), "duplicate_guard"];
+        trace({ type: "duplicate_guard", matchedJobId: dup.matchedJobId, score: dup.score });
+      }
+    }
     let runJobId = null;
     if (decision.kind === "run") {
       s.lastRunAt = finished;
@@ -1009,7 +1033,7 @@ function createEngine({
           jobId: job.id,
           weak: decision.trigger !== "explicit" && decision.confidence < decisionCfg.weakCardBelow,
         },
-      ].slice(-2);
+      ].slice(-MAX_CARD_MEMORY);
     }
 
     const record = {

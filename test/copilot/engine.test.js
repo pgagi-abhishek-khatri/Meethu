@@ -939,3 +939,45 @@ test("the query writer runs only when the files are needed or asked about, never
   assert.equal(auto.why, "auto");
   assert.equal(auto.expand, null, "no query writer for an unasked look");
 });
+
+test("the same question twice 10 s apart makes one card", async () => {
+  const main = fakeMain();
+  const { clock, service } = setup({}, main);
+  say(service, "system", "What was the revenue for the last quarter?");
+  await clock.advance(1500);
+  for (const c of main.calls) c.finish();
+  await clock.advance(10_000);
+  say(service, "system", "What was the revenue for the last quarter?");
+  await clock.advance(3000);
+  assert.equal(main.calls.length, 1);
+});
+
+test("a reworded repeat of a question makes no second card", async () => {
+  const main = fakeMain();
+  const { clock, service } = setup({}, main);
+  say(service, "system", "What was the revenue for the last quarter?");
+  await clock.advance(1500);
+  for (const c of main.calls) c.finish();
+  await clock.advance(10_000);
+  say(service, "system", "What's the revenue for last quarter?");
+  await clock.advance(3000);
+  assert.equal(main.calls.length, 1);
+});
+
+test("an explicit request to the assistant is never held back as a repeat", async () => {
+  const main = fakeMain();
+  const { clock, client, service } = setup({}, main);
+  const base = client.systemOne.bind(client);
+  client.systemOne = async (req) => {
+    const r = await base(req);
+    r.answers.asked_of_assistant = N(0.95);
+    return r;
+  };
+  say(service, "mic", "What was the revenue for the last quarter?");
+  await clock.advance(1500);
+  for (const c of main.calls) c.finish();
+  await clock.advance(10_000);
+  say(service, "mic", "What was the revenue for the last quarter?");
+  await clock.advance(3000);
+  assert.equal(main.calls.length, 2);
+});
