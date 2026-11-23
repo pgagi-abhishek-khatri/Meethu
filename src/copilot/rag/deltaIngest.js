@@ -60,7 +60,13 @@ function computeContentHash(text, bodyOnly = "") {
  * Deterministic zero-LLM Anthropic-style contextual title for embeddings.
  * Format: "File.md [phase 2, what was built | 2026-10-14] · Parent > Section"
  */
-function buildContextualTitle({ sourceName, standing = null, effectiveAt = null, hierarchy = [], sectionTitle = "" }) {
+function buildContextualTitle({
+  sourceName,
+  standing = null,
+  effectiveAt = null,
+  hierarchy = [],
+  sectionTitle = "",
+}) {
   const resolvedStanding = standing || docStanding({ name: sourceName });
   const standingParts = [];
   if (resolvedStanding?.phase) standingParts.push(`phase ${resolvedStanding.phase}`);
@@ -481,7 +487,8 @@ function classifySectionDelta({ section, match, activeChunks = [], fileId = null
   }
 
   // Filter out active chunks from the same document (fileId) so sibling sections in the same document do not supersede each other
-  const priorChunks = fileId != null ? activeChunks.filter((c) => c.file_id !== fileId) : activeChunks;
+  const priorChunks =
+    fileId != null ? activeChunks.filter((c) => c.file_id !== fileId) : activeChunks;
 
   // If no prior active chunks exist from other files
   if (priorChunks.length === 0) {
@@ -523,7 +530,59 @@ function bumpSemver(version, bumpType = "patch") {
 }
 
 // ---------------------------------------------------------------------------
-// F. Delta Ingestion Engine Factory
+// F. Per-Project Serialization and Snapshot Verification
+// ---------------------------------------------------------------------------
+
+// Pass 1 classifies against the active chunks it read, pass 3 awaits the embedder for
+// seconds, and pass 4 writes against what pass 1 read. Two ingests of one project
+// interleaving across that await would supersede or deprecate against stale state.
+// Electron main is a single process, so an in-memory promise chain per project is enough.
+const ingestQueuesByDb = new WeakMap(); // db -> Map<projectId, Promise tail>
+const NO_DB_QUEUE_KEY = {}; // callers without a db still serialize among themselves
+
+// Writers outside the queue (legacy ingest, another engine on the same db) can still
+// change a feature mid-embedding; one re-plan covers a single such write, and a second
+// change means the feature is churning, so we stop rather than loop.
+const MAX_SNAPSHOT_RETRIES = 1;
+
+class StaleSnapshotError extends Error {
+  constructor(featureIds) {
+    super(`Active chunks for feature(s) ${featureIds.join(", ")} changed during ingestion`);
+    this.name = "StaleSnapshotError";
+    this.featureIds = featureIds;
+  }
+}
+
+function enqueueForProject(queueKey, projectId, task) {
+  let byProject = ingestQueuesByDb.get(queueKey);
+  if (!byProject) {
+    byProject = new Map();
+    ingestQueuesByDb.set(queueKey, byProject);
+  }
+
+  const previous = byProject.get(projectId) || Promise.resolve();
+  const run = previous.then(task);
+  // The tail only orders the next call; the caller still receives `run`'s rejection,
+  // so settling the tail on failure hides nothing and keeps one failure from blocking the queue.
+  const tail = run.then(
+    () => undefined,
+    () => undefined
+  );
+  byProject.set(projectId, tail);
+  tail.then(() => {
+    if (byProject.get(projectId) === tail) byProject.delete(projectId);
+  });
+  return run;
+}
+
+function sameChunkIds(a, b) {
+  if (a.length !== b.length) return false;
+  const ids = new Set(a.map((c) => c.id));
+  return b.every((c) => ids.has(c.id));
+}
+
+// ---------------------------------------------------------------------------
+// G. Delta Ingestion Engine Factory
 // ---------------------------------------------------------------------------
 
 function createDeltaIngest({
@@ -548,7 +607,13 @@ function createDeltaIngest({
    *   Pass 3: Single batched embedder.embedDocs() call for all uncached sections (eliminates N sequential HTTP calls).
    *   Pass 4: Atomic SQLite transaction commit with selective sibling preservation (unchanged chunks stay active).
    */
-  async function processDocument({
+  function processDocument(args) {
+    return enqueueForProject(db || NO_DB_QUEUE_KEY, args?.projectId, () =>
+      processDocumentNow(args)
+    );
+  }
+
+  async function processDocumentNow({
     projectId,
     fileId = null,
     document, // file path, string text, or { text, path, name }
@@ -578,8 +643,8 @@ function createDeltaIngest({
     const errors = [];
     const changes = [];
 
-    const summary = {
-      total_sections: 0,
+    const freshSummary = (totalSections = 0) => ({
+      total_sections: totalSections,
       new_features: 0,
       unchanged_features: 0,
       modified_features: 0,
@@ -590,7 +655,8 @@ function createDeltaIngest({
       embeddings_created: 0,
       embeddings_reused: 0,
       embeddings_skipped: 0,
-    };
+    });
+    let summary = freshSummary();
 
     const ingestionId = `ingest_${now()}_${crypto.randomBytes(4).toString("hex")}`;
     const effTime = effectiveAt != null ? Number(effectiveAt) : now();
@@ -623,244 +689,327 @@ function createDeltaIngest({
       metrics.parse_ms = now() - tParse;
       summary.total_sections = sections.length;
 
-      // -----------------------------------------------------------------------
-      // PASS 1: Match & Classify against pre-mutation snapshot
-      // -----------------------------------------------------------------------
-      const activeSnapshotByFeature = new Map(); // feature_id -> activeChunks[]
-      const unchangedHashesByFeature = new Map(); // feature_id -> Set<hash>
-      const plans = [];
+      // Survives re-plans so a retry after a stale snapshot never pays for the same embedding twice.
+      const fetchedVectorsByHash = new Map();
 
-      // Existing active unmatched chunk hashes for this project (to avoid duplicate unmatched inserts on re-ingest)
-      const existingUnmatchedHashes = new Set();
-      if (autoIndexUnmatched && db && typeof db.prepare === "function") {
-        try {
-          const rows = db
-            .prepare(
-              `SELECT hash FROM copilot_chunks
+      for (let attempt = 0; ; attempt++) {
+        summary = freshSummary(sections.length);
+        changes.length = 0;
+        warnings.length = 0;
+        if (attempt > 0) {
+          warnings.push(
+            `Active chunks changed while embedding; re-planned against the current state (attempt ${attempt + 1}).`
+          );
+        }
+
+        // -----------------------------------------------------------------------
+        // PASS 1: Match & Classify against pre-mutation snapshot
+        // -----------------------------------------------------------------------
+        const activeSnapshotByFeature = new Map(); // feature_id -> activeChunks[]
+        const unchangedHashesByFeature = new Map(); // feature_id -> Set<hash>
+        const plans = [];
+
+        // Existing active unmatched chunk hashes for this project (to avoid duplicate unmatched inserts on re-ingest)
+        const existingUnmatchedHashes = new Set();
+        if (autoIndexUnmatched && db && typeof db.prepare === "function") {
+          try {
+            const rows = db
+              .prepare(
+                `SELECT hash FROM copilot_chunks
                WHERE project_id = ? AND feature_id IS NULL
                  AND (lifecycle_status IS NULL OR lifecycle_status = 'active')
                  AND hash IS NOT NULL`
-            )
-            .all(projectId);
-          for (const r of rows) existingUnmatchedHashes.add(r.hash);
-        } catch {
-          // Non-fatal on mocked DBs
-        }
-      }
-
-      for (const sec of sections) {
-        const tMatch = now();
-        const match = matchFeature(sec, featureRegistry, projectId);
-        metrics.match_ms += now() - tMatch;
-
-        let activeChunks = [];
-        if (match.status === "matched" && match.feature_id) {
-          if (!activeSnapshotByFeature.has(match.feature_id)) {
-            activeSnapshotByFeature.set(
-              match.feature_id,
-              resolvedTemporal.getActiveFeatureChunks(projectId, match.feature_id)
-            );
+              )
+              .all(projectId);
+            for (const r of rows) existingUnmatchedHashes.add(r.hash);
+          } catch {
+            // Non-fatal on mocked DBs
           }
-          activeChunks = activeSnapshotByFeature.get(match.feature_id);
         }
 
-        const tClass = now();
-        const delta = classifySectionDelta({
-          section: sec,
-          match,
-          activeChunks,
-          fileId,
-        });
-        metrics.classification_ms += now() - tClass;
+        for (const sec of sections) {
+          const tMatch = now();
+          const match = matchFeature(sec, featureRegistry, projectId);
+          metrics.match_ms += now() - tMatch;
 
-        if (delta.classification === "NEW") summary.new_features++;
-        else if (delta.classification === "UNCHANGED") {
-          summary.unchanged_features++;
-          if (match.feature_id) {
-            if (!unchangedHashesByFeature.has(match.feature_id)) {
-              unchangedHashesByFeature.set(match.feature_id, new Set());
+          let activeChunks = [];
+          if (match.status === "matched" && match.feature_id) {
+            if (!activeSnapshotByFeature.has(match.feature_id)) {
+              activeSnapshotByFeature.set(
+                match.feature_id,
+                resolvedTemporal.getActiveFeatureChunks(projectId, match.feature_id)
+              );
             }
-            unchangedHashesByFeature.get(match.feature_id).add(sec.content_hash);
-            unchangedHashesByFeature.get(match.feature_id).add(sec.body_hash);
+            activeChunks = activeSnapshotByFeature.get(match.feature_id);
           }
-        } else if (delta.classification === "MODIFIED") summary.modified_features++;
-        else if (delta.classification === "DEPRECATED") summary.deprecated_features++;
-        else if (delta.classification === "AMBIGUOUS") summary.ambiguous_features++;
-        else if (delta.classification === "UNMATCHED") summary.unmatched_sections++;
 
-        const explicitVer = extractVersionFromText(sec.original_text);
-        const priorVer = delta.previous_version || (activeChunks[0]?.version ?? null);
-        const nextVer =
-          proposedVersion || explicitVer || (priorVer ? bumpSemver(priorVer, "minor") : "1.0.0");
-
-        const contextualTitle = buildContextualTitle({
-          sourceName,
-          standing,
-          effectiveAt: effTime,
-          hierarchy: sec.hierarchy,
-          sectionTitle: sec.section_title,
-        });
-
-        const shouldAutoIndex =
-          autoIndexUnmatched &&
-          (delta.classification === "UNMATCHED" || delta.classification === "AMBIGUOUS") &&
-          sec.body_text.trim().length >= 20 &&
-          !existingUnmatchedHashes.has(sec.content_hash);
-
-        const changeRecord = {
-          section_id: sec.section_id,
-          feature_id: match.feature_id,
-          feature_name: match.feature_name,
-          classification: delta.classification,
-          previous_version: priorVer,
-          proposed_version:
-            delta.classification === "MODIFIED" || delta.classification === "NEW" ? nextVer : priorVer,
-          content_hash: sec.content_hash,
-          matched_by: match.matched_by,
-          approval_status: approved ? "approved" : "draft",
-          action_taken: dryRun ? "dry_run_proposed" : "pending",
-          evidence: {
-            confidence: match.confidence,
-            candidates: match.candidates,
-            reason: delta.reason,
-          },
-        };
-
-        plans.push({
-          sec,
-          match,
-          delta,
-          activeChunks,
-          nextVer,
-          contextualTitle,
-          shouldAutoIndex,
-          changeRecord,
-        });
-      }
-
-      if (dryRun) {
-        for (const p of plans) {
-          if (p.delta.classification === "UNCHANGED") summary.embeddings_reused++;
-          else summary.embeddings_skipped++;
-          p.changeRecord.action_taken = "dry_run_proposed";
-          changes.push(p.changeRecord);
-        }
-        metrics.total_ms = now() - t0;
-        return {
-          ingestion_id: ingestionId,
-          project_id: projectId,
-          source_document: sourceName,
-          effective_at: effTime,
-          status: "dry_run",
-          summary,
-          changes,
-          warnings,
-          errors,
-          metrics,
-        };
-      }
-
-      // -----------------------------------------------------------------------
-      // PASS 2: Bulk Vector Cache Lookup across all sections needing embeddings
-      // -----------------------------------------------------------------------
-      const dims = activeEmbedder?.dims || 768;
-      const needEmbedPlans = plans.filter((p) => {
-        if (!approved) return false;
-        if (p.delta.classification === "NEW" || p.delta.classification === "MODIFIED") return true;
-        if (p.shouldAutoIndex) return true;
-        return false;
-      });
-
-      const cachedByHash = new Map();
-      if (needEmbedPlans.length > 0 && ragStore && typeof ragStore.cachedVectors === "function") {
-        const lookupHashes = [...new Set(needEmbedPlans.map((p) => p.sec.content_hash))];
-        const cached = ragStore.cachedVectors(lookupHashes, dims);
-        for (const [h, vec] of cached.entries()) {
-          cachedByHash.set(h, vec);
-        }
-      }
-
-      // -----------------------------------------------------------------------
-      // PASS 3: Single Batched embedDocs() call for all uncached sections
-      // -----------------------------------------------------------------------
-      const toEmbedByHash = new Map(); // content_hash -> { title, text }
-      for (const p of needEmbedPlans) {
-        if (cachedByHash.has(p.sec.content_hash)) continue;
-        if (!toEmbedByHash.has(p.sec.content_hash)) {
-          toEmbedByHash.set(p.sec.content_hash, {
-            title: p.contextualTitle,
-            text: p.sec.original_text,
+          const tClass = now();
+          const delta = classifySectionDelta({
+            section: sec,
+            match,
+            activeChunks,
+            fileId,
           });
-        }
-      }
+          metrics.classification_ms += now() - tClass;
 
-      const freshVectorsByHash = new Map();
-      if (toEmbedByHash.size > 0 && activeEmbedder && typeof activeEmbedder.embedDocs === "function") {
-        const entries = [...toEmbedByHash.entries()];
-        const tEmb = now();
-        const embRes = await activeEmbedder.embedDocs(entries.map(([, doc]) => doc));
-        metrics.embedding_ms += now() - tEmb;
-        metrics.embedding_tokens += embRes?.tokens || 0;
-        metrics.embedding_cost += embRes?.cost || 0;
-        const vecs = embRes?.vectors || [];
-        entries.forEach(([h], idx) => {
-          if (vecs[idx]) freshVectorsByHash.set(h, vecs[idx]);
-        });
-      }
+          if (delta.classification === "NEW") summary.new_features++;
+          else if (delta.classification === "UNCHANGED") {
+            summary.unchanged_features++;
+            if (match.feature_id) {
+              if (!unchangedHashesByFeature.has(match.feature_id)) {
+                unchangedHashesByFeature.set(match.feature_id, new Set());
+              }
+              unchangedHashesByFeature.get(match.feature_id).add(sec.content_hash);
+              unchangedHashesByFeature.get(match.feature_id).add(sec.body_hash);
+            }
+          } else if (delta.classification === "MODIFIED") summary.modified_features++;
+          else if (delta.classification === "DEPRECATED") summary.deprecated_features++;
+          else if (delta.classification === "AMBIGUOUS") summary.ambiguous_features++;
+          else if (delta.classification === "UNMATCHED") summary.unmatched_sections++;
 
-      // -----------------------------------------------------------------------
-      // PASS 4: Atomic SQLite Transaction Commit with Selective Supersession
-      // -----------------------------------------------------------------------
-      const tStore = now();
-      const executeWrites = () => {
-        const activatedFeatureIds = new Set();
+          const explicitVer = extractVersionFromText(sec.original_text);
+          const priorVer = delta.previous_version || (activeChunks[0]?.version ?? null);
+          const nextVer =
+            proposedVersion || explicitVer || (priorVer ? bumpSemver(priorVer, "minor") : "1.0.0");
 
-        for (const p of plans) {
-          const { sec, match, delta, activeChunks, nextVer, contextualTitle, shouldAutoIndex, changeRecord } = p;
-          const chunkMeta = {
-            section_id: sec.section_id,
-            title: sec.section_title,
-            heading: sec.section_title,
+          const contextualTitle = buildContextualTitle({
+            sourceName,
+            standing,
+            effectiveAt: effTime,
             hierarchy: sec.hierarchy,
-            contextual_title: contextualTitle,
-            source: sourceName,
+            sectionTitle: sec.section_title,
+          });
+
+          const shouldAutoIndex =
+            autoIndexUnmatched &&
+            (delta.classification === "UNMATCHED" || delta.classification === "AMBIGUOUS") &&
+            sec.body_text.trim().length >= 20 &&
+            !existingUnmatchedHashes.has(sec.content_hash);
+
+          const changeRecord = {
+            section_id: sec.section_id,
+            feature_id: match.feature_id,
+            feature_name: match.feature_name,
+            classification: delta.classification,
+            previous_version: priorVer,
+            proposed_version:
+              delta.classification === "MODIFIED" || delta.classification === "NEW"
+                ? nextVer
+                : priorVer,
+            content_hash: sec.content_hash,
+            matched_by: match.matched_by,
+            approval_status: approved ? "approved" : "draft",
+            action_taken: dryRun ? "dry_run_proposed" : "pending",
+            evidence: {
+              confidence: match.confidence,
+              candidates: match.candidates,
+              reason: delta.reason,
+            },
           };
 
-          if (delta.classification === "UNCHANGED") {
-            summary.embeddings_reused++;
-            changeRecord.action_taken = "reused";
-          } else if (delta.classification === "MODIFIED") {
-            if (approved) {
-              let vec = cachedByHash.get(sec.content_hash) || null;
-              if (vec) {
-                summary.embeddings_reused++;
-              } else if (freshVectorsByHash.has(sec.content_hash)) {
-                vec = freshVectorsByHash.get(sec.content_hash);
-                summary.embeddings_created++;
-              } else {
-                summary.embeddings_skipped++;
-              }
+          plans.push({
+            sec,
+            match,
+            delta,
+            activeChunks,
+            nextVer,
+            contextualTitle,
+            shouldAutoIndex,
+            changeRecord,
+          });
+        }
 
-              if (!activatedFeatureIds.has(match.feature_id)) {
-                resolvedTemporal.activateSuccessorVersion({
-                  predecessorId: delta.predecessor_chunk_id,
-                  newChunkData: {
+        if (dryRun) {
+          for (const p of plans) {
+            if (p.delta.classification === "UNCHANGED") summary.embeddings_reused++;
+            else summary.embeddings_skipped++;
+            p.changeRecord.action_taken = "dry_run_proposed";
+            changes.push(p.changeRecord);
+          }
+          metrics.total_ms = now() - t0;
+          return {
+            ingestion_id: ingestionId,
+            project_id: projectId,
+            source_document: sourceName,
+            effective_at: effTime,
+            status: "dry_run",
+            summary,
+            changes,
+            warnings,
+            errors,
+            metrics,
+          };
+        }
+
+        // -----------------------------------------------------------------------
+        // PASS 2: Bulk Vector Cache Lookup across all sections needing embeddings
+        // -----------------------------------------------------------------------
+        const dims = activeEmbedder?.dims || 768;
+        const needEmbedPlans = plans.filter((p) => {
+          if (!approved) return false;
+          if (p.delta.classification === "NEW" || p.delta.classification === "MODIFIED")
+            return true;
+          if (p.shouldAutoIndex) return true;
+          return false;
+        });
+
+        const cachedByHash = new Map();
+        if (needEmbedPlans.length > 0 && ragStore && typeof ragStore.cachedVectors === "function") {
+          const lookupHashes = [...new Set(needEmbedPlans.map((p) => p.sec.content_hash))];
+          const cached = ragStore.cachedVectors(lookupHashes, dims);
+          for (const [h, vec] of cached.entries()) {
+            cachedByHash.set(h, vec);
+          }
+        }
+
+        // -----------------------------------------------------------------------
+        // PASS 3: Single Batched embedDocs() call for all uncached sections
+        // -----------------------------------------------------------------------
+        const toEmbedByHash = new Map(); // content_hash -> { title, text }
+        for (const p of needEmbedPlans) {
+          if (cachedByHash.has(p.sec.content_hash)) continue;
+          if (fetchedVectorsByHash.has(p.sec.content_hash)) continue;
+          if (!toEmbedByHash.has(p.sec.content_hash)) {
+            toEmbedByHash.set(p.sec.content_hash, {
+              title: p.contextualTitle,
+              text: p.sec.original_text,
+            });
+          }
+        }
+
+        const freshVectorsByHash = fetchedVectorsByHash;
+        if (
+          toEmbedByHash.size > 0 &&
+          activeEmbedder &&
+          typeof activeEmbedder.embedDocs === "function"
+        ) {
+          const entries = [...toEmbedByHash.entries()];
+          const tEmb = now();
+          const embRes = await activeEmbedder.embedDocs(entries.map(([, doc]) => doc));
+          metrics.embedding_ms += now() - tEmb;
+          metrics.embedding_tokens += embRes?.tokens || 0;
+          metrics.embedding_cost += embRes?.cost || 0;
+          const vecs = embRes?.vectors || [];
+          entries.forEach(([h], idx) => {
+            if (vecs[idx]) freshVectorsByHash.set(h, vecs[idx]);
+          });
+        }
+
+        // -----------------------------------------------------------------------
+        // PASS 4: Atomic SQLite Transaction Commit with Selective Supersession
+        // -----------------------------------------------------------------------
+        const tStore = now();
+        const executeWrites = () => {
+          // Inside the transaction and before any write, so a mismatch rolls back nothing
+          // and no other writer can slip in between this check and the writes below.
+          const staleFeatureIds = [];
+          for (const [featureId, snapshot] of activeSnapshotByFeature) {
+            const current = resolvedTemporal.getActiveFeatureChunks(projectId, featureId);
+            if (!sameChunkIds(snapshot, current)) staleFeatureIds.push(featureId);
+          }
+          if (staleFeatureIds.length > 0) throw new StaleSnapshotError(staleFeatureIds);
+
+          const activatedFeatureIds = new Set();
+
+          for (const p of plans) {
+            const {
+              sec,
+              match,
+              delta,
+              activeChunks,
+              nextVer,
+              contextualTitle,
+              shouldAutoIndex,
+              changeRecord,
+            } = p;
+            const chunkMeta = {
+              section_id: sec.section_id,
+              title: sec.section_title,
+              heading: sec.section_title,
+              hierarchy: sec.hierarchy,
+              contextual_title: contextualTitle,
+              source: sourceName,
+            };
+
+            if (delta.classification === "UNCHANGED") {
+              summary.embeddings_reused++;
+              changeRecord.action_taken = "reused";
+            } else if (delta.classification === "MODIFIED") {
+              if (approved) {
+                let vec = cachedByHash.get(sec.content_hash) || null;
+                if (vec) {
+                  summary.embeddings_reused++;
+                } else if (freshVectorsByHash.has(sec.content_hash)) {
+                  vec = freshVectorsByHash.get(sec.content_hash);
+                  summary.embeddings_created++;
+                } else {
+                  summary.embeddings_skipped++;
+                }
+
+                if (!activatedFeatureIds.has(match.feature_id)) {
+                  resolvedTemporal.activateSuccessorVersion({
+                    predecessorId: delta.predecessor_chunk_id,
+                    newChunkData: {
+                      file_id: fileId,
+                      project_id: projectId,
+                      feature_id: match.feature_id,
+                      version: nextVer,
+                      text: sec.original_text,
+                      hash: sec.content_hash,
+                      vec,
+                      dims: vec ? vec.length : null,
+                      meta: chunkMeta,
+                    },
+                    effectiveTime: effTime,
+                    preserveUnchangedHashes: unchangedHashesByFeature.get(match.feature_id) || null,
+                  });
+                  activatedFeatureIds.add(match.feature_id);
+                } else {
+                  // Additional sibling section for the same feature within the same document
+                  resolvedTemporal.insertTemporalChunk({
                     file_id: fileId,
                     project_id: projectId,
                     feature_id: match.feature_id,
                     version: nextVer,
+                    lifecycle_status: "active",
                     text: sec.original_text,
                     hash: sec.content_hash,
                     vec,
                     dims: vec ? vec.length : null,
+                    valid_from: effTime,
+                    valid_to: null,
                     meta: chunkMeta,
-                  },
-                  effectiveTime: effTime,
-                  preserveUnchangedHashes: unchangedHashesByFeature.get(match.feature_id) || null,
-                });
-                activatedFeatureIds.add(match.feature_id);
+                  });
+                }
+                changeRecord.action_taken = "activated";
               } else {
-                // Additional sibling section for the same feature within the same document
+                resolvedTemporal.insertTemporalChunk({
+                  file_id: fileId,
+                  project_id: projectId,
+                  feature_id: match.feature_id,
+                  version: nextVer,
+                  lifecycle_status: "draft",
+                  text: sec.original_text,
+                  hash: sec.content_hash,
+                  valid_from: effTime,
+                  valid_to: null,
+                  meta: { ...chunkMeta, note: "Pending approval" },
+                });
+                summary.embeddings_skipped++;
+                changeRecord.action_taken = "draft_stored";
+              }
+            } else if (delta.classification === "NEW") {
+              if (approved) {
+                let vec = cachedByHash.get(sec.content_hash) || null;
+                if (vec) {
+                  summary.embeddings_reused++;
+                } else if (freshVectorsByHash.has(sec.content_hash)) {
+                  vec = freshVectorsByHash.get(sec.content_hash);
+                  summary.embeddings_created++;
+                } else {
+                  summary.embeddings_skipped++;
+                }
+
                 resolvedTemporal.insertTemporalChunk({
                   file_id: fileId,
                   project_id: projectId,
@@ -875,26 +1024,37 @@ function createDeltaIngest({
                   valid_to: null,
                   meta: chunkMeta,
                 });
+                changeRecord.action_taken = "activated";
+              } else {
+                resolvedTemporal.insertTemporalChunk({
+                  file_id: fileId,
+                  project_id: projectId,
+                  feature_id: match.feature_id,
+                  version: nextVer,
+                  lifecycle_status: "draft",
+                  text: sec.original_text,
+                  hash: sec.content_hash,
+                  valid_from: effTime,
+                  valid_to: null,
+                  meta: { ...chunkMeta, note: "Draft requirement pending approval" },
+                });
+                summary.embeddings_skipped++;
+                changeRecord.action_taken = "draft_stored";
               }
-              changeRecord.action_taken = "activated";
-            } else {
-              resolvedTemporal.insertTemporalChunk({
-                file_id: fileId,
-                project_id: projectId,
-                feature_id: match.feature_id,
-                version: nextVer,
-                lifecycle_status: "draft",
-                text: sec.original_text,
-                hash: sec.content_hash,
-                valid_from: effTime,
-                valid_to: null,
-                meta: { ...chunkMeta, note: "Pending approval" },
-              });
+            } else if (delta.classification === "DEPRECATED") {
+              if (approved) {
+                for (const c of activeChunks) {
+                  resolvedTemporal.deprecateChunk(c.id, effTime);
+                }
+                changeRecord.action_taken = "deprecated";
+              } else {
+                warnings.push(
+                  `Feature '${match.feature_id}' is marked deprecated in text but deprecation was not approved.`
+                );
+                changeRecord.action_taken = "pending_deprecation";
+              }
               summary.embeddings_skipped++;
-              changeRecord.action_taken = "draft_stored";
-            }
-          } else if (delta.classification === "NEW") {
-            if (approved) {
+            } else if (shouldAutoIndex && approved) {
               let vec = cachedByHash.get(sec.content_hash) || null;
               if (vec) {
                 summary.embeddings_reused++;
@@ -908,8 +1068,8 @@ function createDeltaIngest({
               resolvedTemporal.insertTemporalChunk({
                 file_id: fileId,
                 project_id: projectId,
-                feature_id: match.feature_id,
-                version: nextVer,
+                feature_id: null,
+                version: null,
                 lifecycle_status: "active",
                 text: sec.original_text,
                 hash: sec.content_hash,
@@ -919,96 +1079,51 @@ function createDeltaIngest({
                 valid_to: null,
                 meta: chunkMeta,
               });
-              changeRecord.action_taken = "activated";
-            } else {
-              resolvedTemporal.insertTemporalChunk({
-                file_id: fileId,
-                project_id: projectId,
-                feature_id: match.feature_id,
-                version: nextVer,
-                lifecycle_status: "draft",
-                text: sec.original_text,
-                hash: sec.content_hash,
-                valid_from: effTime,
-                valid_to: null,
-                meta: { ...chunkMeta, note: "Draft requirement pending approval" },
-              });
-              summary.embeddings_skipped++;
-              changeRecord.action_taken = "draft_stored";
-            }
-          } else if (delta.classification === "DEPRECATED") {
-            if (approved) {
-              for (const c of activeChunks) {
-                resolvedTemporal.deprecateChunk(c.id, effTime);
-              }
-              changeRecord.action_taken = "deprecated";
-            } else {
-              warnings.push(
-                `Feature '${match.feature_id}' is marked deprecated in text but deprecation was not approved.`
-              );
-              changeRecord.action_taken = "pending_deprecation";
-            }
-            summary.embeddings_skipped++;
-          } else if (shouldAutoIndex && approved) {
-            let vec = cachedByHash.get(sec.content_hash) || null;
-            if (vec) {
+              existingUnmatchedHashes.add(sec.content_hash);
+              summary.unmatched_indexed++;
+              changeRecord.action_taken = "indexed_unmatched";
+            } else if (autoIndexUnmatched && existingUnmatchedHashes.has(sec.content_hash)) {
               summary.embeddings_reused++;
-            } else if (freshVectorsByHash.has(sec.content_hash)) {
-              vec = freshVectorsByHash.get(sec.content_hash);
-              summary.embeddings_created++;
+              changeRecord.action_taken = "reused";
             } else {
               summary.embeddings_skipped++;
+              changeRecord.action_taken = "none";
             }
 
-            resolvedTemporal.insertTemporalChunk({
-              file_id: fileId,
-              project_id: projectId,
-              feature_id: null,
-              version: null,
-              lifecycle_status: "active",
-              text: sec.original_text,
-              hash: sec.content_hash,
-              vec,
-              dims: vec ? vec.length : null,
-              valid_from: effTime,
-              valid_to: null,
-              meta: chunkMeta,
-            });
-            existingUnmatchedHashes.add(sec.content_hash);
-            summary.unmatched_indexed++;
-            changeRecord.action_taken = "indexed_unmatched";
-          } else if (autoIndexUnmatched && existingUnmatchedHashes.has(sec.content_hash)) {
-            summary.embeddings_reused++;
-            changeRecord.action_taken = "reused";
-          } else {
-            summary.embeddings_skipped++;
-            changeRecord.action_taken = "none";
+            changes.push(changeRecord);
           }
+        };
 
-          changes.push(changeRecord);
+        try {
+          if (db && typeof db.transaction === "function") {
+            db.transaction(executeWrites)();
+          } else {
+            executeWrites();
+          }
+        } catch (err) {
+          metrics.storage_ms += now() - tStore;
+          if (!(err instanceof StaleSnapshotError)) throw err;
+          if (attempt < MAX_SNAPSHOT_RETRIES) continue;
+          throw new Error(
+            `${err.message}, again after ${MAX_SNAPSHOT_RETRIES} re-plan(s); another writer keeps changing this project, so nothing was written`
+          );
         }
-      };
+        metrics.storage_ms += now() - tStore;
+        metrics.total_ms = now() - t0;
 
-      if (db && typeof db.transaction === "function") {
-        db.transaction(executeWrites)();
-      } else {
-        executeWrites();
+        return {
+          ingestion_id: ingestionId,
+          project_id: projectId,
+          source_document: sourceName,
+          effective_at: effTime,
+          status: "success",
+          summary,
+          changes,
+          warnings,
+          errors,
+          metrics,
+        };
       }
-      metrics.storage_ms += now() - tStore;
-      metrics.total_ms = now() - t0;
-
-      return {
-        ingestion_id: ingestionId,
-        project_id: projectId,
-        source_document: sourceName,
-        effective_at: effTime,
-        status: "success",
-        summary,
-        changes,
-        warnings,
-        errors,
-        metrics,
-      };
     } catch (err) {
       metrics.total_ms = now() - t0;
       errors.push(err.message);

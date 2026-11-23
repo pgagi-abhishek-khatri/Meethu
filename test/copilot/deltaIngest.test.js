@@ -480,6 +480,9 @@ System must support 100 concurrent streams with <50ms latency.    \r\n`;
       fileId: 801,
       document: `# Data Ingestion Pipeline Architecture\nThroughput limit is 100 req/sec.`,
       approved: true,
+      // Explicit times: two ingests in the same Date.now() millisecond would give the
+      // successor the predecessor's valid_from, which supersedeChunk rightly refuses.
+      effectiveAt: 1000,
     });
 
     const resMod = await deltaIngest.processDocument({
@@ -487,6 +490,7 @@ System must support 100 concurrent streams with <50ms latency.    \r\n`;
       fileId: 802,
       document: `# Data Ingestion Pipeline Architecture\nThroughput limit is 1,000 req/sec.`,
       approved: true,
+      effectiveAt: 2000,
     });
 
     assert.equal(resMod.summary.modified_features, 1);
@@ -664,5 +668,271 @@ Real-time streaming pipeline specification.
 
     // All chunks count
     assert.equal(ragStore.chunkCount("proj_l"), 2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Concurrency: per-project serialization and pass-1 snapshot verification
+// ---------------------------------------------------------------------------
+
+const EMBED_DELAY_MS = 30;
+const PIPELINE_FEATURE = "feat:ingestion_pipeline";
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Embedder whose call stays in flight for a while, so a second ingest can start meanwhile.
+function createSlowEmbedder({ dims = 4, waitMs = EMBED_DELAY_MS, onCall = null } = {}) {
+  let callCount = 0;
+  let inFlight = 0;
+  let maxInFlight = 0;
+  return {
+    dims,
+    getCallCount: () => callCount,
+    getMaxInFlight: () => maxInFlight,
+    embedDocs: async (docs) => {
+      callCount++;
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      try {
+        if (onCall) await onCall(callCount, docs);
+        await delay(waitMs);
+        return {
+          vectors: docs.map(() => new Float32Array(dims).fill(callCount / 10)),
+          tokens: 0,
+          cost: 0,
+        };
+      } finally {
+        inFlight--;
+      }
+    },
+  };
+}
+
+describe("Delta ingest concurrency", () => {
+  test("two concurrent processDocument calls for one file leave one active chunk per feature", async () => {
+    const { db, ragStore, temporalStore, featureRegistry } = setupTestContext();
+    const embedder = createSlowEmbedder();
+    const deltaIngest = createDeltaIngest({
+      db,
+      ragStore,
+      temporalStore,
+      featureRegistry,
+      embedder,
+    });
+
+    const args = {
+      projectId: "proj_conc",
+      fileId: 1301,
+      document: `# Data Ingestion Pipeline Architecture\nPipeline handles 300 req/sec.`,
+      approved: true,
+      effectiveAt: 1000,
+    };
+
+    const [r1, r2] = await Promise.all([
+      deltaIngest.processDocument(args),
+      deltaIngest.processDocument(args),
+    ]);
+
+    assert.equal(r1.status, "success", r1.errors.join("; "));
+    assert.equal(r2.status, "success", r2.errors.join("; "));
+    assert.equal(r2.summary.unchanged_features, 1, "Second call must see the first call's chunk");
+    assert.equal(temporalStore.getActiveFeatureChunks("proj_conc", PIPELINE_FEATURE).length, 1);
+    assert.equal(embedder.getMaxInFlight(), 1, "Same-project ingests must not overlap");
+  });
+
+  test("snapshot changed during embedding triggers one retry and a consistent result", async () => {
+    const { db, ragStore, temporalStore, featureRegistry } = setupTestContext();
+    const deltaIngestBase = createDeltaIngest({
+      db,
+      ragStore,
+      temporalStore,
+      featureRegistry,
+      embedder: createSlowEmbedder({ waitMs: 0 }),
+    });
+    await deltaIngestBase.processDocument({
+      projectId: "proj_snap",
+      fileId: 1401,
+      document: `# Data Ingestion Pipeline Architecture\nBaseline 10 req/sec.`,
+      approved: true,
+      effectiveAt: 1000,
+    });
+    const [baseline] = temporalStore.getActiveFeatureChunks("proj_snap", PIPELINE_FEATURE);
+
+    // A writer outside this queue (e.g. legacy ingest) supersedes the baseline mid-embedding.
+    let competitorId = null;
+    const embedder = createSlowEmbedder({
+      onCall: (n) => {
+        if (n !== 1) return;
+        const res = temporalStore.activateSuccessorVersion({
+          predecessorId: baseline.id,
+          newChunkData: {
+            file_id: 1499,
+            project_id: "proj_snap",
+            feature_id: PIPELINE_FEATURE,
+            version: "1.5.0",
+            text: "competing text",
+            hash: "competing_hash",
+          },
+          effectiveTime: 2000,
+        });
+        competitorId = res.successor.id;
+      },
+    });
+    const deltaIngest = createDeltaIngest({
+      db,
+      ragStore,
+      temporalStore,
+      featureRegistry,
+      embedder,
+    });
+
+    const res = await deltaIngest.processDocument({
+      projectId: "proj_snap",
+      fileId: 1402,
+      document: `# Data Ingestion Pipeline Architecture\nUpgraded 50 req/sec.`,
+      approved: true,
+      effectiveAt: 3000,
+    });
+
+    assert.equal(res.status, "success", res.errors.join("; "));
+    assert.equal(res.summary.modified_features, 1, "Summary must reflect only the final attempt");
+    assert.equal(res.changes.length, 1);
+    assert.equal(embedder.getCallCount(), 1, "Retry must reuse the fetched embedding");
+
+    const active = temporalStore.getActiveFeatureChunks("proj_snap", PIPELINE_FEATURE);
+    assert.equal(active.length, 1);
+    assert.equal(active[0].file_id, 1402);
+    const lineage = temporalStore.getFeatureLineage("proj_snap", PIPELINE_FEATURE);
+    const competitor = lineage.find((c) => c.id === competitorId);
+    assert.equal(competitor.lifecycle_status, "superseded");
+    assert.equal(competitor.superseded_by_id, active[0].id);
+  });
+
+  test("snapshot that keeps changing fails with a clear error and writes nothing", async () => {
+    const { db, ragStore, temporalStore, featureRegistry } = setupTestContext();
+    const baseIngest = createDeltaIngest({
+      db,
+      ragStore,
+      temporalStore,
+      featureRegistry,
+      embedder: createSlowEmbedder({ waitMs: 0 }),
+    });
+    await baseIngest.processDocument({
+      projectId: "proj_churn",
+      fileId: 1501,
+      document: `# Data Ingestion Pipeline Architecture\nBaseline 10 req/sec.`,
+      approved: true,
+      effectiveAt: 1000,
+    });
+
+    // Every attempt's embedding window sees another outside successor land.
+    let competitorTime = 2000;
+    const churningRagStore = {
+      ...ragStore,
+      cachedVectors: (hashes, dims) => {
+        const [current] = temporalStore.getActiveFeatureChunks("proj_churn", PIPELINE_FEATURE);
+        temporalStore.activateSuccessorVersion({
+          predecessorId: current.id,
+          newChunkData: {
+            file_id: 1599,
+            project_id: "proj_churn",
+            feature_id: PIPELINE_FEATURE,
+            text: `competing ${competitorTime}`,
+            hash: `competing_${competitorTime}`,
+          },
+          effectiveTime: competitorTime,
+        });
+        competitorTime += 100;
+        return ragStore.cachedVectors(hashes, dims);
+      },
+    };
+    const deltaIngest = createDeltaIngest({
+      db,
+      ragStore: churningRagStore,
+      temporalStore,
+      featureRegistry,
+      embedder: createSlowEmbedder({ waitMs: 0 }),
+    });
+
+    const res = await deltaIngest.processDocument({
+      projectId: "proj_churn",
+      fileId: 1502,
+      document: `# Data Ingestion Pipeline Architecture\nUpgraded 50 req/sec.`,
+      approved: true,
+      effectiveAt: 5000,
+    });
+
+    assert.equal(res.status, "error");
+    assert.match(res.errors[0], /active chunks .* changed/i);
+    const active = temporalStore.getActiveFeatureChunks("proj_churn", PIPELINE_FEATURE);
+    assert.equal(active.length, 1);
+    assert.equal(active[0].file_id, 1599, "Nothing from the failed ingest is written");
+  });
+
+  test("a failing call does not block the next queued call for the same project", async () => {
+    const { db, ragStore, temporalStore, featureRegistry } = setupTestContext();
+    const embedder = createSlowEmbedder({
+      onCall: (n) => {
+        if (n === 1) throw new Error("Simulated embedding outage");
+      },
+    });
+    const deltaIngest = createDeltaIngest({
+      db,
+      ragStore,
+      temporalStore,
+      featureRegistry,
+      embedder,
+    });
+
+    const base = {
+      projectId: "proj_fail",
+      document: `# Data Ingestion Pipeline Architecture\nPipeline handles 7 req/sec.`,
+      approved: true,
+      effectiveAt: 1000,
+    };
+    const [r1, r2] = await Promise.all([
+      deltaIngest.processDocument({ ...base, fileId: 1601 }),
+      deltaIngest.processDocument({ ...base, fileId: 1602 }),
+    ]);
+
+    assert.equal(r1.status, "error");
+    assert.match(r1.errors[0], /Simulated embedding outage/);
+    assert.equal(r2.status, "success", r2.errors.join("; "));
+    assert.equal(temporalStore.getActiveFeatureChunks("proj_fail", PIPELINE_FEATURE).length, 1);
+  });
+
+  test("calls for different projects still run concurrently", async () => {
+    const { db, ragStore, temporalStore, featureRegistry } = setupTestContext();
+    const embedder = createSlowEmbedder();
+    const deltaIngest = createDeltaIngest({
+      db,
+      ragStore,
+      temporalStore,
+      featureRegistry,
+      embedder,
+    });
+
+    const doc = `# Data Ingestion Pipeline Architecture\nPipeline handles 9 req/sec.`;
+    const results = await Promise.all([
+      deltaIngest.processDocument({
+        projectId: "proj_x",
+        fileId: 1701,
+        document: doc,
+        approved: true,
+        effectiveAt: 1000,
+      }),
+      deltaIngest.processDocument({
+        projectId: "proj_y",
+        fileId: 1702,
+        document: doc,
+        approved: true,
+        effectiveAt: 1000,
+      }),
+    ]);
+
+    for (const r of results) assert.equal(r.status, "success", r.errors.join("; "));
+    assert.equal(embedder.getMaxInFlight(), 2, "Different projects must not wait on each other");
   });
 });
