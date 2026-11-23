@@ -20,6 +20,8 @@ const DEFAULT_DECISION_CONFIG = {
   weakCardBelow: 0.7, // proactive card with less confidence than this ...
   weakCardMemoryMs: 30000, // ... stops counting as "already handled" after this
   cardMemoryMs: 120000, // a card older than this no longer counts as "already handled"
+  duplicateOverlap: 0.6, // content-word Jaccard at/above this vs a recent card or asked question = same need (duplicateGuard.js)
+  duplicateWindowMs: 300000, // only cards shown within this window count as duplicates
   choiceMinConfidence: 0.5, // below this a pick-one answer falls back to its most likely option
   // How the project files get searched. "single": D1's one call also answers needs_project. "twoCall": D1 judges
   // the card alone; when a card runs, a second D1 call asks whether the files are needed while the query writer
