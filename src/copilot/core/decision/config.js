@@ -23,6 +23,9 @@ const DEFAULT_DECISION_CONFIG = {
   duplicateOverlap: 0.6, // content-word Jaccard at/above this vs a recent card or asked question = same need (duplicateGuard.js)
   duplicateWindowMs: 300000, // only cards shown within this window count as duplicates
   choiceMinConfidence: 0.5, // below this a pick-one answer falls back to its most likely option
+  // A search D1 asked for (needs_project) must find at least minHits passages this close (cosine; the unasked-look
+  // floor) or a factual card becomes gap questions instead (core/answer/sufficiency.js, engine startAnswer).
+  sufficiency: { minScore: 0.69, minHits: 1 },
   // How the project files get searched. "single": D1's one call also answers needs_project. "twoCall": D1 judges
   // the card alone; when a card runs, a second D1 call asks whether the files are needed while the query writer
   // already writes its queries (if not needed, the queries go to the answer model as they are).

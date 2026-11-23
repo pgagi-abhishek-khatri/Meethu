@@ -734,17 +734,18 @@ test("a final still in flight when the meeting stops does not open a new meeting
 });
 
 // ---- project search (src/copilot/rag)
-function fakeRag({ index = true } = {}) {
-  const calls = { prefetch: [], retrieve: [] };
+function fakeRag({ index = true, result = null } = {}) {
+  const calls = { prefetch: [], retrieve: [], log: [] };
   return {
     calls,
     hasIndex: () => index,
     catalog: () =>
       "The USER's project files (what each holds):\n- contract.pdf: Master services contract",
     prefetch: (q) => calls.prefetch.push(q),
+    log: (r) => calls.log.push(r),
     retrieve: async (o) => (
       calls.retrieve.push(o),
-      {
+      result ?? {
         text: "Passages from the USER's project files:\n\n[contract.pdf · p.4]\nRefunds within 14 days.",
         used: [{ file: "contract.pdf", where: "p.4", score: 0.8 }],
         skipped: null,
@@ -753,6 +754,71 @@ function fakeRag({ index = true } = {}) {
     ),
   };
 }
+const EMPTY_RETRIEVAL = { text: "", used: [], skipped: "no_match", ms: 9 };
+const GAP_PROMPT = /Do not answer\. Name what is missing/;
+
+test("sufficiency: a search D1 asked for that finds nothing turns a factual card into gap questions", async () => {
+  const main = fakeMain();
+  const rag = fakeRag({ result: EMPTY_RETRIEVAL });
+  const { events, service } = setup({}, main, { rag });
+  service.ask({ text: "What is the refund period in the contract?" });
+  await tick();
+  assert.equal(rag.calls.retrieve.length, 1);
+  assert.equal(main.calls.length, 1);
+  assert.match(main.calls[0].messages[0].content, GAP_PROMPT, "the prompt asks for gap questions");
+  main.calls[0].finish(
+    "TITLE: Refund period not in the files\n- The files do not give a refund period.\nGAPS: What refund period did you agree? | Is it from delivery or invoice?\nCONFIDENCE: high"
+  );
+  await tick();
+  const done = events.find((e) => e.type === "card_done");
+  assert.deepEqual(done.gaps, ["What refund period did you agree?", "Is it from delivery or invoice?"]);
+  assert.equal(done.deliverable, "gap_questions");
+  assert.ok(rag.calls.log.some((r) => r.event === "sufficiency" && r.verdict === "none"));
+});
+
+test("sufficiency: a short matching passage keeps the answer and asks to say what the files lack", async () => {
+  const main = fakeMain();
+  const rag = fakeRag(); // one close hit, passage under 200 chars
+  const { service } = setup({}, main, { rag });
+  service.ask({ text: "What is the refund period?" });
+  await tick();
+  assert.doesNotMatch(main.calls[0].messages[0].content, GAP_PROMPT);
+  assert.match(main.calls[0].messages[1].content, /State what is not in the files\./);
+});
+
+test("sufficiency: a typed question with web on is never turned into gap questions", async () => {
+  const main = fakeMain();
+  const rag = fakeRag({ result: EMPTY_RETRIEVAL });
+  const { service } = setup({}, main, { rag });
+  service.ask({ text: "What is the refund period in the contract?", web: true });
+  await tick();
+  assert.doesNotMatch(main.calls[0].messages[0].content, GAP_PROMPT);
+});
+
+test("sufficiency: an empty unasked look (projectAuto) changes nothing", async () => {
+  const main = fakeMain();
+  const rag = fakeRag({ result: EMPTY_RETRIEVAL });
+  const { clock, service } = setup({}, main, { rag });
+  say(service, "system", "What was the revenue for the last quarter?");
+  await clock.advance(5000);
+  await tick();
+  assert.equal(rag.calls.retrieve.at(-1).why, "auto");
+  assert.doesNotMatch(main.calls.at(-1).messages[0].content, GAP_PROMPT);
+  assert.doesNotMatch(main.calls.at(-1).messages[1].content, /State what is not in the files/);
+});
+
+test("sufficiency: a retrieval error keeps today's behaviour", async () => {
+  const main = fakeMain();
+  const rag = fakeRag();
+  rag.retrieve = async () => {
+    throw new Error("boom");
+  };
+  const { service } = setup({}, main, { rag });
+  service.ask({ text: "What is the refund period?" });
+  await tick();
+  assert.equal(main.calls.length, 1);
+  assert.doesNotMatch(main.calls[0].messages[0].content, GAP_PROMPT);
+});
 
 test("a typed question searches the project first, then the model gets the passages and the file catalog", async () => {
   const main = fakeMain();

@@ -16,6 +16,7 @@ const {
 } = require("../core/decision");
 const { speakerLabel, clip, oneLine } = require("../core/decision/buildState");
 const { isDuplicate } = require("../core/decision/duplicateGuard");
+const { judgeSufficiency } = require("../core/answer/sufficiency");
 const { createScheduler, DEFAULT_TRIGGER_CONFIG } = require("../core/trigger/scheduler");
 const { getCopilotAiConfig } = require("../config/aiDefaults");
 const { createMainModel } = require("./mainCall");
@@ -57,6 +58,7 @@ const CLOSING_BEFORE_END_MS = 3 * 60 * 1000;
 const DEFAULT_CLOSING =
   "The meeting is ending. Give me 3 to 5 short lines I can say out loud to close it: thank them, one line on what we agreed, who does what next, and ask if anything is missing.";
 const AUTO_SCORE = 0.69; // keep in step with RAG.autoScore
+const THIN_CAVEAT = "State what is not in the files.";
 const SKIP_REASON = /below_bar|cooldown|already_handled|user_speaking/;
 // The decider could not judge it (failed call, below its gate, no card kind sure enough): a real question is still worth a tap.
 const UNJUDGED = /decision_unavailable|below_gate|deliverable: none/;
@@ -419,6 +421,65 @@ function createEngine({
     });
     return { passages: r.text, files: [...new Set(r.used.map((u) => u.file))] };
   }
+  // Did the project search find enough to answer from (core/answer/sufficiency.js)? Only a search D1 asked for
+  // (spec.project; typed questions and reruns set it too) can be "none": an unasked look (projectAuto) returns
+  // passages only when something matches closely, so finding nothing there is normal. Passages the temporal
+  // router or the authoritative lookup resolved are "enough". Never throws.
+  function sufficiencyOf(job, spec, r, resolvedByTemporal) {
+    try {
+      if (resolvedByTemporal || r?.authoritative) return "enough";
+      const { minScore, minHits } = decisionCfg.sufficiency ?? DEFAULT_DECISION_CONFIG.sufficiency;
+      const used = Array.isArray(r?.used) ? r.used : [];
+      // retrieve() reports a passage's cosine as `score` and its keyword rank as `kw`: an exact-term match it
+      // kept counts as close even when its meaning scores lower (RAG.strongKeyword).
+      const hits = used.map((u) => ({
+        score:
+          u.temporal || u.authoritative
+            ? 1
+            : u.kw != null && u.kw < RAG.strongKeyword
+              ? Math.max(Number(u.score) || 0, minScore)
+              : Number(u.score),
+      }));
+      const text = r?.text ?? "";
+      const verdict = spec.project
+        ? judgeSufficiency({ project: true, passages: text, hits, minScore, minHits })
+        : text // an unasked look: only a short passage it did find can be thin
+          ? judgeSufficiency({ project: true, passages: text, hits, minScore: 0, minHits: 1 })
+          : "enough";
+      try {
+        rag.log?.({
+          event: "sufficiency",
+          id: job.id,
+          why: spec.project ? "project" : "auto",
+          verdict,
+          hits: used.length,
+          best: used.reduce((m, u) => Math.max(m, Number(u.score) || 0), 0),
+          chars: text.length,
+        });
+      } catch {
+        // a failing log never changes the card
+      }
+      return verdict;
+    } catch {
+      return "enough";
+    }
+  }
+  // "none" on a factual card D1 or the USER asked from the files: ask the USER's missing-information questions
+  // instead of inventing an answer. Never with web on (the search may find it) or on a high-effort rerun.
+  // "thin": keep the card, but have it say what the files do not cover.
+  const FACTUAL = new Set(["quick_answer", "explanation"]);
+  function withSufficiency(result, spec, verdict) {
+    if (
+      verdict === "none" &&
+      spec.project &&
+      !spec.web &&
+      !spec.deep &&
+      FACTUAL.has(spec.deliverable)
+    )
+      return { ...result, deliverable: "gap_questions" };
+    if (verdict === "thin" && result.passages) return { ...result, caveat: THIN_CAVEAT };
+    return result;
+  }
   const threadOf = (s, id) => s.threads.get(id) ?? s.threads.get(MAIN);
   function startAnswer(s, job, spec) {
     const st = liveSettings();
@@ -490,6 +551,7 @@ function createEngine({
 
               let ragResult = null;
               let resolvedByTemporal = false;
+              let sufficiency = "enough";
               if (spec.ragGate) {
                 ragResult = await gatedContext(job, spec);
               } else if ((spec.project || spec.projectAuto) && hasIndex()) {
@@ -514,6 +576,8 @@ function createEngine({
                         ? expandQuery
                         : null,
                 });
+                resolvedByTemporal = Boolean(r.temporalRouting?.passages);
+                sufficiency = sufficiencyOf(job, spec, r, resolvedByTemporal);
                 trace({
                   type: "context",
                   id: job.id,
@@ -526,8 +590,8 @@ function createEngine({
                   cost: r.cost,
                   used: r.used, // file, page/heading, cosine, keyword rank
                   passages: r.text,
+                  sufficiency,
                 });
-                resolvedByTemporal = Boolean(r.temporalRouting?.passages);
                 ragResult = {
                   text: r.text,
                   used: r.used,
@@ -562,15 +626,25 @@ function createEngine({
                   classifierVersion: routed.classification.classifier_version,
                   provenance: routed.provenance || null,
                 });
-                return { passages: routed.passages, files: routed.files };
+                // a canonical OKF document answered it: the files' own search result no longer decides
+                if (routed.okfDocId) sufficiency = "enough";
+                return withSufficiency(
+                  { passages: routed.passages, files: routed.files },
+                  spec,
+                  sufficiency
+                );
               }
 
-              return ragResult
-                ? {
-                    passages: ragResult.text || ragResult.passages || "",
-                    files: ragResult.files || [],
-                  }
-                : { passages: "", files: [] };
+              return withSufficiency(
+                ragResult
+                  ? {
+                      passages: ragResult.text || ragResult.passages || "",
+                      files: ragResult.files || [],
+                    }
+                  : { passages: "", files: [] },
+                spec,
+                sufficiency
+              );
             }
           : null,
     });

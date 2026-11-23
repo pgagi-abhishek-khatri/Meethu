@@ -827,6 +827,7 @@ function buildAnswerMessages({
   behavior = "", // learned guide on how the copilot should behave (global)
   catalog = "", // one line per indexed project file: what it holds
   passages = "", // the matching pieces of those files for this moment, already worded
+  caveat = "", // one line after the question, e.g. when the files only partly cover it
   evidenceResolution = null, // Phase 6 & 7: structured Evidence Precedence Resolver result
   temporalContext = null, // Phase 7: optional direct temporal context assembly
   budget = ANSWER_BUDGET,
@@ -885,6 +886,7 @@ function buildAnswerMessages({
   parts.push(
     `${proactive ? "Help with" : "The USER asks"}:\n${clip(oneLine(focus), budget.focus)}`
   );
+  if (caveat) parts.push(caveat);
 
   // Last line wins: the model skips the search tool unless told right where it answers.
   if (web) parts.push("Run a web search for this before you answer.");

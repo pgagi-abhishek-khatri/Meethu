@@ -54,6 +54,7 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
         ...extra,
       });
     let files = [];
+    let deliverable = job.deliverable; // `prepare` may turn a card the files cannot answer into gap questions
     let cancelled = false;
     let settled = false;
     // Without a search the model is called at once (synchronously); with one, after the passages are found.
@@ -61,8 +62,13 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
       {
         if (cancelled) return null;
         files = extra?.files ?? [];
+        if (extra?.deliverable) deliverable = extra.deliverable;
         return model({
-          messages: build({ passages: extra?.passages ?? "" }),
+          messages: build({
+            passages: extra?.passages ?? "",
+            deliverable,
+            caveat: extra?.caveat ?? "",
+          }),
           tier: job.tier,
           web: job.web,
           model: job.model,
@@ -111,6 +117,7 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
               },
               usage: r.usage,
               files, // which project files the answer was given passages from
+              ...(deliverable !== job.deliverable ? { deliverable } : {}),
             };
             if (!a.body) {
               emit({

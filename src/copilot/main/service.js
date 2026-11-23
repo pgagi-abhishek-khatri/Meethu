@@ -390,6 +390,7 @@ function createCopilot({
       catalogMode: () => retriever.catalogMode(),
       prefetch: (query) => retriever.prefetch(query, projectIds()),
       retrieve: (o) => retriever.retrieve({ ...o, projectIds: projectIds() }),
+      log: (record) => ragLog(record), // the engine's sufficiency verdict joins the search's own records
     },
     okf:
       okfRegistry && okfRouter
