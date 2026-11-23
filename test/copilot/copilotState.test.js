@@ -127,3 +127,25 @@ test("a proactive card streams into the feed, and a late SKIP takes it away agai
     false
   );
 });
+
+test("gap questions on a done card are kept, replay is idempotent, and absent gaps give []", () => {
+  const start = { type: "card_start", id: "g1", threadId: "main", web: false };
+  const done = {
+    type: "card_done",
+    id: "g1",
+    threadId: "main",
+    title: "Pricing",
+    body: "- x",
+    gaps: ["Which plan are they on?", "What is the budget?"],
+  };
+  let s = run([{ type: "session", state: "start" }, start, done, done]);
+  const cards = s.cards.filter((c) => c.id === "g1");
+  assert.equal(cards.length, 1);
+  assert.deepEqual(cards[0].gaps, ["Which plan are they on?", "What is the budget?"]);
+
+  s = run([
+    { type: "card_start", id: "g2", threadId: "main", web: false },
+    { type: "card_done", id: "g2", threadId: "main", title: "T", body: "- y" },
+  ], s);
+  assert.deepEqual(s.cards.find((c) => c.id === "g2").gaps, []);
+});

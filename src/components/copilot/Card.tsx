@@ -104,6 +104,24 @@ export default function Card({ card, onAsk, onDeeper, onFeedback }: Props) {
           ))}
         </div>
       )}
+      {card.status === "done" && !!card.gaps?.length && (
+        <div className="mt-2 flex flex-col gap-1">
+          <div className="text-[11px] text-slate-500">Ask them</div>
+          {card.gaps.map((q) => (
+            <button
+              key={q}
+              type="button"
+              title="Tap to copy"
+              onClick={() => {
+                navigator.clipboard.writeText(q).catch(() => {});
+              }}
+              className="rounded-lg border border-white/10 px-2 py-1 text-start text-[12px] text-slate-300 hover:border-emerald-400/50 hover:text-emerald-200"
+            >
+              {q}
+            </button>
+          ))}
+        </div>
+      )}
       {card.status === "done" && (
         <div className="mt-2 flex items-center gap-3 text-[11px]">
           {!card.deep && !card.deepened && !card.label && (

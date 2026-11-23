@@ -28,6 +28,7 @@ export interface Card {
   error?: string;
   feedback?: "up" | "down" | null;
   followups?: string[]; // short questions the user can tap to ask next
+  gaps?: string[]; // what to ask the other side; shown only once the card is done
   deep?: boolean; // a "Rerun with high effort" re-run
   deepened?: boolean; // a high-effort answer was already asked for this card
 }
@@ -281,6 +282,7 @@ export function reduce(state: CopilotState, e: CopilotEvent): CopilotState {
           timing: e.timing ?? null,
           truncated: !!e.truncated,
           followups: e.followups ?? [],
+          gaps: e.gaps ?? [],
         })),
       };
     case "card_error":
