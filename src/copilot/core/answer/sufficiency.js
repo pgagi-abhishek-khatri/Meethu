@@ -2,7 +2,7 @@
 // (DEFAULT_DECISION_CONFIG.sufficiency). "none": nothing matched closely enough, so a factual answer would be
 // invented; "thin": something matched but the passages are too short to be sure; "enough": answer as usual.
 // A search that did not run (project false) is "enough": nothing changes.
-const THIN_CHARS = 200;
+const THIN_CHARS = 200; // default only; the engine passes DEFAULT_DECISION_CONFIG.sufficiency.thinChars
 
 function judgeSufficiency({
   project = false,
@@ -10,13 +10,14 @@ function judgeSufficiency({
   hits = [],
   minScore = 0,
   minHits = 1,
+  thinChars = THIN_CHARS,
 } = {}) {
   if (!project) return "enough";
   const close = (Array.isArray(hits) ? hits : []).filter(
     (h) => h && Number.isFinite(h.score) && h.score >= minScore
   );
   if (close.length < Math.max(1, minHits)) return "none";
-  return String(passages ?? "").trim().length < THIN_CHARS ? "thin" : "enough";
+  return String(passages ?? "").trim().length < thinChars ? "thin" : "enough";
 }
 
 module.exports = { judgeSufficiency, THIN_CHARS };

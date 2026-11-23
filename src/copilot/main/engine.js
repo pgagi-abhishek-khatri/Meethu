@@ -428,7 +428,8 @@ function createEngine({
   function sufficiencyOf(job, spec, r, resolvedByTemporal) {
     try {
       if (resolvedByTemporal || r?.authoritative) return "enough";
-      const { minScore, minHits } = decisionCfg.sufficiency ?? DEFAULT_DECISION_CONFIG.sufficiency;
+      const { minScore, minHits, thinChars } =
+        decisionCfg.sufficiency ?? DEFAULT_DECISION_CONFIG.sufficiency;
       const used = Array.isArray(r?.used) ? r.used : [];
       // retrieve() reports a passage's cosine as `score` and its keyword rank as `kw`: an exact-term match it
       // kept counts as close even when its meaning scores lower (RAG.strongKeyword).
@@ -441,11 +442,20 @@ function createEngine({
               : Number(u.score),
       }));
       const text = r?.text ?? "";
-      const verdict = spec.project
-        ? judgeSufficiency({ project: true, passages: text, hits, minScore, minHits })
+      let verdict = spec.project
+        ? judgeSufficiency({ project: true, passages: text, hits, minScore, minHits, thinChars })
         : text // an unasked look: only a short passage it did find can be thin
-          ? judgeSufficiency({ project: true, passages: text, hits, minScore: 0, minHits: 1 })
+          ? judgeSufficiency({
+              project: true,
+              passages: text,
+              hits,
+              minScore: 0,
+              minHits: 1,
+              thinChars,
+            })
           : "enough";
+      // "none" means nothing was sent: a passage the search kept (cosine >= RAG.floor) below the bar is thin.
+      if (verdict === "none" && text.trim()) verdict = "thin";
       try {
         rag.log?.({
           event: "sufficiency",
@@ -472,12 +482,16 @@ function createEngine({
     if (
       verdict === "none" &&
       spec.project &&
+      spec.proactive && // a question the USER asked is always answered, never turned into gap questions
       !spec.web &&
       !spec.deep &&
       FACTUAL.has(spec.deliverable)
     )
       return { ...result, deliverable: "gap_questions" };
-    if (verdict === "thin" && result.passages) return { ...result, caveat: THIN_CAVEAT };
+    if (verdict === "none" && spec.project && !spec.proactive)
+      return { ...result, caveat: THIN_CAVEAT };
+    if (verdict === "thin" && result.passages && FACTUAL.has(spec.deliverable))
+      return { ...result, caveat: THIN_CAVEAT };
     return result;
   }
   const threadOf = (s, id) => s.threads.get(id) ?? s.threads.get(MAIN);

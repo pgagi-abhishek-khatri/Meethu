@@ -757,13 +757,15 @@ function fakeRag({ index = true, result = null } = {}) {
 const EMPTY_RETRIEVAL = { text: "", used: [], skipped: "no_match", ms: 9 };
 const GAP_PROMPT = /Do not answer\. Name what is missing/;
 
-test("sufficiency: a search D1 asked for that finds nothing turns a factual card into gap questions", async () => {
+test("sufficiency: a search D1 asked for that finds nothing turns a proactive factual card into gap questions", async () => {
   const main = fakeMain();
   const rag = fakeRag({ result: EMPTY_RETRIEVAL });
-  const { events, service } = setup({}, main, { rag });
-  service.ask({ text: "What is the refund period in the contract?" });
+  const { clock, events, service } = setup({}, main, { rag });
+  say(service, "system", "What does the contract say about the refund period?");
+  await clock.advance(5000);
   await tick();
   assert.equal(rag.calls.retrieve.length, 1);
+  assert.equal(rag.calls.retrieve[0].why, "decider", "D1 said the files are needed");
   assert.equal(main.calls.length, 1);
   assert.match(main.calls[0].messages[0].content, GAP_PROMPT, "the prompt asks for gap questions");
   main.calls[0].finish(
@@ -774,6 +776,40 @@ test("sufficiency: a search D1 asked for that finds nothing turns a factual card
   assert.deepEqual(done.gaps, ["What refund period did you agree?", "Is it from delivery or invoice?"]);
   assert.equal(done.deliverable, "gap_questions");
   assert.ok(rag.calls.log.some((r) => r.event === "sufficiency" && r.verdict === "none"));
+});
+
+test("sufficiency: a typed question the files cannot answer is still answered, with the caveat", async () => {
+  const main = fakeMain();
+  const rag = fakeRag({ result: EMPTY_RETRIEVAL });
+  const { events, service } = setup({}, main, { rag });
+  service.ask({ text: "What is the refund period in the contract?" });
+  await tick();
+  assert.equal(main.calls.length, 1);
+  assert.doesNotMatch(main.calls[0].messages[0].content, GAP_PROMPT, "stays a quick answer");
+  assert.match(main.calls[0].messages[1].content, /State what is not in the files\./);
+  main.calls[0].finish();
+  await tick();
+  assert.equal(events.find((e) => e.type === "card_done").deliverable, undefined);
+});
+
+test("sufficiency: a kept passage below the bar is thin, never a gap card", async () => {
+  const main = fakeMain();
+  const rag = fakeRag({
+    result: {
+      text: "Passages from the USER's project files:\n\n[contract.pdf · p.4]\nRefunds within 14 days.",
+      used: [{ file: "contract.pdf", where: "p.4", score: 0.62, kw: null }],
+      skipped: null,
+      ms: 12,
+    },
+  });
+  const { clock, service } = setup({}, main, { rag });
+  say(service, "system", "What does the contract say about the refund period?");
+  await clock.advance(5000);
+  await tick();
+  assert.equal(rag.calls.retrieve[0].why, "decider");
+  assert.doesNotMatch(main.calls[0].messages[0].content, GAP_PROMPT);
+  assert.match(main.calls[0].messages[1].content, /State what is not in the files\./);
+  assert.ok(rag.calls.log.some((r) => r.event === "sufficiency" && r.verdict === "thin"));
 });
 
 test("sufficiency: a short matching passage keeps the answer and asks to say what the files lack", async () => {
