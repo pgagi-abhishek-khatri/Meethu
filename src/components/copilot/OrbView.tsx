@@ -1,3 +1,4 @@
+import { Pause, X } from "../icons";
 import MarkdownRenderer from "../ui/MarkdownRenderer";
 import type { Card } from "./copilotState";
 import { useLevel } from "./levelStore";
@@ -35,6 +36,7 @@ export function Orb({
   unseen,
   skipped,
   live,
+  paused = false,
   onHover,
   onOpen,
 }: {
@@ -42,6 +44,7 @@ export function Orb({
   unseen: number; // finished cards not looked at yet
   skipped: number;
   live: boolean;
+  paused?: boolean;
   onHover: () => void;
   onOpen: () => void;
 }) {
@@ -53,7 +56,7 @@ export function Orb({
       <button
         type="button"
         style={NO_DRAG}
-        title="Open the copilot"
+        title={paused ? "Copilot is paused (click to open)" : "Open the copilot"}
         onMouseEnter={onHover}
         onClick={onOpen}
         className={`relative flex h-9 w-9 items-center justify-center rounded-full ${
@@ -61,12 +64,14 @@ export function Orb({
             ? "animate-pulse bg-emerald-400 text-slate-900"
             : busy
               ? "animate-pulse bg-sky-400/80 text-slate-900"
-              : live
-                ? "bg-emerald-500/30 text-emerald-100"
-                : "bg-white/10 text-slate-300"
+              : paused
+                ? "border border-amber-400/40 bg-amber-500/20 text-amber-300"
+                : live
+                  ? "bg-emerald-500/30 text-emerald-100"
+                  : "bg-white/10 text-slate-300"
         }`}
       >
-        <Listening live={live} />
+        {paused ? <Pause className="h-4 w-4" fill="currentColor" /> : <Listening live={live} />}
         {(unseen > 0 || skipped > 0) && (
           <span className="absolute -end-1 -top-1 min-w-4 rounded-full bg-rose-500 px-1 text-center text-[9px] font-semibold leading-4 text-white">
             {unseen || skipped}
@@ -109,9 +114,10 @@ export function Peek({
           type="button"
           style={NO_DRAG}
           onClick={onClose}
-          className="text-slate-500 hover:text-slate-100"
+          className="rounded p-0.5 text-slate-500 hover:text-slate-100"
+          title="Close peek"
         >
-          ×
+          <X size={12} />
         </button>
       </div>
       <button

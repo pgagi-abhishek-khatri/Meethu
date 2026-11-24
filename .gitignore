@@ -337,3 +337,5 @@ scripts/run*3DocPipeline.js
 scripts/copilot/reverify-e2e-live.mjs
 scripts/testLiveEvolutionWithActualData.js
 test/copilot/*PdfPrecedence.test.js
+docs/superpowers/
+docs/copilot

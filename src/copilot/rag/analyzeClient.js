@@ -14,6 +14,7 @@ function createAnalyzer({
   baseUrl,
   fetchImpl,
   sleep,
+  cfg = RAG,
 } = {}) {
   const slots = pool(concurrency);
   const http = { apiKey, baseUrl, fetchImpl, sleep, timeoutMs: 180000 };
@@ -106,16 +107,64 @@ function createAnalyzer({
     },
     // 2-3 plain sentences: what the file is and what it holds, so a model can tell whether to look inside.
     async summarize({ name, kind, text }) {
-      const r = await ask(
+      const s = String(text ?? "");
+      const partLimit = cfg.summaryPartChars ?? 400_000;
+      const maxWords = cfg.summaryMaxWords ?? 60;
+
+      if (s.length <= partLimit) {
+        const r = await ask(
+          [
+            {
+              type: "text",
+              text: `File: ${name} (${kind})\n\nContent:\n${s}\n\nWrite at most ${maxWords} words in plain English: what this file is, what it contains (the main topics, names and numbers worth knowing), and when it would be useful in a meeting. No preamble, no bullet points.`,
+            },
+          ],
+          { maxTokens: 300 }
+        );
+        return { ...r, summary: r.text.replace(/\s+/g, " ").slice(0, 500) };
+      }
+
+      // Map-reduce over parts split at heading/paragraph boundaries
+      const parts = splitSummaryParts(s, partLimit);
+      let totalTokens = 0;
+      let totalCost = 0;
+
+      const partSummaries = [];
+      for (let i = 0; i < parts.length; i++) {
+        const r = await ask(
+          [
+            {
+              type: "text",
+              text: `File: ${name} (${kind})\nPart ${i + 1} of ${parts.length}\n\nContent:\n${parts[i]}\n\nWrite at most ${Math.round(maxWords * 0.8)} words in plain English: what this part covers, key topics, names and numbers worth knowing. No preamble, no bullet points.`,
+            },
+          ],
+          { maxTokens: 250 }
+        );
+        totalTokens += r.tokens || 0;
+        totalCost += r.cost || 0;
+        partSummaries.push(r.text.trim());
+      }
+
+      const reducePrompt = `File: ${name} (${kind})\nBelow are summaries of the file's ${parts.length} parts, in order:\n\n${partSummaries.map((ps, i) => `--- Part ${i + 1} ---\n${ps}`).join("\n\n")}\n\nWrite at most ${maxWords} words in plain English: what this file is, what it contains (the main topics, names and numbers worth knowing across all parts), and when it would be useful in a meeting. No preamble, no bullet points.`;
+
+      const reduceRes = await ask(
         [
           {
             type: "text",
-            text: `File: ${name} (${kind})\n\nContent (may be cut):\n${String(text).slice(0, 50000)}\n\nWrite at most 60 words in plain English: what this file is, what it contains (the main topics, names and numbers worth knowing), and when it would be useful in a meeting. No preamble, no bullet points.`,
+            text: reducePrompt,
           },
         ],
         { maxTokens: 300 }
       );
-      return { ...r, summary: r.text.replace(/\s+/g, " ").slice(0, 500) };
+      totalTokens += reduceRes.tokens || 0;
+      totalCost += reduceRes.cost || 0;
+
+      return {
+        ...reduceRes,
+        summary: reduceRes.text.replace(/\s+/g, " ").slice(0, 500),
+        tokens: totalTokens,
+        cost: totalCost,
+      };
     },
   };
 }
@@ -138,4 +187,32 @@ function parseTimed(text, offset = 0) {
   return out;
 }
 
-module.exports = { createAnalyzer, parseTimed, mmss };
+// Splits long text on paragraph / heading boundaries into parts under maxChars
+function splitSummaryParts(text, maxChars) {
+  const paragraphs = String(text ?? "").split(/\n\s*\n/);
+  const parts = [];
+  let cur = "";
+
+  for (const p of paragraphs) {
+    if (!p.trim()) continue;
+    if (cur && cur.length + p.length + 2 > maxChars) {
+      parts.push(cur.trim());
+      cur = "";
+    }
+    if (p.length > maxChars) {
+      if (cur) {
+        parts.push(cur.trim());
+        cur = "";
+      }
+      for (let i = 0; i < p.length; i += maxChars) {
+        parts.push(p.slice(i, i + maxChars).trim());
+      }
+    } else {
+      cur = cur ? `${cur}\n\n${p}` : p;
+    }
+  }
+  if (cur.trim()) parts.push(cur.trim());
+  return parts.length ? parts : [String(text ?? "")];
+}
+
+module.exports = { createAnalyzer, parseTimed, splitSummaryParts, mmss };

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2 } from "../icons";
+import { ChevronRight, Loader2, FileText } from "../icons";
 import MarkdownRenderer from "../ui/MarkdownRenderer";
 import type { Card as CardData } from "./copilotState";
 
@@ -11,14 +11,31 @@ const host = (url: string) => {
   }
 };
 
+const docBasename = (p: string) => {
+  if (!p) return "";
+  const parts = p.replace(/\\/g, "/").split("/");
+  return parts[parts.length - 1] || p;
+};
+
 interface Props {
   card: CardData;
   onAsk: (text: string) => void; // a tapped follow-up question
   onDeeper: () => void; // ask again on the high-effort model and its tools
   onFeedback: (value: "down" | null) => void; // "not helpful" (or undo)
+  onDismissCard?: () => void; // skip/hide card for now
+  onSkipFollowups?: () => void; // skip follow-up questions
+  onSkipGaps?: () => void; // skip gap questions
 }
 
-export default function Card({ card, onAsk, onDeeper, onFeedback }: Props) {
+export default function Card({
+  card,
+  onAsk,
+  onDeeper,
+  onFeedback,
+  onDismissCard,
+  onSkipFollowups,
+  onSkipGaps,
+}: Props) {
   const [openSource, setOpenSource] = useState<number | null>(null);
   const [copied, setCopied] = useState<{ text: string; ok: boolean } | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -43,6 +60,19 @@ export default function Card({ card, onAsk, onDeeper, onFeedback }: Props) {
     copyTimer.current = setTimeout(() => setCopied(null), 1500);
   };
   const working = card.status === "queued" || card.status === "searching";
+
+  const docSources: string[] = [];
+  if (card.attachmentName && !docSources.includes(card.attachmentName)) {
+    docSources.push(card.attachmentName);
+  }
+  if (Array.isArray(card.files)) {
+    for (const f of card.files) {
+      const name = typeof f === "string" ? f : (f as any)?.name || (f as any)?.file || "";
+      if (name && !docSources.includes(name)) {
+        docSources.push(name);
+      }
+    }
+  }
 
   return (
     <article
@@ -83,9 +113,20 @@ export default function Card({ card, onAsk, onDeeper, onFeedback }: Props) {
         <Loader2 size={14} className="mt-2 animate-spin text-slate-500" />
       )}
 
-      {!!card.sources?.length && (
-        <ul className="mt-2 flex flex-wrap gap-1.5">
-          {card.sources.slice(0, 3).map((s, i) => (
+      {(docSources.length > 0 || !!card.sources?.length) && (
+        <ul className="mt-2 flex flex-wrap items-center gap-1.5">
+          {docSources.map((doc, i) => (
+            <li key={doc + i}>
+              <span
+                title={`From document: ${doc}`}
+                className="inline-flex items-center gap-1 rounded-md border border-sky-400/20 bg-sky-400/10 px-1.5 py-0.5 text-[11px] font-medium text-sky-300"
+              >
+                <FileText size={11} className="shrink-0 text-sky-400" />
+                <span className="truncate max-w-[180px]">From: {docBasename(doc)}</span>
+              </span>
+            </li>
+          ))}
+          {card.sources?.slice(0, 3).map((s, i) => (
             <li key={s.url + i}>
               <button
                 type="button"
@@ -112,8 +153,20 @@ export default function Card({ card, onAsk, onDeeper, onFeedback }: Props) {
         </div>
       )}
 
-      {card.status === "done" && !!card.followups?.length && (
+      {card.status === "done" && !card.skippedFollowups && !!card.followups?.length && (
         <div className="mt-2 flex flex-col gap-1">
+          <div className="flex items-center justify-between text-[11px] text-slate-500">
+            <span>Suggested follow-ups</span>
+            {onSkipFollowups && (
+              <button
+                type="button"
+                onClick={onSkipFollowups}
+                className="hover:text-slate-300"
+              >
+                Skip for now
+              </button>
+            )}
+          </div>
           {card.followups.map((q) => (
             <button
               key={q}
@@ -126,9 +179,20 @@ export default function Card({ card, onAsk, onDeeper, onFeedback }: Props) {
           ))}
         </div>
       )}
-      {card.status === "done" && !!card.gaps?.length && (
+      {card.status === "done" && !card.skippedGaps && !!card.gaps?.length && (
         <div className="mt-2 flex flex-col gap-1">
-          <div className="text-[11px] text-slate-500">Ask them</div>
+          <div className="flex items-center justify-between text-[11px] text-slate-500">
+            <span>Ask them</span>
+            {onSkipGaps && (
+              <button
+                type="button"
+                onClick={onSkipGaps}
+                className="hover:text-slate-300"
+              >
+                Skip for now
+              </button>
+            )}
+          </div>
           {card.gaps.map((q) => (
             <button
               key={q}
@@ -153,9 +217,20 @@ export default function Card({ card, onAsk, onDeeper, onFeedback }: Props) {
             <button
               type="button"
               onClick={onDeeper}
-              className="text-slate-500 hover:text-emerald-300"
+              className="flex items-center gap-0.5 text-slate-500 hover:text-emerald-300"
             >
-              Rerun with high effort ›
+              <span>Rerun with high effort</span>
+              <ChevronRight size={11} />
+            </button>
+          )}
+          {onDismissCard && (
+            <button
+              type="button"
+              onClick={onDismissCard}
+              title="Hide this card for now"
+              className="text-slate-500 hover:text-slate-300"
+            >
+              Skip for now
             </button>
           )}
           <button

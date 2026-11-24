@@ -9,8 +9,10 @@ const {
   renderForDecider,
   renderForAnswer,
   renderForWriter,
+  PROFILE_VERSION,
 } = require("../../src/copilot/rag/profile");
 const { buildProfile } = require("../../src/copilot/rag/profileBuilder");
+const { backfillProfiles } = require("../../src/copilot/rag/profileBackfill");
 const { createRetriever } = require("../../src/copilot/rag/retrieve");
 const { checkProjectNeed, decide } = require("../../src/copilot/core/decision");
 
@@ -226,4 +228,89 @@ test("two calls: the card call has no file question; the gate asks only for the 
   });
   assert.equal(failed.need, false);
   assert.equal(failed.error, "timeout");
+});
+
+test("backfillProfiles builds profile and profile_v for stale files from stored chunks", async () => {
+  const stale = [
+    { id: 1, project_id: 10, name: "spec.pdf", kind: "pdf" },
+    { id: 2, project_id: 10, name: "notes.txt", kind: "text" },
+  ];
+  const setFileCalls = [];
+  const fakeRag = {
+    staleProfiles: (v) => (v === PROFILE_VERSION ? stale : []),
+    fileChunks: (fileId) => [
+      { text: `Content for file ${fileId} with numbers 100`, meta: { page: 1 } },
+    ],
+    setFile: (id, patch) => setFileCalls.push({ id, patch }),
+  };
+
+  const ask = async () => ({
+    text: JSON.stringify({
+      brief: "A test document.",
+      abstract: "Summary of content.",
+      topics: [{ name: "Topic", pages: "1", covers: "Details" }],
+      facts: [{ text: "Price is 100", page: 1 }],
+      terms: ["Test"],
+      useWhen: "testing",
+    }),
+    tokens: 200,
+    cost: 0.002,
+    finish: "stop",
+  });
+
+  const res = await backfillProfiles({ rag: fakeRag, ask });
+  assert.equal(res.done, 2);
+  assert.equal(res.failed, 0);
+  assert.equal(setFileCalls.length, 2);
+  assert.equal(setFileCalls[0].id, 1);
+  assert.equal(setFileCalls[0].patch.profile_v, PROFILE_VERSION);
+  assert.ok(setFileCalls[0].patch.profile.includes("Price is 100"));
+});
+
+test("one failing file is logged and the rest continue in backfillProfiles", async () => {
+  const stale = [
+    { id: 1, project_id: 10, name: "bad.pdf", kind: "pdf" },
+    { id: 2, project_id: 10, name: "good.txt", kind: "text" },
+  ];
+  const logged = [];
+  const setFileCalls = [];
+  const fakeRag = {
+    staleProfiles: () => stale,
+    fileChunks: () => [{ text: "Content with 50", meta: { page: 1 } }],
+    setFile: (id, patch) => setFileCalls.push({ id, patch }),
+  };
+
+  let callCount = 0;
+  const ask = async () => {
+    callCount++;
+    if (callCount === 1) throw new Error("LLM failure");
+    return {
+      text: JSON.stringify({
+        brief: "Good doc.",
+        abstract: "Good abstract.",
+        topics: [],
+        facts: [{ text: "Value is 50", page: 1 }],
+        terms: [],
+        useWhen: "testing",
+      }),
+      tokens: 100,
+      cost: 0.001,
+      finish: "stop",
+    };
+  };
+
+  const res = await backfillProfiles({
+    rag: fakeRag,
+    ask,
+    log: (e) => logged.push(e),
+  });
+
+  assert.equal(res.done, 1);
+  assert.equal(res.failed, 1);
+  assert.equal(setFileCalls.length, 1);
+  assert.equal(setFileCalls[0].id, 2);
+  const failedEvents = logged.filter((e) => e.event === "profile_backfill_failed");
+  assert.equal(failedEvents.length, 1);
+  assert.equal(failedEvents[0].file_id, 1);
+  assert.equal(failedEvents[0].error, "LLM failure");
 });

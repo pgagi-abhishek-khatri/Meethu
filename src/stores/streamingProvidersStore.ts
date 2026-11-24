@@ -28,7 +28,11 @@ export async function fetchProviders(): Promise<NoteRecordingConfigResult | null
       const data = await window.electronAPI.getNoteRecordingConfig!();
       if (!data) return null;
       if (data.success === false) {
-        logger.warn("Failed to fetch note recording providers", data, "streamingProviders");
+        if (data.error === "OpenWhispr API URL not configured") {
+          logger.debug("Note recording config skipped: API not configured", data, "streamingProviders");
+        } else {
+          logger.warn("Failed to fetch note recording providers", data, "streamingProviders");
+        }
         return data;
       }
       const providers = Array.isArray(data.providers) ? data.providers : [];
@@ -40,7 +44,11 @@ export async function fetchProviders(): Promise<NoteRecordingConfigResult | null
         success: false,
         error: err instanceof Error ? err.message : String(err),
       };
-      logger.warn("Failed to fetch note recording providers", err, "streamingProviders");
+      if (failure.error === "OpenWhispr API URL not configured") {
+        logger.debug("Note recording config skipped: API not configured", err, "streamingProviders");
+      } else {
+        logger.warn("Failed to fetch note recording providers", err, "streamingProviders");
+      }
       return failure;
     } finally {
       inFlight = null;

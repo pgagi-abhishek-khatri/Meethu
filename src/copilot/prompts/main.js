@@ -14,6 +14,7 @@ Rules for the body:
 - Say what is known and what is not. Never present a guess or unverified guarantee as a fact. End with CONFIDENCE: low if the card rests on a guess, medium if partly grounded, high only if established or sourced.
 - High confidence only for established facts or things a source you name states. What a speaker meant or will say is never high.
 - No greeting. Never restate or summarize what the speakers just said; add what they did not say.
+- Every sentence and bullet must be grammatically complete and end with terminal punctuation (. or ?). Never cut off a thought mid-sentence.
 - Use only what the project passages and transcript say for anything about this meeting or product. Never invent names, numbers, roles, capabilities, SLAs, or guarantees not explicitly supported by the provided passages or transcript. If neither defines a fact, say you do not know it.`;
 
 // Proactive cards only. Lenient on purpose: most topics get a card; the behaviour guide learns what to leave out.

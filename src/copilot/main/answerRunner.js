@@ -3,6 +3,10 @@
 // every call can be cancelled.
 const { buildAnswerMessages } = require("../core/answer/contextPack");
 const { parseAnswer } = require("../core/answer/parseAnswer");
+const {
+  ensureSentenceCompletion,
+  ensureQuestionCompletion,
+} = require("../core/answer/sentenceCompletion");
 
 // True while a proactive answer could still be a SKIP: nothing yet, or a prefix of "SKIP" ("S", "SK", "SKI").
 // Text that starts with SKIP itself is caught by parseAnswer.
@@ -29,16 +33,24 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
       auto: job.auto,
       deep: job.deep,
       of: job.of,
+      attachmentName: job.attachmentName,
     };
     // A proactive card may turn out to be a SKIP, so it appears only once its first words are known
     // (a web card shows "searching" at once: its wait is long and the user should see work happening).
     let started = false;
     let firstVisibleMs = null; // when the card first reached the window (latency report)
+    let files = job.attachmentName ? [job.attachmentName] : [];
     const start = () => {
       if (started) return;
       started = true;
       firstVisibleMs = now() - t0;
-      emit({ type: "card_start", ...base, focus: job.focus });
+      emit({
+        type: "card_start",
+        ...base,
+        focus: job.focus,
+        attachmentName: job.attachmentName,
+        files: files.length ? files : (job.attachmentName ? [job.attachmentName] : []),
+      });
     };
     if (!job.proactive || job.web) start();
     // `prepare` (the project search) runs first and adds `passages`; the build and the model call follow.
@@ -53,7 +65,6 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
         ...job.context,
         ...extra,
       });
-    let files = [];
     let deliverable = job.deliverable; // `prepare` may turn a card the files cannot answer into gap questions
     let cancelled = false;
     let settled = false;
@@ -61,7 +72,10 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
     const go = (extra) => {
       {
         if (cancelled) return null;
-        files = extra?.files ?? [];
+        const extraFiles = extra?.files ?? [];
+        files = Array.from(
+          new Set([...(job.attachmentName ? [job.attachmentName] : []), ...extraFiles])
+        );
         if (extra?.deliverable) deliverable = extra.deliverable;
         return model({
           messages: build({
@@ -82,7 +96,13 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
             // (Also for a web card that is already shown: "SK" on its way to "SKIP" is never displayed.)
             if (job.proactive && maybeSkip(text)) return;
             start();
-            emit({ type: "card_update", id: job.id, ...a });
+            emit({
+              type: "card_update",
+              id: job.id,
+              ...a,
+              attachmentName: job.attachmentName,
+              files,
+            });
           },
         })
           .then(async (r) => {
@@ -100,12 +120,15 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
               return { skipped: true, reason: a.reason };
             }
             start();
+            const body = ensureSentenceCompletion(a.body);
+            const followups = (a.followups ?? []).map(ensureQuestionCompletion).filter(Boolean);
+            const gaps = (a.gaps ?? []).map(ensureQuestionCompletion).filter(Boolean);
             const card = {
               id: job.id,
               title: a.title,
-              body: a.body,
-              followups: a.followups ?? [],
-              gaps: a.gaps ?? [],
+              body,
+              followups,
+              gaps,
               confidence: a.confidence ?? "low", // an asked card with no label is not trusted
               truncated: r.finishReason === "length",
               sources: r.sources,
@@ -117,9 +140,10 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
               },
               usage: r.usage,
               files, // which project files the answer was given passages from
+              attachmentName: job.attachmentName,
               ...(deliverable !== job.deliverable ? { deliverable } : {}),
             };
-            if (!a.body) {
+            if (!a.body || !body) {
               emit({
                 type: "card_error",
                 id: job.id,

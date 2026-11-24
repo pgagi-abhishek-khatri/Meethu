@@ -404,6 +404,7 @@ class AudioActivityDetector extends EventEmitter {
     });
 
     child.on("exit", (code) => {
+      if (!this._running || this._listenerProcess !== child) return;
       debugLogger.warn(`${label} exited`, { code }, "meeting");
       fallbackToPolling();
     });

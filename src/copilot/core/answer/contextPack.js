@@ -182,7 +182,6 @@ function buildEvidenceBanner(item, options = {}) {
 
   const lines = [
     "========================================================",
-    `[AUTHORITATIVE EVIDENCE]`,
     `[AUTHORITATIVE EVIDENCE: ${classification}]`,
     "",
     `Feature: ${featName}`,

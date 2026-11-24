@@ -1,3 +1,5 @@
+> **Updated (2026-11-24).** See Section 15 for the 2026-11 update: stricter policy (`answerable`, `already_answered`, `gap`), deterministic duplicate guard (`isDuplicate`), RAG sufficiency checks, gap questions deliverable, and rolling summary extras.
+>
 > **Superseded in part (2026-10-08).** The decider is now ONE call per decision with a few questions
 > (`act`, `asked_of_assistant`, `complete`, `relation`, `kind`, `needs_*`), the last ~20 lines of transcript plus
 > the whole rolling summary as context, and no moment labels, gate/full split, threads or depth. See
@@ -217,3 +219,33 @@ Direct access (skipping OpenRouter): NOT measured, because it needs a TypeSafe/L
 -------------------------------------------------------------------------------
 Default summary model: deepseek/deepseek-v4.1-flash:nitro (COPILOT_SUMMARY_MODEL to change). It is a REASONING model: with a small output cap it spends every token thinking and returns an EMPTY summary unless reasoning is disabled; the client sends reasoning:{enabled:false} for DeepSeek models (measured 0.5-1.1 s, 43 output tokens, a denser summary than gemini-3.5-flash-lite, which took about 1.0-1.2 s).
 Catch-up when the transcript grows faster than the summary: backlog is folded in chunks of at most 24 lines / 3000 characters, oldest first, chained immediately (up to 4 calls) instead of waiting 20 s. If the backlog exceeds 60 segments, the oldest are SKIPPED (a recorded gap: stats.gaps / segmentsSkipped), only the newest chunk is summarized and the model is told lines were skipped, so it does not invent them.
+
+-------------------------------------------------------------------------------
+15. 2026-11 UPDATE: STRICTER POLICY, DUPLICATE GUARD, GAP CARDS & SUMMARY EXTRAS
+-------------------------------------------------------------------------------
+Implemented and verified across 145 unit tests:
+
+1. New Decider Questions (`questions.js`, `interpret.js`):
+   - `answerable` (noul): Is new_text a question or claim that a short factual answer would resolve?
+   - `already_answered` (noul, asked only if cards exist): Did a card in `cards` already answer the same need, in any wording?
+   - `gap` (noul): Is key information the answer would depend on missing from new_text, summary and context?
+   - Policy: `alreadyAnswered >= 0.7` -> skip; `answerable < 0.5 && gap < 0.6` -> wait (`not_answerable`); `gap >= 0.6 && answerable < 0.5` -> run with `deliverable: "gap_questions"`. Explicit user asks bypass these gates. `actThreshold.normal` raised from 0.3 to 0.45.
+
+2. Deterministic Duplicate Guard (`duplicateGuard.js`, `engine.js`):
+   - Pure code similarity check running before decisions spend cards.
+   - Compares content words (stop words dropped, digits preserved, "cost" mapped to "price") using Jaccard overlap >= 0.6 against recent cards within 300s window and asked questions.
+   - `s.cards` in `engine.js` retains the last `MAX_CARD_MEMORY = 6` cards with title/body for the guard.
+
+3. RAG Sufficiency Check (`sufficiency.js`, `engine.js`):
+   - Pure check: `judgeSufficiency({ project, passages, hits, minScore, minHits, thinChars })` returns `"enough" | "thin" | "none"`.
+   - When a project search returns `"none"` on a factual decision, it converts to `deliverable: "gap_questions"` rather than inventing an answer.
+   - When `"thin"`, appends a caveat instructing the answer model to state what is missing.
+
+4. Gap Questions Card Deliverable & UI (`prompts/main.js`, `parseAnswer.js`, `copilotState.ts`, `Card.tsx`):
+   - Prompt format instructs the model not to answer, describe what is missing in bullets, and output `GAPS: <q1> | <q2>` with up to 2 concise client-facing questions (max 14 words).
+   - Parsed into `gaps: string[]` on the card object.
+   - UI renders a dedicated "Ask them" button list with tap-to-copy functionality and visual copy feedback.
+
+5. Summary Integration (`rollingSummary.js`, `engine.js`):
+   - Rolling summary accepts `extras: { cards, gaps }` and appends clipped "Facts already shown from the project files:" and "Still unanswered:" sections (max 600 chars each) to keep context coherent.
+

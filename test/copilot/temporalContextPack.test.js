@@ -421,3 +421,14 @@ test("TEST 10: Backward compatibility with legacy plain-string passages and buil
   assert.match(formatted, /\[AUTHORITATIVE EVIDENCE: CANONICAL SPECIFICATION\]/);
   assert.match(formatted, /Version: 2\.0\.0/);
 });
+
+test("each authoritative item has exactly one [AUTHORITATIVE EVIDENCE...] banner line", () => {
+  const resolution = resolveEvidence([chunkV2], { intent: "CURRENT_STATE" });
+  const assembled = assembleTemporalContext({ resolution, intent: "CURRENT_STATE" });
+  const bannerLines = assembled.text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith("[AUTHORITATIVE EVIDENCE"));
+  assert.equal(bannerLines.length, 1);
+  assert.equal(bannerLines[0], "[AUTHORITATIVE EVIDENCE: CANONICAL SPECIFICATION]");
+});

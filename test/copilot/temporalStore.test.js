@@ -984,3 +984,23 @@ test("inserting a registered feature_id does not log", sqlite, () => {
   assert.deepEqual(records, []);
   db.close();
 });
+
+test("corrupt meta JSON yields {} and logs corrupt_meta", sqlite, () => {
+  const db = new Database(":memory:");
+  createRagStore(db);
+  const records = [];
+  const temporal = createTemporalStore(db, {
+    log: (r) => records.push(r),
+  });
+
+  const c = temporal.insertTemporalChunk(chunkFor("feat:corrupt", 0));
+  db.prepare("UPDATE copilot_chunks SET meta = '{corrupt-json' WHERE id = ?").run(c.id);
+
+  const chunks = temporal.getActiveFeatureChunks(10, "feat:corrupt");
+  assert.equal(chunks.length, 1);
+  assert.deepEqual(chunks[0].meta, {});
+  assert.equal(records.length, 1);
+  assert.equal(records[0].event, "corrupt_meta");
+  assert.equal(records[0].chunk_id, c.id);
+  db.close();
+});

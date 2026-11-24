@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { X } from "../icons";
+import { ChevronDown, ChevronUp, Pause, Play, X } from "../icons";
 import type { CopilotState, Skipped } from "./copilotState";
 
 // The AI account refuses every call: say so plainly and point at the fix.
@@ -37,30 +37,73 @@ export const speakerName = (label: string) => {
 };
 
 // Top strip: Listening / Thinking with the last words heard. Tap it to see the meeting memory.
-export function LiveStrip({ state }: { state: CopilotState }) {
+export function LiveStrip({
+  state,
+  onTogglePause,
+}: {
+  state: CopilotState;
+  onTogglePause?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   if (state.phase !== "live") return null;
   const last = state.partial ?? state.segments.at(-1);
   const who = last?.text ? `${speakerName(last.label)}: ` : "";
+  const isPaused = !!state.paused;
   return (
     <div className="border-b border-white/10">
-      <button
-        type="button"
-        title={state.summary ? "Show what the copilot remembers" : undefined}
-        onClick={() => state.summary && setOpen(!open)}
-        className="flex w-full items-center gap-2 px-3 py-1.5 text-start text-[11px] text-slate-400"
-      >
-        <span
-          className={`h-1.5 w-1.5 shrink-0 rounded-full ${state.busy ? "animate-pulse bg-sky-400" : "bg-emerald-400"}`}
-        />
-        <span className="shrink-0 text-slate-300">{state.busy ? "Thinking" : "Listening"}</span>
-        <span className="min-w-0 flex-1 truncate italic text-slate-500">
-          {last?.text ? `${who}“${tail(last.text)}”` : ""}
-        </span>
-        {state.summary && (
-          <span className="shrink-0 rounded-full bg-white/10 px-1.5 text-slate-400">memory</span>
+      <div className="flex w-full items-center justify-between px-3 py-1.5 text-[11px] text-slate-400">
+        <button
+          type="button"
+          title={state.summary ? "Show what the copilot remembers" : undefined}
+          onClick={() => state.summary && setOpen(!open)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-start"
+        >
+          {isPaused ? (
+            <Pause className="h-3 w-3 shrink-0 text-amber-400" />
+          ) : (
+            <span
+              className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                state.busy
+                  ? "animate-pulse bg-sky-400"
+                  : "bg-emerald-400"
+              }`}
+            />
+          )}
+          <span className={`shrink-0 ${isPaused ? "font-medium text-amber-300" : "text-slate-300"}`}>
+            {isPaused ? "Paused" : state.busy ? "Thinking" : "Listening"}
+          </span>
+          <span className="min-w-0 flex-1 truncate italic text-slate-500">
+            {!isPaused && last?.text ? `${who}“${tail(last.text)}”` : ""}
+          </span>
+          {state.summary && (
+            <span className="shrink-0 rounded-full bg-white/10 px-1.5 text-slate-400">memory</span>
+          )}
+        </button>
+        {onTogglePause && (
+          <button
+            type="button"
+            onClick={onTogglePause}
+            title={isPaused ? "Resume proactive listening" : "Pause proactive listening"}
+            className={`ms-2 flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium transition-colors ${
+              isPaused
+                ? "border border-amber-400/40 bg-amber-500/20 text-amber-200 hover:bg-amber-500/30"
+                : "border border-white/10 text-slate-400 hover:bg-white/10 hover:text-slate-200"
+            }`}
+          >
+            {isPaused ? (
+              <>
+                <Play className="h-2.5 w-2.5" fill="currentColor" />
+                <span>Resume</span>
+              </>
+            ) : (
+              <>
+                <Pause className="h-2.5 w-2.5" fill="currentColor" />
+                <span>Pause</span>
+              </>
+            )}
+          </button>
         )}
-      </button>
+      </div>
       {open && state.summary && (
         <p className="max-h-40 overflow-y-auto whitespace-pre-wrap px-3 pb-2 text-[12px] leading-snug text-slate-400">
           {state.summary}
@@ -76,10 +119,12 @@ export function SkippedBox({
   items,
   onAsk,
   onDismiss,
+  onDismissAll,
 }: {
   items: Skipped[];
   onAsk: (item: Skipped) => void;
   onDismiss: (item: Skipped) => void;
+  onDismissAll?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   if (!items.length) return null;
@@ -88,15 +133,27 @@ export function SkippedBox({
     <div className="mx-3 mb-2 rounded-lg border border-dashed border-emerald-400/40 bg-emerald-400/[0.06]">
       <div className="flex items-center px-2.5 pt-1.5 text-[10px] font-medium uppercase tracking-wide text-emerald-300/80">
         <span className="flex-1">Skipped for now: tap to ask</span>
-        {items.length > 1 && (
-          <button
-            type="button"
-            onClick={() => setOpen(!open)}
-            className="normal-case tracking-normal text-emerald-300/70 hover:text-emerald-200"
-          >
-            {open ? "show less ▴" : `${items.length - 1} more ▾`}
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {onDismissAll && items.length > 0 && (
+            <button
+              type="button"
+              onClick={onDismissAll}
+              className="normal-case tracking-normal text-emerald-300/70 hover:text-emerald-200"
+            >
+              Skip all
+            </button>
+          )}
+          {items.length > 1 && (
+            <button
+              type="button"
+              onClick={() => setOpen(!open)}
+              className="flex items-center gap-0.5 normal-case tracking-normal text-emerald-300/70 hover:text-emerald-200"
+            >
+              <span>{open ? "show less" : `${items.length - 1} more`}</span>
+              {open ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+            </button>
+          )}
+        </div>
       </div>
       <ul className="max-h-40 overflow-y-auto">
         {shown.map((i) => (

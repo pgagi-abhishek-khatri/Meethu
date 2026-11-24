@@ -17,7 +17,7 @@ export function MediaPlayOutline24({
         stroke="currentColor"
         strokeWidth={strokeWidth}
         strokeMiterlimit="10"
-        fill="none"
+        fill={props.fill ?? "none"}
         strokeLinejoin={corners === "round" ? "round" : "miter"}
         strokeLinecap={corners === "round" ? "round" : "square"}
       ></path>

@@ -106,9 +106,12 @@ function createTemporalStore(
       return;
     }
     if (typeof onMutate === "function") {
+      // A failing listener (matrix invalidation) must not abort the write that already committed.
       try {
         onMutate(projectId);
-      } catch {}
+      } catch (error) {
+        log({ event: "listener_failed", listener: "onMutate", project_id: projectId, error: error.message });
+      }
     }
   };
 
@@ -178,7 +181,9 @@ function createTemporalStore(
     let meta = {};
     try {
       meta = typeof row.meta === "string" ? JSON.parse(row.meta) : row.meta || {};
-    } catch {}
+    } catch (error) {
+      log({ event: "corrupt_meta", chunk_id: row.id, error: error.message });
+    }
     return {
       ...row,
       meta,

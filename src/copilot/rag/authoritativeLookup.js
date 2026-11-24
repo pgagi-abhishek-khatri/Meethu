@@ -292,6 +292,7 @@ function createAuthoritativeLookup({
   featureRegistry,
   options = {},
   now = Date.now,
+  log = () => {},
 } = {}) {
   const resolvedTemporal = temporalStore || ragStore?.temporal;
   const cache = new Map(); // key -> cached result
@@ -563,7 +564,9 @@ function createAuthoritativeLookup({
       let meta = {};
       try {
         meta = typeof c.meta === "string" ? JSON.parse(c.meta || "{}") : c.meta || {};
-      } catch {}
+      } catch (error) {
+        log({ event: "corrupt_meta", chunk_id: c.id, error: error.message });
+      }
 
       const sourceName = meta.source || c.source || `doc_${c.file_id}`;
       const sourceId = String(c.file_id || meta.section_id || sourceName);

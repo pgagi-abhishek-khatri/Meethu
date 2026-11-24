@@ -19,6 +19,7 @@ const { assembleTemporalContext } = require("../../src/copilot/core/answer/conte
 const { resolveEvidence } = require("../../src/copilot/core/okf/versionResolver");
 
 const okfDir = path.resolve(__dirname, "../../OKF");
+const testRegistryDir = path.resolve(__dirname, "../fixtures/okf-registry");
 
 function unitVec(seed, dims = 4) {
   const v = new Float32Array(dims);
@@ -117,7 +118,7 @@ describe("Temporal OKF + RAG Edge Cases", () => {
   test("EC-3 & EC-9: DOCX duplicate heading collapse, parent inheritance, and single-batch embedding", async () => {
     const db = new Database(":memory:");
     const ragStore = createRagStore(db);
-    const featureRegistry = createFeatureRegistry({ okfDir });
+    const featureRegistry = createFeatureRegistry({ okfDir, registryDir: testRegistryDir });
     featureRegistry.load();
     const embedder = createMockEmbedder(4);
     const deltaIngest = createDeltaIngest({
@@ -180,7 +181,7 @@ Available when the lot has a reserve price, reserve is not met, and outside Gold
   test("EC-4: Single-section mutation in multi-section feature embeds ONLY 1 section and preserves unchanged siblings", async () => {
     const db = new Database(":memory:");
     const ragStore = createRagStore(db);
-    const featureRegistry = createFeatureRegistry({ okfDir });
+    const featureRegistry = createFeatureRegistry({ okfDir, registryDir: testRegistryDir });
     featureRegistry.load();
     const embedder = createMockEmbedder(4);
     const deltaIngest = createDeltaIngest({
@@ -238,7 +239,7 @@ Five fixed roles: Sales, Finance, Support, Inspector, Auction BRO.
   test("EC-5 & EC-6 & EC-7: Month-range overlap, fail-closed historical safety, 3-stage evolution chain, and query ranking", async () => {
     const db = new Database(":memory:");
     const ragStore = createRagStore(db);
-    const featureRegistry = createFeatureRegistry({ okfDir });
+    const featureRegistry = createFeatureRegistry({ okfDir, registryDir: testRegistryDir });
     featureRegistry.load();
     const als = createAuthoritativeLookup({
       db,
@@ -372,7 +373,7 @@ Five fixed roles: Sales, Finance, Support, Inspector, Auction BRO.
     };
     const assembled = assembleTemporalContext({ resolution: res, intent: "CURRENT_STATE", budget: 8000 });
     const idxSup = assembled.text.indexOf("[SUPPORTING EVIDENCE]");
-    const idxAuth = assembled.text.indexOf("[AUTHORITATIVE EVIDENCE]");
+    const idxAuth = assembled.text.indexOf("[AUTHORITATIVE EVIDENCE:");
     assert.ok(idxSup >= 0 && idxAuth >= 0);
     assert.ok(idxSup < idxAuth, "Supporting evidence must appear BEFORE Authoritative evidence (recency-anchored)");
   });

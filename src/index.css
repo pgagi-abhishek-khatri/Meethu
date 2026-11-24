@@ -217,6 +217,30 @@
     text-rendering: optimizeLegibility;
   }
 
+  /* Native select and option styling across light and dark modes */
+  select {
+    color-scheme: light dark;
+  }
+
+  select option {
+    background-color: var(--color-background, #ffffff);
+    color: var(--color-foreground, #171717);
+  }
+
+  .dark select,
+  [data-theme="dark"] select,
+  [color-scheme="dark"] select,
+  .dark option,
+  [data-theme="dark"] option,
+  [color-scheme="dark"] option,
+  .dark select option,
+  [data-theme="dark"] select option,
+  [color-scheme="dark"] select option {
+    color-scheme: dark;
+    background-color: #1a1d26;
+    color: #e2e8f0;
+  }
+
   /* Electron specific styles */
   html,
   body {

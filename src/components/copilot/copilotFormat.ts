@@ -1,7 +1,7 @@
 // Small helpers shared by the Copilot page and the live window.
 import type { KeyboardEvent } from "react";
-import { getCachedPlatform } from "../../utils/platform";
-import { validateHotkey } from "../../utils/hotkeyValidator";
+import { getCachedPlatform } from "../../utils/platform.ts";
+import { validateHotkey } from "../../utils/hotkeyValidator.ts";
 // Small helpers shared by the Copilot page and the live window.
 
 export const WORKING = new Set(["queued", "reading", "analysing", "embedding"]);

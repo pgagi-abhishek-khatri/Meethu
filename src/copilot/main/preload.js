@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld("copilot", {
     return () => ipcRenderer.removeListener("copilot:event", listener);
   },
   ask: (q) => call("ask", q),
+  pause: () => call("pause", true),
+  resume: () => call("resume"),
+  togglePause: () => call("pause-toggle"),
   rerun: (id) => call("rerun", id),
   cancel: (id) => call("cancel", id),
   createThread: (title) => call("thread-create", title),

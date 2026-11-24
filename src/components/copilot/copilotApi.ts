@@ -111,7 +111,16 @@ export interface CopilotBridge {
     threadId?: string;
     quote?: string;
     skippedId?: string; // a tapped item of the Skipped box: it leaves the box
+    attachment?: {
+      name: string;
+      content: string;
+      size?: number;
+      type?: string;
+    };
   }): Promise<string | false>;
+  pause?(): Promise<boolean>;
+  resume?(): Promise<boolean>;
+  togglePause?(): Promise<boolean>;
   cancel(id: string): Promise<void>;
   rerun(id: string): Promise<string | false>; // "Rerun with high effort": ask again on the deep model with its tools
   createThread(title?: string): Promise<string>;

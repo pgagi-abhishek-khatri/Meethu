@@ -4916,7 +4916,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
             })
           );
           // Throw error to trigger retry if AUTH_EXPIRED
-          if (!res.success && res.code) {
+          if (!res.success && res.code === "AUTH_EXPIRED") {
             const err = new Error(res.error || "Warmup failed");
             err.code = res.code;
             throw err;

@@ -194,8 +194,16 @@ const ChevronsUpDownMark = glyph(
   </>
 );
 
+const PauseMark = glyph(
+  <>
+    <rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor" stroke="none" />
+    <rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor" stroke="none" />
+  </>
+);
+
 export const ChevronsUpDown = createIcon("chevrons-up-down", ChevronsUpDownMark);
 export const Circle = createIcon("circle", CircleMark);
+export const Pause = createIcon("pause", PauseMark);
 export const Square = createIcon("square", SquareMark);
 export const SquareSlash = createIcon("square-slash", SquareSlashMark);
 export const Bold = createIcon("bold", BoldMark);

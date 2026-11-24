@@ -30,12 +30,15 @@ function createAuthoritativeLookupService({
   okfDir = null,
   path = defaultPath,
   featureRegistry = null,
+  log = () => {},
 } = {}) {
   let featReg = featureRegistry;
   if (!featReg && okfDir) {
     try {
       featReg = createFeatureRegistry({ okfDir, path });
-    } catch {}
+    } catch (error) {
+      log({ event: "feature_registry_unavailable", error: error.message });
+    }
   }
   const idIndex = new Map(); // ID -> DocumentRecord[]
   const titleIndex = new Map(); // NormalizedTitle -> DocumentRecord[]
@@ -101,7 +104,9 @@ function createAuthoritativeLookupService({
               tags.push(...docContent.metadata.tags);
             }
           }
-        } catch {}
+        } catch (error) {
+          log({ event: "doc_metadata_read_failed", doc_id: doc.id, error: error?.message });
+        }
       }
 
       // 3. Aliases

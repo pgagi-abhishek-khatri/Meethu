@@ -38,13 +38,14 @@ function stripSectionPrefix(s) {
 
 function createFeatureRegistry({
   registryPath = null,
+  registryDir = null,
   okfDir = null,
   fs = defaultFs,
   path = defaultPath,
   yaml = defaultYaml,
 } = {}) {
   const resolvedOkfDir = okfDir || path.resolve(__dirname, "../../../../OKF");
-  const resolvedRegistryDir = path.join(resolvedOkfDir, "registry");
+  const resolvedRegistryDir = registryDir || path.join(resolvedOkfDir, "registry");
   const resolvedRegistryPath = registryPath || path.join(resolvedRegistryDir, "feature_registry.yaml");
 
   let rawData = null;

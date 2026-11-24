@@ -10,7 +10,7 @@ const {
   fromBuffer,
 } = require("../../src/copilot/rag/vectors");
 const { classify, checkSize, RAG } = require("../../src/copilot/rag/config");
-const { parseTimed } = require("../../src/copilot/rag/analyzeClient");
+const { createAnalyzer, parseTimed } = require("../../src/copilot/rag/analyzeClient");
 const { createEmbedClient, mediaPart } = require("../../src/copilot/rag/embedClient");
 const { postJson, pool } = require("../../src/copilot/rag/openrouter");
 const { ftsQuery } = require("../../src/copilot/rag/ragStore");
@@ -518,3 +518,82 @@ test("retrieve: a capped wait aborts the late query model; no wait timer is left
     global.clearTimeout = realClear;
   }
 });
+
+test("summarize sends the full text when under the part limit", async () => {
+  const requests = [];
+  const fakeFetch = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    requests.push(body);
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: "Full text summary." } }],
+        usage: { total_tokens: 100, cost: 0.001 },
+      }),
+    };
+  };
+
+  const analyzer = createAnalyzer({
+    apiKey: "dummy",
+    fetchImpl: fakeFetch,
+    cfg: { ...RAG, summaryPartChars: 100_000 },
+  });
+
+  const fullText = "A".repeat(60000) + "END_MARKER";
+  const res = await analyzer.summarize({ name: "doc.txt", kind: "text", text: fullText });
+
+  assert.equal(requests.length, 1);
+  const promptText = requests[0].messages[0].content[0].text;
+  assert.ok(promptText.includes("END_MARKER"), "full text was not truncated at 50k");
+  assert.equal(res.summary, "Full text summary.");
+  assert.equal(res.tokens, 100);
+  assert.equal(res.cost, 0.001);
+});
+
+test("summarize on a long file makes N part calls plus one reduce call and returns the reduce output", async () => {
+  const requests = [];
+  let callCount = 0;
+  const fakeFetch = async (_url, init) => {
+    callCount++;
+    const body = JSON.parse(init.body);
+    requests.push(body);
+    const content = body.messages[0].content[0].text;
+    const isReduce = content.includes("Below are summaries");
+    return {
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: isReduce ? "Final reduced summary." : `Part ${callCount} summary.`,
+            },
+          },
+        ],
+        usage: { total_tokens: 50, cost: 0.0005 },
+      }),
+    };
+  };
+
+  const analyzer = createAnalyzer({
+    apiKey: "dummy",
+    fetchImpl: fakeFetch,
+    cfg: { ...RAG, summaryPartChars: 200 },
+  });
+
+  const longText = [
+    "# Section 1\n\n" + "Word ".repeat(30),
+    "# Section 2\n\n" + "Item ".repeat(30),
+    "# Section 3\n\n" + "Fact ".repeat(30),
+  ].join("\n\n");
+
+  const res = await analyzer.summarize({ name: "long.md", kind: "text", text: longText });
+
+  // 3 parts + 1 reduce call = 4 calls total
+  assert.ok(requests.length >= 3, `expected at least 3 part calls + 1 reduce, got ${requests.length}`);
+  const lastRequest = requests[requests.length - 1];
+  assert.ok(lastRequest.messages[0].content[0].text.includes("Below are summaries"));
+  assert.equal(res.summary, "Final reduced summary.");
+  assert.equal(res.tokens, requests.length * 50);
+  assert.equal(res.cost, requests.length * 0.0005);
+});
+

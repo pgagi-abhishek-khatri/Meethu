@@ -20,9 +20,12 @@ export function useCopilot() {
       if (e.type === "settings") {
         settingsRef.current = e.settings;
         setSettings(e.settings);
-      } else if ((e as { type: string }).type === "level")
+      } else if ((e as { type: string }).type === "level") {
         setLevel((e as unknown as { v: number }).v);
-      else dispatch(e);
+      } else if (e.type === "pause" && e.paused) {
+        setLevel(0);
+        dispatch(e);
+      } else dispatch(e);
     });
   }, []);
 
@@ -43,5 +46,46 @@ export function useCopilot() {
     void window.copilot?.feedback(sessionId, id, value);
   }, []);
 
-  return { state, settings, updateSettings, markFeedback };
+  const dismissCard = useCallback((id: string) => {
+    dispatch({ type: "card_dismiss", id });
+  }, []);
+
+  const skipFollowups = useCallback((id: string) => {
+    dispatch({ type: "card_skip_followups", id });
+  }, []);
+
+  const skipGaps = useCallback((id: string) => {
+    dispatch({ type: "card_skip_gaps", id });
+  }, []);
+
+  const skipAllMoments = useCallback(() => {
+    dispatch({ type: "skip_all_moments" });
+  }, []);
+
+  const setPaused = useCallback((paused: boolean) => {
+    dispatch({ type: "pause", paused });
+    if (paused) setLevel(0);
+    if (paused) void window.copilot?.pause?.();
+    else void window.copilot?.resume?.();
+  }, []);
+
+  const togglePause = useCallback(() => {
+    dispatch({ type: "toggle_pause" });
+    setLevel(0);
+    void window.copilot?.togglePause?.();
+  }, []);
+
+  return {
+    state,
+    settings,
+    updateSettings,
+    markFeedback,
+    dismissCard,
+    skipFollowups,
+    skipGaps,
+    skipAllMoments,
+    setPaused,
+    togglePause,
+    dispatch,
+  };
 }

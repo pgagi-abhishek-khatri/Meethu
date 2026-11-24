@@ -106,3 +106,14 @@ main model prompt = instructions + notes + CATALOG + CONTEXT CHUNKS (named, with
 - Fast vs high effort on the same moment: fast 0.55-0.68 s, 4 short bullets; high effort 6.4-8.7 s, 8 bullets citing project facts (Integrity 80 / Trust 70, Bronze to Legend, 1,500-point vouchers) and a different recommendation.
 - Fewer decider calls: after 6 empty decisions in a row the calls are spaced 3x wider (a real question still goes at once), and "...right?" tags no longer count as questions. Same 25-minute meeting: 170 -> 114 calls, 1.00M -> 0.67M input tokens.
 - Summary: one call per 15 new messages (no timer); models read the last 15 messages verbatim plus the summary of older ones.
+
+## Status (2026-11-24): OKF Governance, Temporal Resolution & Whole-File Summarization
+
+- **Whole-File Summarization (Task 8):** Ingest summarization no longer caps at 50,000 characters. Single-pass handles text up to `summaryPartChars: 400_000`, and larger files are processed via map-reduce parts with merged token and cost tracking.
+- **Profile Backfilling (Task 9):** `src/copilot/rag/profileBackfill.js` rebuilds profiles from stored chunks in `copilot.db` during `resumeIndexing` when `retriever.catalogMode() === "profile"`. Shipped default remains `catalogMode: "summary"` to preserve D1 latency budgets.
+- **Single Evidence Banner (Task 10):** `src/copilot/core/answer/contextPack.js` emits exactly one classified evidence banner (`[AUTHORITATIVE EVIDENCE: <CLASSIFICATION>]`) per item.
+- **Decoupled Customer Fixtures (Task 11):** Customer fixture `carzilla_features.yaml` is moved to `test/fixtures/okf-registry/`. Production registry `OKF/registry/` contains only platform canonical features (`feature_registry.yaml`, 3 features).
+- **Silent Catch Elimination & Observability (Task 7):** All unhandled catches in `src/copilot/` resolved with structured logging or verified allowlist exceptions; verified by `test/copilot/noSilentCatch.test.js`.
+- **Temporal Validity Model:** `copilot_chunks` stores valid-time intervals `[valid_from, valid_to)` with a scalar `transaction_time` column.
+- **Answer Verifier:** OKF-0002 §2 Answer Verifier is planned as future scope.
+

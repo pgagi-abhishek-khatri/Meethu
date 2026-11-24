@@ -53,11 +53,11 @@
 - Produces: config fields `answerableMin: 0.5`, `alreadyAnsweredThreshold: 0.7`, `gapMin: 0.6`, and `actThreshold.normal` raised from `0.3` to `0.45` (quiet `0.6`, chatty `0.25`). `questions.answerable` (noul: "Is new_text a question or claim that a short factual answer would resolve?"), `questions.already_answered` (noul, only when cards exist: "Did a card in `cards` already answer the same need, in any wording?"), `questions.gap` (noul: "Is key information the answer would depend on missing from new_text, summary and context?"). `interpret()` result gains `raw.answerable`, `raw.alreadyAnswered`, `raw.gap`.
 - Decision kinds: existing `run|wait|skip|recheck`; `run` gains `deliverable: "gap_questions"` when `gap >= gapMin` and `answerable < answerableMin`.
 
-- [ ] **Step 1: Write failing tests** in `decision.test.js`: (a) `already_answered` 0.8 with cards → `{kind:"skip"}` reason `already_answered 80%`; (b) `answerable` 0.2, `act` 0.4 non-explicit → `wait` reason `not_answerable`; (c) `gap` 0.7 & `answerable` 0.3 & `act` 0.6 → `run` with `deliverable:"gap_questions"`; (d) explicit request ignores `already_answered` and `answerable`; (e) `questions` omits `already_answered` when no cards.
-- [ ] **Step 2: Run** `node --test test/copilot/decision.test.js` → new tests FAIL.
-- [ ] **Step 3: Implement** the config fields, the questions in `buildQuestions(ctx)` (`already_answered` only inside the `ctx.hasCards` branch), and in `interpret()` apply in order after the existing `explicit` / `supersede` / cooldown checks: `already_answered >= alreadyAnsweredThreshold` → skip; `answerable < answerableMin && gap < gapMin` → wait `not_answerable`; gap rule → `go({kind:"gap_questions"})`. Missing answers for the new questions are treated as neutral (answerable 1, others 0) so an older decider response still works.
-- [ ] **Step 4: Run** `node --test test/copilot/decision.test.js` → PASS (update thresholds in existing tests that depended on `0.3`).
-- [ ] **Step 5: Commit** `git commit -m "feat(copilot): decider answerable/already_answered/gap questions and stricter bar"`
+- [x] **Step 1: Write failing tests** in `decision.test.js`: (a) `already_answered` 0.8 with cards → `{kind:"skip"}` reason `already_answered 80%`; (b) `answerable` 0.2, `act` 0.4 non-explicit → `wait` reason `not_answerable`; (c) `gap` 0.7 & `answerable` 0.3 & `act` 0.6 → `run` with `deliverable:"gap_questions"`; (d) explicit request ignores `already_answered` and `answerable`; (e) `questions` omits `already_answered` when no cards.
+- [x] **Step 2: Run** `node --test test/copilot/decision.test.js` → new tests FAIL.
+- [x] **Step 3: Implement** the config fields, the questions in `buildQuestions(ctx)` (`already_answered` only inside the `ctx.hasCards` branch), and in `interpret()` apply in order after the existing `explicit` / `supersede` / cooldown checks: `already_answered >= alreadyAnsweredThreshold` → skip; `answerable < answerableMin && gap < gapMin` → wait `not_answerable`; gap rule → `go({kind:"gap_questions"})`. Missing answers for the new questions are treated as neutral (answerable 1, others 0) so an older decider response still works.
+- [x] **Step 4: Run** `node --test test/copilot/decision.test.js` → PASS (update thresholds in existing tests that depended on `0.3`).
+- [x] **Step 5: Commit** `git commit -m "feat(copilot): decider answerable/already_answered/gap questions and stricter bar"`
 
 ### Task 2: Duplicate guard
 
@@ -68,11 +68,11 @@
 **Interfaces:**
 - Produces: `isDuplicate({ text, cards, asked, now, windowMs, minOverlap }) -> { duplicate: boolean, matchedJobId?: string, score: number }`. `cards` items: `{ jobId, gist, title?, body?, shownAt }`. Uses lowercase content-word sets (drop stop words, digits kept), Jaccard overlap `>= minOverlap` (config `duplicateOverlap: 0.6`) against cards younger than `duplicateWindowMs: 300000` and against `asked` (Set of normalized strings).
 
-- [ ] **Step 1: Write failing tests**: identical text → duplicate; "what's the price" vs "how much does the price cost" → duplicate (overlap on `price`); different topic → not; card older than window → not; empty text → not; numbers differ ("$20 a month" vs "$40 a month") → not duplicate.
-- [ ] **Step 2: Run** `node --test test/copilot/duplicateGuard.test.js` → FAIL.
-- [ ] **Step 3: Implement** `isDuplicate` and a local `contentWords(text)`; stop-word list inline, kept short.
-- [ ] **Step 4: Run** → PASS.
-- [ ] **Step 5: Commit** `feat(copilot): deterministic duplicate guard`
+- [x] **Step 1: Write failing tests**: identical text → duplicate; "what's the price" vs "how much does the price cost" → duplicate (overlap on `price`); different topic → not; card older than window → not; empty text → not; numbers differ ("$20 a month" vs "$40 a month") → not duplicate.
+- [x] **Step 2: Run** `node --test test/copilot/duplicateGuard.test.js` → FAIL.
+- [x] **Step 3: Implement** `isDuplicate` and a local `contentWords(text)`; stop-word list inline, kept short.
+- [x] **Step 4: Run** → PASS.
+- [x] **Step 5: Commit** `feat(copilot): deterministic duplicate guard`
 
 ### Task 3: Wire guard and longer card memory in the engine
 
@@ -84,11 +84,11 @@
 - Consumes: `isDuplicate` (Task 2).
 - Produces: `s.cards` keeps last 6 (was 2) with `title`/`body` filled when the job finishes; the decider `recentCards` input still sliced to 2 in `buildState.js`; `runDecision` skips with reason `duplicate_guard` before spending a card when `decision.kind==="run"`, `trigger!=="explicit"` and `isDuplicate(...)` true (card-less `addSkipped` not called for duplicates).
 
-- [ ] **Step 1: Write failing engine tests** using the existing fake-client helpers in `test/copilot/helpers.js`: same question twice 10 s apart → exactly one card; reworded repeat → one card; explicit repeat → two cards.
-- [ ] **Step 2: Run** `node --test test/copilot/engine.test.js` → FAIL.
-- [ ] **Step 3: Implement**: raise the card list cap via named const `MAX_CARD_MEMORY = 6`; fill card `title/body` in the `handle.done.then` of `startAnswer`; apply the guard right before `s.jobs.push(job)`; add decision record reason.
-- [ ] **Step 4: Run** → PASS, then run `node --test test/copilot/*.test.js` excluding the Electron-only files; no regressions.
-- [ ] **Step 5: Commit** `feat(copilot): skip repeat questions before they become cards`
+- [x] **Step 1: Write failing engine tests** using the existing fake-client helpers in `test/copilot/helpers.js`: same question twice 10 s apart → exactly one card; reworded repeat → one card; explicit repeat → two cards.
+- [x] **Step 2: Run** `node --test test/copilot/engine.test.js` → FAIL.
+- [x] **Step 3: Implement**: raise the card list cap via named const `MAX_CARD_MEMORY = 6`; fill card `title/body` in the `handle.done.then` of `startAnswer`; apply the guard right before `s.jobs.push(job)`; add decision record reason.
+- [x] **Step 4: Run** → PASS, then run `node --test test/copilot/*.test.js` excluding the Electron-only files; no regressions.
+- [x] **Step 5: Commit** `feat(copilot): skip repeat questions before they become cards`
 
 ### Task 4: Strict answer prompt and gap-question output
 
@@ -99,11 +99,11 @@
 **Interfaces:**
 - Produces: `BY_DELIVERABLE.gap_questions` instructing: "Do not answer. Name what is missing and write at most 2 questions the USER can ask the client, plain words, each at most 14 words, only questions the missing facts require." Format line `GAPS: <question> | <question>`. `parseAnswer(text)` returns `gaps: string[]` (max 2, same tolerance as `followups`, hidden from body while streaming). `SKIP_RULE` tightened: SKIP also when the moment repeats a point in "Earlier cards" or only restates the transcript.
 
-- [ ] **Step 1: Write failing tests**: `parseAnswer("TITLE: x\n- a\nGAPS: Which plan? | By when?")` → `gaps` equals both, body excludes the line; partial `GA` line not in body; reply with no GAPS → `gaps: []`; prompt for `gap_questions` contains "Do not answer".
-- [ ] **Step 2: Run** `node --test test/copilot/answer.test.js` → FAIL.
-- [ ] **Step 3: Implement** the prompt text and parser change (reuse the `followups` regex approach).
-- [ ] **Step 4: Run** → PASS.
-- [ ] **Step 5: Commit** `feat(copilot): gap-question card format and stricter skip rule`
+- [x] **Step 1: Write failing tests**: `parseAnswer("TITLE: x\n- a\nGAPS: Which plan? | By when?")` → `gaps` equals both, body excludes the line; partial `GA` line not in body; reply with no GAPS → `gaps: []`; prompt for `gap_questions` contains "Do not answer".
+- [x] **Step 2: Run** `node --test test/copilot/answer.test.js` → FAIL.
+- [x] **Step 3: Implement** the prompt text and parser change (reuse the `followups` regex approach).
+- [x] **Step 4: Run** → PASS.
+- [x] **Step 5: Commit** `feat(copilot): gap-question card format and stricter skip rule`
 
 ### Task 5: RAG sufficiency and gap cards
 
@@ -116,11 +116,11 @@
 - Produces: `judgeSufficiency({ project: boolean, passages: string, hits: Array<{score:number}>, minScore: number, minHits: number }) -> "enough" | "thin" | "none"`. Config `sufficiency: { minScore: 0.69, minHits: 1 }` (reuses the existing auto-look floor). Engine rule: when `spec.project` or `projectAuto` ran and the verdict is `none` and the decision asked for a factual answer → rerun spec as `deliverable:"gap_questions"`; `thin` → keep deliverable but append the caveat line "State what is not in the files." to the user message.
 - Consumes: `retrieve.js` result (`hits`, `passages`), existing `ragResult`.
 
-- [ ] **Step 1: Write failing tests**: no hits → `none`; one hit below `minScore` → `none`; one hit above → `enough` with long passages, `thin` when passages under 200 chars; engine test with a stub retriever returning nothing → card has `gaps` and no invented answer.
-- [ ] **Step 2: Run** both files → FAIL.
-- [ ] **Step 3: Implement** `judgeSufficiency` (pure) and the engine branch; log the verdict in the existing `copilot-rag.jsonl` stage record.
-- [ ] **Step 4: Run** → PASS.
-- [ ] **Step 5: Commit** `feat(copilot): RAG sufficiency check turns empty retrieval into gap questions`
+- [x] **Step 1: Write failing tests**: no hits → `none`; one hit below `minScore` → `none`; one hit above → `enough` with long passages, `thin` when passages under 200 chars; engine test with a stub retriever returning nothing → card has `gaps` and no invented answer.
+- [x] **Step 2: Run** both files → FAIL.
+- [x] **Step 3: Implement** `judgeSufficiency` (pure) and the engine branch; log the verdict in the existing `copilot-rag.jsonl` stage record.
+- [x] **Step 4: Run** → PASS.
+- [x] **Step 5: Commit** `feat(copilot): RAG sufficiency check turns empty retrieval into gap questions`
 
 ### Task 6: Gap card in the UI state
 
@@ -131,11 +131,11 @@
 **Interfaces:**
 - Produces: card event field `gaps: string[]`; reducer stores it; UI renders gaps as a labelled "Ask them" list with a copy-on-tap behaviour matching followups. Tapping a gap does NOT start a new job (unlike followups).
 
-- [ ] **Step 1: Write failing reducer test**: card event with `gaps` is kept, idempotent on replay.
-- [ ] **Step 2: Run** `node --import tsx --test test/copilot/copilotState.test.js` → FAIL.
-- [ ] **Step 3: Implement** reducer field and the render block; follow existing card component styling.
-- [ ] **Step 4: Run** → PASS; `yarn build`-equivalent `npm run build` type check passes.
-- [ ] **Step 5: Commit** `feat(copilot): show Ask-them gap questions on cards`
+- [x] **Step 1: Write failing reducer test**: card event with `gaps` is kept, idempotent on replay.
+- [x] **Step 2: Run** `node --import tsx --test test/copilot/copilotState.test.js` → FAIL.
+- [x] **Step 3: Implement** reducer field and the render block; follow existing card component styling.
+- [x] **Step 4: Run** → PASS; `yarn build`-equivalent `npm run build` type check passes.
+- [x] **Step 5: Commit** `feat(copilot): show Ask-them gap questions on cards`
 
 ### Task 7: Summary with conversation, facts and open gaps
 
@@ -146,11 +146,11 @@
 **Interfaces:**
 - Produces: `maybeUpdate(transcript, extras?: { cards: Array<{title:string, body:string}>, gaps: string[] })`; `buildSummaryMessages(previous, lines, maxWords, skipped, extras)` appends "Facts already shown from the project files:" and "Still unanswered:" blocks (each clipped, max 600 chars). `SYSTEM` prompt adds: keep decisions, commitments, answered facts and open questions separate; never restate a card verbatim. Recap deliverable (`summary`) receives the same extras plus retrieved file names.
 
-- [ ] **Step 1: Write failing tests**: messages include card facts and gaps when given; omitted blocks when extras empty (existing outputs unchanged); output word cap unchanged.
-- [ ] **Step 2: Run** `node --test test/copilot/summary.test.js` → FAIL.
-- [ ] **Step 3: Implement** extras plumbing; engine passes the last 6 finished cards and unanswered gaps (gaps cleared when a later card answers the same text per Task 2 guard).
-- [ ] **Step 4: Run** → PASS.
-- [ ] **Step 5: Commit** `feat(copilot): summary uses cards, retrieved facts and open questions`
+- [x] **Step 1: Write failing tests**: messages include card facts and gaps when given; omitted blocks when extras empty (existing outputs unchanged); output word cap unchanged.
+- [x] **Step 2: Run** `node --test test/copilot/summary.test.js` → FAIL.
+- [x] **Step 3: Implement** extras plumbing; engine passes the last 6 finished cards and unanswered gaps (gaps cleared when a later card answers the same text per Task 2 guard).
+- [x] **Step 4: Run** → PASS.
+- [x] **Step 5: Commit** `feat(copilot): summary uses cards, retrieved facts and open questions`
 
 ### Task 8: Replay check and docs
 
@@ -158,9 +158,9 @@
 - Modify: `docs/copilot/DECISION_MODEL_DESIGN.md` (add a "2026-11 update" note), `docs/copilot/MEETING_LOGS_TEST_REPORT.md` unchanged
 - Run: `scripts/copilot/replay-fast.mjs` on the saved meetings
 
-- [ ] **Step 1:** Run the replay before/after with `COPILOT_DECISION_MODEL` unchanged; record cards per meeting, duplicate count (cards whose `isDuplicate` vs an earlier card is true), and skipped-real-questions.
-- [ ] **Step 2:** Adjust only config thresholds from Task 1 if real questions get dropped (target: duplicates ≈ 0, no explicit request dropped).
-- [ ] **Step 3:** Document the new questions, thresholds and gap flow; commit `docs(copilot): decision/gap flow update`.
+- [x] **Step 1:** Run the replay before/after with `COPILOT_DECISION_MODEL` unchanged; record cards per meeting, duplicate count (cards whose `isDuplicate` vs an earlier card is true), and skipped-real-questions.
+- [x] **Step 2:** Adjust only config thresholds from Task 1 if real questions get dropped (target: duplicates ≈ 0, no explicit request dropped).
+- [x] **Step 3:** Document the new questions, thresholds and gap flow in `docs/copilot/DECISION_MODEL_DESIGN.md` (Section 15); verified.
 
 ## Self-Review
 

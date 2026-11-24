@@ -152,3 +152,98 @@ test("gap questions on a done card are kept, replay is idempotent, and absent ga
   );
   assert.deepEqual(s.cards.find((c) => c.id === "g2").gaps, []);
 });
+
+test("skip for now: dismiss_card, card_skip_followups, card_skip_gaps, and skip_all_moments", () => {
+  let s = run([
+    {
+      type: "card_done",
+      id: "c1",
+      threadId: "main",
+      title: "Title 1",
+      body: "- body 1",
+      followups: ["Next step?"],
+      gaps: ["Missing fact?"],
+    },
+    {
+      type: "card_done",
+      id: "c2",
+      threadId: "main",
+      title: "Title 2",
+      body: "- body 2",
+    },
+    {
+      type: "skipped",
+      items: [
+        { id: "s1", line: "Transcript line 1" },
+        { id: "s2", line: "Transcript line 2" },
+      ],
+    },
+  ]);
+
+  assert.equal(s.cards.length, 2);
+  assert.equal(s.skipped.length, 2);
+
+  // Skip followups for c1
+  s = reduce(s, { type: "card_skip_followups", id: "c1" });
+  assert.equal(s.cards.find((c) => c.id === "c1").skippedFollowups, true);
+  assert.equal(s.cards.find((c) => c.id === "c1").skippedGaps, undefined);
+
+  // Skip gaps for c1
+  s = reduce(s, { type: "card_skip_gaps", id: "c1" });
+  assert.equal(s.cards.find((c) => c.id === "c1").skippedGaps, true);
+
+  // Dismiss card c2
+  s = reduce(s, { type: "card_dismiss", id: "c2" });
+  assert.equal(s.cards.some((c) => c.id === "c2"), false);
+  assert.equal(s.cards.length, 1);
+
+  // Skip all moments
+  s = reduce(s, { type: "skip_all_moments" });
+  assert.deepEqual(s.skipped, []);
+});
+
+test("cards track document sources and attachmentName across lifecycle", () => {
+  let s = initialState();
+  s = reduce(s, {
+    type: "card_start",
+    id: "doc-card",
+    threadId: "main",
+    attachmentName: "spec.pdf",
+    files: ["spec.pdf", "overview.md"],
+  });
+
+  let card = s.cards.find((c) => c.id === "doc-card");
+  assert.ok(card);
+  assert.equal(card.attachmentName, "spec.pdf");
+  assert.deepEqual(card.files, ["spec.pdf", "overview.md"]);
+
+  s = reduce(s, {
+    type: "card_update",
+    id: "doc-card",
+    title: "Document Summary",
+    body: "Summary content",
+    attachmentName: "spec.pdf",
+    files: ["spec.pdf", "overview.md"],
+  });
+
+  card = s.cards.find((c) => c.id === "doc-card");
+  assert.equal(card.title, "Document Summary");
+  assert.equal(card.attachmentName, "spec.pdf");
+  assert.deepEqual(card.files, ["spec.pdf", "overview.md"]);
+
+  s = reduce(s, {
+    type: "card_done",
+    id: "doc-card",
+    title: "Document Summary",
+    body: "Final summary content",
+    confidence: "high",
+    attachmentName: "spec.pdf",
+    files: ["spec.pdf", "overview.md"],
+  });
+
+  card = s.cards.find((c) => c.id === "doc-card");
+  assert.equal(card.status, "done");
+  assert.equal(card.attachmentName, "spec.pdf");
+  assert.deepEqual(card.files, ["spec.pdf", "overview.md"]);
+});
+

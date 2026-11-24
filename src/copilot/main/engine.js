@@ -21,6 +21,7 @@ const { createScheduler, DEFAULT_TRIGGER_CONFIG } = require("../core/trigger/sch
 const { getCopilotAiConfig } = require("../config/aiDefaults");
 const { createMainModel } = require("./mainCall");
 const { createAnswerRunner } = require("./answerRunner");
+const { validateUserInput } = require("../core/validation/inputValidation");
 const { toUtterances, realQuestion, questionish } = require("../core/transcript/utterances");
 const {
   createRollingSummary,
@@ -514,6 +515,7 @@ function createEngine({
     const handle = s.runner.run({
       id: job.id,
       ...spec,
+      attachmentName: spec.attachmentName || job.attachmentName,
       context: {
         meeting: { title: s.title },
         summary: s.summary.text,
@@ -886,6 +888,7 @@ function createEngine({
       problem: null,
       problems: {},
       partials: {}, // words still being spoken, per source: { label, text }
+      paused: false,
     };
     s.summary = createRollingSummary({
       llm: summaryLlm,
@@ -1234,6 +1237,15 @@ function createEngine({
         .trim();
       if (!clean || justEnded()) return;
       const s = session ?? startSession();
+      if (s.paused) {
+        trace({
+          type: "segment_dropped_paused",
+          source,
+          speaker,
+          text: clean,
+        });
+        return;
+      }
       const seg = {
         id: ++s.nextId,
         source,
@@ -1247,7 +1259,8 @@ function createEngine({
       s.partials[source] = null;
       if (source === "mic") s.userSpeaking = false;
       else s.systemPartial = null;
-      const verdict = active ? s.scheduler.noteFinal(seg) : { trigger: false, reason: "no_key" };
+      const verdict =
+        active && !s.paused ? s.scheduler.noteFinal(seg) : { trigger: false, reason: s.paused ? "paused" : "no_key" };
       seg.noise = !verdict.trigger; // filler and fragments stay in the transcript but not in what D1 judges
       if (verdict.trigger) s.lastTriggerAt = now();
       trace({
@@ -1291,6 +1304,7 @@ function createEngine({
     onPartial({ source, text }) {
       if (justEnded()) return;
       const s = session ?? startSession();
+      if (s.paused) return;
       if (active) s.scheduler.notePartial(source);
       const lastOf = s.transcript.findLast((g) => g.source === source);
       const who = source === "mic" ? "USER" : lastOf ? speakerLabel(lastOf) : "OTHER";
@@ -1303,26 +1317,38 @@ function createEngine({
     },
     // The user typed a question: straight to the main model, no decision (brief section 3).
     // `quote` = meeting lines the user picked in the transcript to talk about.
-    ask({ text, web = false, threadId = MAIN, quote = "", skippedId = "" }) {
+    ask({ text, web = false, threadId = MAIN, quote = "", skippedId = "", validate = true, attachment = null }) {
       const clean = String(text ?? "").trim();
       if (!clean) return false;
       const s = session ?? startSession();
       if (!s.runner) return false;
+      let queryText = clean;
+      if (validate && !skippedId) {
+        const v = validateUserInput(clean);
+        if (!v.valid) {
+          return { error: "invalid_input", reason: v.reason, message: v.message };
+        }
+        queryText = v.formattedText || clean;
+      }
       const th = s.threads.has(threadId) ? threadId : MAIN;
-      s.asked.add(norm(clean));
+      s.asked.add(norm(queryText));
       capSet(s.asked, MAX_ASKED);
       if (skippedId) {
         const item = s.skipped.find((i) => i.id === skippedId);
         if (item) onSignal("wanted", item.line); // the user wanted a moment the copilot had passed on
         dropSkipped(s, skippedId);
       }
-      const focus = quote ? `${clean}\n(Regarding: "${clip(oneLine(quote), 400)}")` : clean;
+      let focus = quote ? `${queryText}\n(Regarding: "${clip(oneLine(quote), 400)}")` : queryText;
+      if (attachment?.name && attachment?.content) {
+        focus = `[ATTACHED DOCUMENT: ${clip(attachment.name, 80)}]\n${clip(attachment.content, 4000)}\n\nQuestion: ${focus}`;
+      }
       const job = {
         id: nextJobId(),
-        topic: clip(clean, 70),
+        topic: clip(queryText, 70),
         status: "running",
         real: true,
         threadId: th,
+        attachmentName: attachment?.name,
       };
       if (th === MAIN) {
         s.lastRunAt = now();
@@ -1330,7 +1356,7 @@ function createEngine({
           ...s.cards,
           {
             kind: "quick_answer",
-            gist: clip(clean, 90),
+            gist: clip(queryText, 90),
             shownAt: now(),
             reaction: "none",
             jobId: job.id,
@@ -1345,6 +1371,7 @@ function createEngine({
         project: true, // a typed question may be about the project's files; the search skips itself when there are none
         proactive: false,
         focus,
+        attachmentName: attachment?.name,
         contextSeconds: decisionCfg.contextSeconds.fast,
       });
       return job.id;
@@ -1374,6 +1401,7 @@ function createEngine({
         of: id,
         model: deepModelId,
         label: "High-effort answer",
+        attachmentName: prev.spec?.attachmentName,
       });
       return job.id;
     },
@@ -1414,6 +1442,31 @@ function createEngine({
       s.threads.delete(id);
       emit({ type: "thread", action: "close", thread: { id } });
       return true;
+    },
+    pause() {
+      const s = session ?? startSession();
+      s.paused = true;
+      s.partials = {};
+      s.systemPartial = null;
+      s.userSpeaking = false;
+      trace({ type: "pause", paused: true });
+      emit({ type: "pause", paused: true });
+      sendPartial({ type: "partial", label: "", text: "" });
+      emit({ type: "level", v: 0 });
+      return true;
+    },
+    resume() {
+      const s = session ?? startSession();
+      s.paused = false;
+      trace({ type: "pause", paused: false });
+      emit({ type: "pause", paused: false });
+      return true;
+    },
+    setPaused(v) {
+      return v ? this.pause() : this.resume();
+    },
+    isPaused() {
+      return !!session?.paused;
     },
     // Meeting over: stop everything, then (once) a recap card in Main if the user wants one.
     endSession() {

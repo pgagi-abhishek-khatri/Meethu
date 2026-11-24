@@ -10,7 +10,7 @@ interface Props {
 }
 
 const field =
-  "w-full rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1.5 text-slate-200 outline-none placeholder:text-slate-500 focus:border-emerald-400/50";
+  "w-full rounded-lg border border-white/10 bg-[#1a1d26] px-2 py-1.5 text-slate-200 outline-none placeholder:text-slate-500 focus:border-emerald-400/50 [color-scheme:dark]";
 
 function Section({
   title,
@@ -152,9 +152,15 @@ export default function SettingsView({ settings: s, state, onSettings }: Props) 
             onChange={(e) => onSettings({ quiet: e.target.value as CopilotSettings["quiet"] })}
             className={field}
           >
-            <option value="quiet">Calm: speaks up only for clear needs</option>
-            <option value="normal">Balanced: a card when something is worth it</option>
-            <option value="chatty">Lively: speaks up often</option>
+            <option value="quiet" className="bg-[#1a1d26] text-slate-200">
+              Calm: speaks up only for clear needs
+            </option>
+            <option value="normal" className="bg-[#1a1d26] text-slate-200">
+              Balanced: a card when something is worth it
+            </option>
+            <option value="chatty" className="bg-[#1a1d26] text-slate-200">
+              Lively: speaks up often
+            </option>
           </select>
         </label>
       </Section>

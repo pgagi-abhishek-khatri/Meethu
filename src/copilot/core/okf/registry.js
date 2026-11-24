@@ -10,9 +10,12 @@ const { createFeatureRegistry } = require("./featureRegistry");
 
 function createOkfRegistry({
   okfDir = null,
+  registryPath = null,
+  registryDir = null,
   fs = defaultFs,
   path = defaultPath,
   yaml = defaultYaml,
+  log = () => {},
 } = {}) {
   const resolvedDir = okfDir || path.resolve(__dirname, "../../../../OKF");
   const manifestPath = path.join(resolvedDir, "manifest.yaml");
@@ -31,6 +34,8 @@ function createOkfRegistry({
     // Initialize/reload feature registry
     featureRegistry = createFeatureRegistry({
       okfDir: resolvedDir,
+      registryPath,
+      registryDir,
       fs,
       path,
       yaml,
@@ -108,7 +113,9 @@ function createOkfRegistry({
         try {
           metadata = yaml.load(match[1]) || {};
           body = match[2].trim();
-        } catch {}
+        } catch (error) {
+          log({ event: "front_matter_parse_failed", file, error: error.message });
+        }
       }
 
       const result = {

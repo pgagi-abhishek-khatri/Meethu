@@ -66,6 +66,8 @@ function ftsQuery(text) {
 }
 
 function createRagStore(db, { addColumn, now = Date.now } = {}) {
+  // The store opens before the RAG log exists, so the log is bound late through configure().
+  let log = () => {};
   db.exec(SCHEMA);
   for (const [c, t] of FILE_COLUMNS) {
     if (typeof addColumn === "function") {
@@ -321,7 +323,9 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
         let profile = null;
         try {
           profile = r.profile ? JSON.parse(r.profile) : null;
-        } catch {}
+        } catch (error) {
+          log({ event: "corrupt_profile", file_id: r.id, error: error.message });
+        }
         return { ...r, profile };
       }),
     // A file's chunks in order, for writing its profile again without reading the file again.

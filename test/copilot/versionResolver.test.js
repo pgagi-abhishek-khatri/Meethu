@@ -551,7 +551,7 @@ describe("Phase 6: Evidence Precedence Resolver (EPR)", () => {
       focus: "What is the ingestion architecture?",
     });
 
-    assert.ok(user1.content.includes("[AUTHORITATIVE EVIDENCE]"));
+    assert.ok(user1.content.includes("[AUTHORITATIVE EVIDENCE: AUTHORITATIVE REQUIREMENT]"));
     assert.ok(user1.content.includes("Feature: feat:ingestion_pipeline"));
     assert.ok(user1.content.includes("Version: 2.0.0"));
     assert.ok(user1.content.includes("Approval: APPROVED"));

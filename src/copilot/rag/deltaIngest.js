@@ -593,6 +593,7 @@ function createDeltaIngest({
   embedder = null,
   now = Date.now,
   options = {},
+  log = () => {},
 } = {}) {
   const resolvedTemporal = temporalStore || ragStore?.temporal;
   if (!resolvedTemporal) {
@@ -722,8 +723,9 @@ function createDeltaIngest({
               )
               .all(projectId);
             for (const r of rows) existingUnmatchedHashes.add(r.hash);
-          } catch {
-            // Non-fatal on mocked DBs
+          } catch (error) {
+            // Only a dedupe optimisation: without it an unmatched section may be re-inserted, which the hash check downstream tolerates.
+            log({ event: "unmatched_hash_lookup_failed", project_id: projectId, error: error.message });
           }
         }
 

@@ -445,15 +445,34 @@ test("a typed question skips D1 and goes straight to the main model", async () =
   assert.equal(setup().service.ask({ text: "x" }), false); // no main model: nothing to ask
 });
 
+test("typed questions are validated before launch: malformed, filler, or short inputs return error", () => {
+  const main = fakeMain();
+  const { service } = setup({}, main);
+  const r1 = service.ask({ text: "the" });
+  assert.equal(r1.error, "invalid_input");
+  assert.equal(r1.reason, "too_short");
+  assert.equal(main.calls.length, 0);
+
+  const r2 = service.ask({ text: "okay yeah sure" });
+  assert.equal(r2.error, "invalid_input");
+  assert.equal(r2.reason, "filler_only");
+  assert.equal(main.calls.length, 0);
+
+  const r3 = service.ask({ text: "We need to check the database and" });
+  assert.equal(r3.error, "invalid_input");
+  assert.equal(r3.reason, "incomplete");
+  assert.equal(main.calls.length, 0);
+});
+
 const tick = () => new Promise((r) => setImmediate(r));
 
 test("custom threads run typed questions in parallel; a full cap queues the next one, Main first", async () => {
   const main = fakeMain();
   const { events, service } = setup({}, main, { getSettings: () => ({ maxParallel: 2 }) });
   const t1 = service.createThread({ title: "Pricing" });
-  service.ask({ text: "one", threadId: t1 });
-  service.ask({ text: "two", threadId: t1 });
-  service.ask({ text: "three", threadId: t1 });
+  service.ask({ text: "Question one here", threadId: t1 });
+  service.ask({ text: "Question two here", threadId: t1 });
+  service.ask({ text: "Question three here", threadId: t1 });
   service.ask({ text: "four from main" });
   assert.equal(main.calls.length, 2, "two run, two wait");
   assert.equal(events.filter((e) => e.type === "card_queued").length, 2);
@@ -473,12 +492,12 @@ test("a thread keeps its own history; closing it cancels its work", async () => 
   const main = fakeMain();
   const { events, service } = setup({}, main);
   const t = service.createThread({});
-  service.ask({ text: "first", threadId: t });
+  service.ask({ text: "First question here?", threadId: t });
   main.calls[0].finish();
   await tick();
-  service.ask({ text: "second", threadId: t });
+  service.ask({ text: "Second question here?", threadId: t });
   assert.match(main.calls[1].messages[1].content, /Earlier cards in this thread/);
-  service.ask({ text: "in main" });
+  service.ask({ text: "Question in main?" });
   assert.doesNotMatch(main.calls[2].messages[1].content, /Earlier cards in this thread/);
   assert.equal(service.closeThread(t), true);
   assert.equal(main.calls[1].aborted, true);

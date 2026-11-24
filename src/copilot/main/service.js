@@ -23,6 +23,7 @@ const { createOpenRouterLlm, DEFAULT_SUMMARY_MODEL } = require("../core/summary/
 const { createOkfRegistry } = require("../core/okf/registry");
 const { createOkfRouter } = require("../core/okf/router");
 const { createTemporalRouter } = require("../core/okf/temporalRouter");
+const { backfillProfiles } = require("../rag/profileBackfill");
 
 const NOT_REPLAYED = new Set([
   "partial",
@@ -88,7 +89,7 @@ function createCopilot({
   let levelPeak = 0;
   let levelAt = 0;
   const onLevel = (pcm16) => {
-    if (!pcm16 || pcm16.length < 2 || !win.isOpen()) return;
+    if (!pcm16 || pcm16.length < 2 || !win.isOpen() || engine.isPaused()) return;
     let sum = 0;
     const n = pcm16.length >> 1;
     for (let i = 0; i < n; i++) {
@@ -123,7 +124,9 @@ function createCopilot({
       if (started) history = [];
       try {
         persist(e);
-      } catch {}
+      } catch (error) {
+        ragLog({ event: "persist_failed", type: e.type, error: error.message });
+      }
       if (started) e = { ...e, sessionId };
       if (e.type === "stats") lastStats = e;
       if (!NOT_REPLAYED.has(e.type)) {
@@ -231,20 +234,23 @@ function createCopilot({
   let temporalRouter = null;
   let deltaIngest = null;
   try {
-    okfRegistry = createOkfRegistry({ okfDir: path.resolve(__dirname, "../../../OKF") });
+    okfRegistry = createOkfRegistry({ okfDir: path.resolve(__dirname, "../../../OKF"), log: ragLog });
     okfRouter = createOkfRouter();
     const featReg = okfRegistry?.featureRegistry;
     if (featReg && featReg.hasRegistry() && store.rag?.temporal) {
       store.rag.temporal.configure({ featureRegistry: featReg, log: ragLog });
+      store.rag.configure?.({ log: ragLog });
       authoritativeLookup =
         typeof store.rag.createAuthoritativeLookup === "function"
-          ? store.rag.createAuthoritativeLookup({ featureRegistry: featReg })
+          ? store.rag.createAuthoritativeLookup({ featureRegistry: featReg, log: ragLog })
           : createAuthoritativeLookup({
               ragStore: store.rag,
               temporalStore: store.rag.temporal,
               featureRegistry: featReg,
+              log: ragLog,
             });
       temporalRouter = createTemporalRouter({
+        log: ragLog,
         featureRegistry: featReg,
         temporalStore: store.rag.temporal,
         authoritativeLookup,
@@ -253,12 +259,14 @@ function createCopilot({
         typeof store.rag.createDeltaIngest === "function"
           ? store.rag.createDeltaIngest({
               featureRegistry: featReg,
+              log: ragLog,
               options: { autoIndexUnmatched: true },
             })
           : createDeltaIngest({
               ragStore: store.rag,
               temporalStore: store.rag.temporal,
               featureRegistry: featReg,
+              log: ragLog,
               options: { autoIndexUnmatched: true },
             });
     }
@@ -418,8 +426,29 @@ function createCopilot({
       threadId: str(q.threadId, 40) || "main",
       quote: str(q.quote, 1200),
       skippedId: str(q.skippedId, 20),
+      attachment: q.attachment
+        ? {
+            name: str(q.attachment.name, 120),
+            content: str(q.attachment.content, 100000),
+            size: Number(q.attachment.size) || 0,
+            type: str(q.attachment.type, 50),
+          }
+        : null,
     })
   );
+  handle("pause", (paused) => {
+    const isPaused = paused != null ? !!paused : true;
+    const res = engine.setPaused(isPaused);
+    if (isPaused) push({ type: "level", v: 0 });
+    return res;
+  });
+  handle("resume", () => engine.resume());
+  handle("pause-toggle", () => {
+    const next = !engine.isPaused();
+    const res = engine.setPaused(next);
+    if (next) push({ type: "level", v: 0 });
+    return res;
+  });
   handle("cancel", (id) => engine.cancel(str(id, 40)));
   handle("rerun", (id) => engine.rerun(str(id, 40)));
   handle("thread-create", (title) => engine.createThread({ title: str(title, 40) }));
@@ -519,7 +548,9 @@ function createCopilot({
       .slice(0, 50);
     for (const p of files) {
       const f = store.projects.addFileRow(Number(id), p, path.basename(p));
-      ingestor.ingest(f).catch(() => {}); // reads, splits, embeds and summarises in the background; the page shows its progress
+      ingestor.ingest(f).catch((error) => {
+        ragLog({ event: "background_ingest_failed", file_id: f.id, error: error?.message });
+      }); // reads, splits, embeds and summarises in the background; the page shows its progress
     }
     return files.length;
   };
@@ -528,7 +559,9 @@ function createCopilot({
   handle("project-reindex", (fileId) => {
     const f = store.rag.file(Number(fileId));
     if (!f) return false;
-    ingestor.ingest(f).catch(() => {});
+    ingestor.ingest(f).catch((error) => {
+      ragLog({ event: "background_reindex_failed", file_id: f.id, error: error?.message });
+    });
     return true;
   });
   handle("sessions-list", () => store.listSessions());
@@ -560,27 +593,46 @@ function createCopilot({
   // showing them as in progress and offers "Read again".
   const resumeIndexing = () => {
     const files = store.rag.unfinished();
-    if (!files.length) return 0;
-    if (ragClients()) {
-      for (const f of files) ingestor.ingest(f).catch(() => {});
-      return files.length;
+    if (files.length) {
+      if (ragClients()) {
+        for (const f of files) {
+          ingestor.ingest(f).catch((error) => {
+            ragLog({ event: "resume_ingest_failed", file_id: f.id, error: error?.message });
+          });
+        }
+      } else {
+        const error = settings.engine().apiKey
+          ? "Project file search is off in the Copilot settings. Turn it on, then read the file again."
+          : friendly({ code: "no_key" });
+        for (const f of files) store.rag.setFile(f.id, { status: "error", stage: null, error });
+      }
     }
-    const error = settings.engine().apiKey
-      ? "Project file search is off in the Copilot settings. Turn it on, then read the file again."
-      : friendly({ code: "no_key" });
-    for (const f of files) store.rag.setFile(f.id, { status: "error", stage: null, error });
+    // Background profile backfill for stale files when catalogMode is profile
+    if (retriever.catalogMode?.() === "profile" && ragClients()) {
+      const ask = (parts, opts) => ragClients()?.analyze?.ask(parts, opts);
+      backfillProfiles({
+        rag: store.rag,
+        ask,
+        log: ragLog,
+        now,
+      }).catch((error) => {
+        ragLog({ event: "profile_backfill_failed", error: error?.message });
+      });
+    }
     return files.length;
   };
   setTimeout(() => {
     try {
       resumeIndexing();
-    } catch {}
+    } catch (error) {
+      ragLog({ event: "resume_indexing_failed", error: error.message });
+    }
   }, 4000).unref?.();
 
   return {
     // hooks for the meeting pipeline (same shape as the engine)
-    onFinal: (x) => settings.view().enabled && engine.onFinal(x),
-    onPartial: (x) => settings.view().enabled && engine.onPartial(x),
+    onFinal: (x) => settings.view().enabled && !engine.isPaused() && engine.onFinal(x),
+    onPartial: (x) => settings.view().enabled && !engine.isPaused() && engine.onPartial(x),
     begin() {
       if (!settings.view().enabled) return;
       try {

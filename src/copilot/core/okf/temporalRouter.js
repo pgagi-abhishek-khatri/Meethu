@@ -293,6 +293,7 @@ function createTemporalRouter({
   authoritativeLookup,
   now = Date.now,
   options = {},
+  log = () => {},
 } = {}) {
   const routerCache = new Map();
   const maxCacheSize = options.maxCacheSize || 256;
@@ -536,7 +537,9 @@ function createTemporalRouter({
             let chunkMeta = {};
             try {
               chunkMeta = typeof chunk.meta === "string" ? JSON.parse(chunk.meta || "{}") : chunk.meta || {};
-            } catch {}
+            } catch (error) {
+              log({ event: "corrupt_meta", chunk_id: chunk.id, error: error.message });
+            }
             return {
               feature_id: targetFeatureId,
               featureId: targetFeatureId,

@@ -152,7 +152,7 @@ test("settings go through IPC, the key is never returned, and projects work", sq
 test("typed asks with a custom thread, cancel and close", sqlite, async () => {
   const { invoke, main, copilot } = setup();
   const t = await invoke("thread-create", "Pricing");
-  const j = await invoke("ask", { text: "price?", threadId: t });
+  const j = await invoke("ask", { text: "What is the price?", threadId: t });
   await invoke("cancel", j);
   await invoke("thread-close", t);
   main.calls.at(-1).finish?.();

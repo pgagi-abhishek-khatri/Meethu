@@ -134,3 +134,11 @@ test("computeSha256 calculates stable SHA-256 string", () => {
   assert.equal(h1, h2);
   assert.equal(h1.length, 64);
 });
+
+test("production registry directory contains no customer fixture", () => {
+  const regDir = path.resolve(__dirname, "../../OKF/registry");
+  const files = fs.readdirSync(regDir).filter((f) => /\.ya?ml$/i.test(f));
+  for (const f of files) {
+    assert.ok(!f.includes("carzilla"), `Found customer fixture in shipped registry: ${f}`);
+  }
+});

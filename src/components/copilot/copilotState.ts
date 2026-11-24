@@ -23,6 +23,8 @@ export interface Card {
   body?: string;
   confidence?: Confidence;
   sources?: Source[];
+  files?: string[];
+  attachmentName?: string;
   timing?: { firstTokenMs?: number; totalMs?: number } | null;
   truncated?: boolean;
   error?: string;
@@ -31,6 +33,8 @@ export interface Card {
   gaps?: string[]; // what to ask the other side; shown only once the card is done
   deep?: boolean; // a "Rerun with high effort" re-run
   deepened?: boolean; // a high-effort answer was already asked for this card
+  skippedFollowups?: boolean;
+  skippedGaps?: boolean;
 }
 
 export interface Segment {
@@ -88,6 +92,7 @@ export interface CopilotState {
   problem: "key" | "credits" | "no_key" | null; // the AI account refuses every call, or no key is set
   busy: boolean; // the copilot is thinking about something right now
   stats: Record<string, unknown> | null;
+  paused: boolean; // proactive listening & D1 analysis paused
 }
 
 export type CopilotEvent = { type: string; [key: string]: any };
@@ -113,6 +118,7 @@ export const initialState = (): CopilotState => ({
   problem: null,
   busy: false,
   stats: null,
+  paused: false,
 });
 
 const upsertCard = (cards: Card[], id: string, make: (old: Card | undefined) => Card): Card[] => {
@@ -175,8 +181,34 @@ export function reduce(state: CopilotState, e: CopilotEvent): CopilotState {
         ...state,
         cards: state.cards.map((c) => (c.id === e.id ? { ...c, feedback: e.value } : c)),
       };
+    case "card_dismiss":
+      return {
+        ...state,
+        cards: state.cards.filter((c) => c.id !== e.id),
+      };
+    case "card_skip_followups":
+      return {
+        ...state,
+        cards: state.cards.map((c) => (c.id === e.id ? { ...c, skippedFollowups: true } : c)),
+      };
+    case "card_skip_gaps":
+      return {
+        ...state,
+        cards: state.cards.map((c) => (c.id === e.id ? { ...c, skippedGaps: true } : c)),
+      };
+    case "skip_all_moments":
+      return {
+        ...state,
+        skipped: [],
+      };
     case "mode":
       return { ...state, mode: e.mode };
+    case "pause":
+      return { ...state, paused: !!e.paused, partial: e.paused ? null : state.partial };
+    case "toggle_pause": {
+      const nextPaused = !state.paused;
+      return { ...state, paused: nextPaused, partial: nextPaused ? null : state.partial };
+    }
     case "problem":
       return { ...state, problem: e.kind ?? null };
     case "activity":
@@ -251,6 +283,8 @@ export function reduce(state: CopilotState, e: CopilotEvent): CopilotState {
                   proactive: e.proactive,
                   deep: e.deep,
                   focus: e.focus,
+                  files: e.files ?? (e.attachmentName ? [e.attachmentName] : o?.files) ?? [],
+                  attachmentName: e.attachmentName ?? o?.attachmentName,
                 }
         ),
       };
@@ -265,6 +299,8 @@ export function reduce(state: CopilotState, e: CopilotEvent): CopilotState {
                 title: e.title ?? c.title,
                 body: e.body ?? c.body,
                 confidence: e.confidence ?? c.confidence,
+                files: e.files ?? c.files,
+                attachmentName: e.attachmentName ?? c.attachmentName,
               }
             : c
         ),
@@ -279,6 +315,8 @@ export function reduce(state: CopilotState, e: CopilotEvent): CopilotState {
           body: e.body,
           confidence: e.confidence,
           sources: e.sources ?? [],
+          files: e.files ?? (e.attachmentName ? [e.attachmentName] : o?.files) ?? [],
+          attachmentName: e.attachmentName ?? o?.attachmentName,
           timing: e.timing ?? null,
           truncated: !!e.truncated,
           followups: e.followups ?? [],

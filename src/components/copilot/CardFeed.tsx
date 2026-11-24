@@ -8,9 +8,21 @@ interface Props {
   onAsk: (text: string, card: CardData) => void;
   onDeeper: (card: CardData) => void;
   onFeedback: (card: CardData, value: "down" | null) => void;
+  onDismissCard?: (card: CardData) => void;
+  onSkipFollowups?: (card: CardData) => void;
+  onSkipGaps?: (card: CardData) => void;
 }
 
-export default function CardFeed({ cards, emptyText, onAsk, onDeeper, onFeedback }: Props) {
+export default function CardFeed({
+  cards,
+  emptyText,
+  onAsk,
+  onDeeper,
+  onFeedback,
+  onDismissCard,
+  onSkipFollowups,
+  onSkipGaps,
+}: Props) {
   const box = useRef<HTMLDivElement>(null);
   const stick = useRef(true); // follow the newest, unless the user scrolled up to read
   useEffect(() => {
@@ -34,6 +46,9 @@ export default function CardFeed({ cards, emptyText, onAsk, onDeeper, onFeedback
       onAsk={(q) => onAsk(q, c)}
       onDeeper={() => onDeeper(c)}
       onFeedback={(v) => onFeedback(c, v)}
+      onDismissCard={onDismissCard ? () => onDismissCard(c) : undefined}
+      onSkipFollowups={onSkipFollowups ? () => onSkipFollowups(c) : undefined}
+      onSkipGaps={onSkipGaps ? () => onSkipGaps(c) : undefined}
     />
   );
 

@@ -262,10 +262,10 @@ function BedrockConfig({ reasoningModel, setReasoningModel }: EnterpriseProvider
           dir="ltr"
           value={store.bedrockRegion}
           onChange={(e) => handleRegionChange(e.target.value)}
-          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground [color-scheme:light] dark:bg-[#1a1d26] dark:text-slate-200 dark:[color-scheme:dark]"
         >
           {BEDROCK_REGIONS.map((r) => (
-            <option key={r} value={r}>
+            <option key={r} value={r} className="bg-background text-foreground dark:bg-[#1a1d26] dark:text-slate-200">
               {r}
             </option>
           ))}
@@ -492,10 +492,10 @@ function VertexConfig({ reasoningModel, setReasoningModel }: EnterpriseProviderC
           dir="ltr"
           value={store.vertexLocation}
           onChange={(e) => store.setVertexLocation(e.target.value)}
-          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground [color-scheme:light] dark:bg-[#1a1d26] dark:text-slate-200 dark:[color-scheme:dark]"
         >
           {VERTEX_LOCATIONS.map((loc) => (
-            <option key={loc} value={loc}>
+            <option key={loc} value={loc} className="bg-background text-foreground dark:bg-[#1a1d26] dark:text-slate-200">
               {loc}
             </option>
           ))}

@@ -203,7 +203,7 @@ const UI_LANGUAGE_OPTIONS: import("./ui/LanguageSelector").LanguageOption[] = [
 const RETENTION_DAY_OPTIONS = [1, 7, 14, 30, 60, 90];
 
 const RETENTION_SELECT_CLASS =
-  "h-7 rounded border border-border/70 bg-surface-1/80 px-2.5 text-xs font-medium text-foreground shadow-sm hover:border-border-hover hover:bg-surface-2/70 focus:outline-none focus:ring-2 focus:ring-ring/30 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50 transition-colors duration-200";
+  "h-7 rounded border border-border/70 bg-surface-1/80 px-2.5 text-xs font-medium text-foreground shadow-sm hover:border-border-hover hover:bg-surface-2/70 focus:outline-none focus:ring-2 focus:ring-ring/30 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50 transition-colors duration-200 [color-scheme:light] dark:bg-[#1a1d26] dark:text-slate-200 dark:[color-scheme:dark]";
 
 const noop = () => {};
 
@@ -1118,10 +1118,10 @@ function GpuDeviceSelector({ purpose }: { purpose: "transcription" | "intelligen
                 setSelectedUuid(uuid);
                 await window.electronAPI?.setGpuDeviceIndex?.(purpose, uuid);
               }}
-              className="w-full appearance-none rounded-md border border-border bg-background px-3 pe-10 py-2 text-sm"
+              className="w-full appearance-none rounded-md border border-border bg-background px-3 pe-10 py-2 text-sm text-foreground [color-scheme:light] dark:bg-[#1a1d26] dark:text-slate-200 dark:[color-scheme:dark]"
             >
               {gpus.map((gpu) => (
-                <option key={gpu.uuid} value={gpu.uuid}>
+                <option key={gpu.uuid} value={gpu.uuid} className="bg-background text-foreground dark:bg-[#1a1d26] dark:text-slate-200">
                   GPU {gpu.index}: {gpu.name} ({Math.round(gpu.vramMb / 1024)}GB)
                 </option>
               ))}
@@ -3276,15 +3276,15 @@ export default function SettingsPage({
                           e.target.value as "bottom-right" | "center" | "bottom-left"
                         )
                       }
-                      className="h-7 rounded border border-border/70 bg-surface-1/80 px-2.5 text-xs font-medium text-foreground shadow-sm hover:border-border-hover hover:bg-surface-2/70 focus:outline-none focus:ring-2 focus:ring-ring/30 focus:ring-offset-1 transition-colors duration-200"
+                      className="h-7 rounded border border-border/70 bg-surface-1/80 px-2.5 text-xs font-medium text-foreground shadow-sm hover:border-border-hover hover:bg-surface-2/70 focus:outline-none focus:ring-2 focus:ring-ring/30 focus:ring-offset-1 transition-colors duration-200 [color-scheme:light] dark:bg-[#1a1d26] dark:text-slate-200 dark:[color-scheme:dark]"
                     >
-                      <option value="bottom-right">
+                      <option value="bottom-right" className="bg-background text-foreground dark:bg-[#1a1d26] dark:text-slate-200">
                         {t("settingsPage.general.floatingIcon.bottomRight")}
                       </option>
-                      <option value="center">
+                      <option value="center" className="bg-background text-foreground dark:bg-[#1a1d26] dark:text-slate-200">
                         {t("settingsPage.general.floatingIcon.center")}
                       </option>
-                      <option value="bottom-left">
+                      <option value="bottom-left" className="bg-background text-foreground dark:bg-[#1a1d26] dark:text-slate-200">
                         {t("settingsPage.general.floatingIcon.bottomLeft")}
                       </option>
                     </select>
@@ -4351,10 +4351,10 @@ EOF`,
                       }}
                       className={RETENTION_SELECT_CLASS}
                     >
-                      <option value={0}>{t("settingsPage.privacy.audioRetentionDisabled")}</option>
+                      <option value={0} className="bg-background text-foreground dark:bg-[#1a1d26] dark:text-slate-200">{t("settingsPage.privacy.audioRetentionDisabled")}</option>
                       {enforcedAudioRetentionDays > 0 &&
                         !RETENTION_DAY_OPTIONS.includes(enforcedAudioRetentionDays) && (
-                          <option value={enforcedAudioRetentionDays}>
+                          <option value={enforcedAudioRetentionDays} className="bg-background text-foreground dark:bg-[#1a1d26] dark:text-slate-200">
                             {t("settingsPage.privacy.retentionDays", {
                               count: enforcedAudioRetentionDays,
                             })}
@@ -4365,6 +4365,7 @@ EOF`,
                           key={days}
                           value={days}
                           disabled={audioRetentionCap !== null && days > audioRetentionCap}
+                          className="bg-background text-foreground dark:bg-[#1a1d26] dark:text-slate-200"
                         >
                           {t("settingsPage.privacy.retentionDays", { count: days })}
                         </option>
@@ -4428,11 +4429,11 @@ EOF`,
                       onChange={(e) => setTranscriptRetentionDays(parseInt(e.target.value, 10))}
                       className={RETENTION_SELECT_CLASS}
                     >
-                      <option value={0}>
+                      <option value={0} className="bg-background text-foreground dark:bg-[#1a1d26] dark:text-slate-200">
                         {t("settingsPage.privacy.transcriptRetentionForever")}
                       </option>
                       {RETENTION_DAY_OPTIONS.map((days) => (
-                        <option key={days} value={days}>
+                        <option key={days} value={days} className="bg-background text-foreground dark:bg-[#1a1d26] dark:text-slate-200">
                           {t("settingsPage.privacy.retentionDays", { count: days })}
                         </option>
                       ))}

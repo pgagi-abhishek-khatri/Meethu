@@ -11,6 +11,7 @@ import { LiveStrip, ProblemBanner, SkippedBox } from "./LiveHeader";
 import { Orb, Peek } from "./OrbView";
 import type { Project } from "./copilotApi";
 import { PastMeeting } from "./PastMeetings";
+import type { AttachedDocument } from "./documentReader";
 
 type Tab = "copilot" | "transcript" | "context" | "settings";
 const EXPANDED_FROM = 900; // px: wide enough for the three-pane layout (main resizes the window)
@@ -78,7 +79,17 @@ function ThreadChips({
 }
 
 export default function CopilotApp() {
-  const { state, settings, updateSettings, markFeedback } = useCopilot();
+  const {
+    state,
+    settings,
+    updateSettings,
+    markFeedback,
+    dismissCard,
+    skipFollowups,
+    skipGaps,
+    skipAllMoments,
+    togglePause,
+  } = useCopilot();
   useEffect(() => {
     document.title = "Copilot";
   }, []);
@@ -110,6 +121,10 @@ export default function CopilotApp() {
   const askSkipped = (i: Skipped) =>
     void window.copilot?.ask({ text: i.line, skippedId: i.id, threadId: "main" });
   const dropSkipped = (i: Skipped) => void window.copilot?.cancel(i.id);
+  const dropAllSkipped = () => {
+    for (const item of state.skipped) void window.copilot?.cancel(item.id);
+    skipAllMoments();
+  };
 
   // ---- window modes: orb (small), peek (newest card beside it), full (the panel) ----
   const mode = state.mode;
@@ -198,18 +213,31 @@ export default function CopilotApp() {
     if (settings && !settings.hasKey)
       return { dot: "bg-amber-400", text: "No API key: open Settings" };
     if (!settings?.enabled) return { dot: "bg-slate-500", text: "Copilot is off" };
+    if (state.paused) return { dot: "bg-amber-400", text: "Paused" };
     if (state.phase === "live") return { dot: "bg-emerald-400 animate-pulse", text: "Listening" };
     if (state.phase === "ended") return { dot: "bg-slate-400", text: "Meeting ended" };
     return { dot: "bg-slate-500", text: "Waiting for a meeting" };
-  }, [settings, state.phase]);
+  }, [settings, state.phase, state.paused]);
 
   const go = (t: Tab) => {
     setTab(t);
     setViewing(null);
     if (t === "copilot") setUnseen(false);
   };
-  const send = (text: string, threadId: string) => {
-    void window.copilot?.ask({ text, threadId, quote });
+  const send = (text: string, threadId: string, attachment?: AttachedDocument | null) => {
+    void window.copilot?.ask({
+      text,
+      threadId,
+      quote,
+      attachment: attachment
+        ? {
+            name: attachment.name,
+            content: attachment.content,
+            size: attachment.size,
+            type: attachment.type,
+          }
+        : undefined,
+    });
     setQuote("");
     go("copilot");
   };
@@ -231,6 +259,9 @@ export default function CopilotApp() {
         onAsk={(text, card) => void window.copilot?.ask({ text, threadId: card.threadId })}
         onDeeper={(card) => void window.copilot?.rerun(card.id)}
         onFeedback={(card, value) => markFeedback(card.id, value, state.sessionId)}
+        onDismissCard={(card) => dismissCard(card.id)}
+        onSkipFollowups={(card) => skipFollowups(card.id)}
+        onSkipGaps={(card) => skipGaps(card.id)}
       />
     );
   };
@@ -295,7 +326,7 @@ export default function CopilotApp() {
   const composerTitle = state.threads.find((t) => t.id === composerThread)?.title ?? "Main";
 
   const style = (
-    <style>{`html,body,#root{background:transparent!important}.copilot-md code,.copilot-md pre{background:rgba(255,255,255,.08)!important}.copilot-md a{color:#7dd3fc}`}</style>
+    <style>{`html,body,#root{background:transparent!important}.copilot-md code,.copilot-md pre{background:rgba(255,255,255,.08)!important}.copilot-md a{color:#7dd3fc}select option{background-color:#1a1d26!important;color:#e2e8f0!important;}`}</style>
   );
   if (mode === "orb")
     return (
@@ -306,6 +337,7 @@ export default function CopilotApp() {
           unseen={Math.max(0, doneCount - seenDone)}
           skipped={state.skipped.length}
           live={state.phase === "live"}
+          paused={state.paused}
           onHover={() => {
             if (newest || state.skipped.length) {
               setMode("peek");
@@ -334,7 +366,7 @@ export default function CopilotApp() {
   const faded = !!settings?.fadeWhenIdle && !hovered && ended === false;
   return (
     <div
-      className="flex h-screen min-h-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-[#12141a] text-slate-200 transition-opacity"
+      className="dark flex h-screen min-h-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-[#12141a] text-slate-200 transition-opacity [color-scheme:dark]"
       style={{ opacity: faded ? (settings?.opacity ?? 1) : 1 }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -395,18 +427,20 @@ export default function CopilotApp() {
       </header>
 
       <ProblemBanner kind={state.problem} onFix={() => go("settings")} />
-      <LiveStrip state={state} />
+      <LiveStrip state={state} onTogglePause={togglePause} />
       {state.phase === "live" && (projects.length > 0 || state.project.name) && (
         <div className="flex items-center gap-2 border-b border-white/10 px-3 py-1 text-[11px] text-slate-400">
           <span className="shrink-0">Project</span>
           <select
             value={state.project.projectId ?? ""}
             onChange={(e) => pickProject(e.target.value)}
-            className="min-w-0 flex-1 truncate rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-slate-200 outline-none"
+            className="min-w-0 flex-1 truncate rounded border border-white/10 bg-[#1a1d26] px-1.5 py-0.5 text-slate-200 outline-none [color-scheme:dark]"
           >
-            <option value="">None</option>
+            <option value="" className="bg-[#1a1d26] text-slate-200">
+              None
+            </option>
             {projects.map((p) => (
-              <option key={p.id} value={p.id}>
+              <option key={p.id} value={p.id} className="bg-[#1a1d26] text-slate-200">
                 {p.name}
               </option>
             ))}
@@ -432,14 +466,19 @@ export default function CopilotApp() {
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           {centerBody}
           {tab === "copilot" && !viewing && (
-            <SkippedBox items={state.skipped} onAsk={askSkipped} onDismiss={dropSkipped} />
+            <SkippedBox
+              items={state.skipped}
+              onAsk={askSkipped}
+              onDismiss={dropSkipped}
+              onDismissAll={dropAllSkipped}
+            />
           )}
           <Composer
             placeholder="Ask the copilot…"
             target={composerThread !== "main" ? `In: ${composerTitle}` : ""}
             quote={quote}
             onClearQuote={() => setQuote("")}
-            onSend={(t) => send(t, composerThread)}
+            onSend={(t, doc) => send(t, composerThread, doc)}
             focusToken={focusToken}
             onNewThread={() => void newThread()}
           />
@@ -467,9 +506,22 @@ export default function CopilotApp() {
               target=""
               quote=""
               onClearQuote={() => {}}
-              onSend={async (t) => {
+              onSend={async (t, doc) => {
                 const id = sideThread ?? (await newThread());
-                if (id) void window.copilot?.ask({ text: t, threadId: id });
+                if (id) {
+                  void window.copilot?.ask({
+                    text: t,
+                    threadId: id,
+                    attachment: doc
+                      ? {
+                          name: doc.name,
+                          content: doc.content,
+                          size: doc.size,
+                          type: doc.type,
+                        }
+                      : undefined,
+                  });
+                }
               }}
             />
           </section>

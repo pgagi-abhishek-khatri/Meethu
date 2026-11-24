@@ -214,7 +214,7 @@ test("runner: card events, confidence defaults to low, cancel is silent afterwar
     ["card_start", "card_update", "card_done"]
   );
   assert.equal(card.confidence, "low");
-  assert.equal(card.body, "body");
+  assert.equal(card.body, "body.");
   h.cancel(); // already finished: no cancel event
   assert.equal(events.at(-1).type, "card_done");
 
@@ -354,7 +354,7 @@ test("runner: a proactive card streams once it is clearly not a SKIP, low confid
     events.map((e) => e.type),
     ["card_start", "card_update", "card_update", "card_done"]
   ); // proactive cards stream too (docs/copilot/LATENCY_1S_PLAN.md, Phase 1)
-  assert.equal(card.body, "Body");
+  assert.equal(card.body, "Body.");
 
   events.length = 0;
   await mk("TITLE: T\nNo label").run({
@@ -399,7 +399,7 @@ test("runner: a proactive talking-points card is not dropped for low confidence,
     createAnswerRunner({ model: async () => ({ text, sources: [] }), emit: (e) => events.push(e) });
   const job = { id: "t", proactive: true, deliverable: "talking_points", focus: "f", context: {} };
   const card = await mk("TITLE: T\n- one\nCONFIDENCE: low").run(job).done;
-  assert.equal(card.body, "- one");
+  assert.equal(card.body, "- one.");
   events.length = 0;
   const r = await mk("SKIP: needs private facts").run(job).done;
   assert.equal(r.skipped, true);
@@ -564,3 +564,29 @@ test("buildSystemPrompt: gap_questions says not to answer; skip rule covers repe
   assert.match(p, /GAPS: <question> \| <question>/);
   assert.match(p, /Earlier cards/);
 });
+
+test("runner: guarantees completed sentences and properly punctuated followups and gaps", async () => {
+  const events = [];
+  const mk = (text) =>
+    createAnswerRunner({ model: async () => ({ text, sources: [] }), emit: (e) => events.push(e) });
+  const text = `TITLE: Completed Thought
+- Service is operating within normal thresholds and
+- Latency improved
+FOLLOWUPS: What is current latency | Can we scale
+GAPS: Which region is affected: | What tier is this.
+CONFIDENCE: high`;
+  const card = await mk(text).run({ id: "sc1", proactive: false, focus: "f", context: {} }).done;
+  assert.equal(
+    card.body,
+    "- Service is operating within normal thresholds.\n- Latency improved."
+  );
+  assert.deepEqual(card.followups, [
+    "What is current latency?",
+    "Can we scale?",
+  ]);
+  assert.deepEqual(card.gaps, [
+    "Which region is affected?",
+    "What tier is this?",
+  ]);
+});
+

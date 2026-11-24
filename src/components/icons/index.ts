@@ -15,6 +15,7 @@ export {
   ListChecks,
   ListEnd,
   ListOrdered,
+  Pause,
   Quote,
   Square,
   SquareSlash,

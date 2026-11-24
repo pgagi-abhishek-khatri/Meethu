@@ -798,7 +798,8 @@ function resolveEvidence(candidates = [], options = {}) {
       }
 
       if (a.version && b.version) {
-        try { return compareSemVer(b.version, a.version); } catch {}
+        // Free-form version labels are not SemVer; they tie rather than throw.
+        if (parseSemVer(a.version) && parseSemVer(b.version)) return compareSemVer(b.version, a.version);
       }
       return 0;
     });
@@ -967,7 +968,7 @@ function resolveEvidence(candidates = [], options = {}) {
       return b.authority.source_score - a.authority.source_score;
     }
     if (a.version && b.version) {
-      try { return compareSemVer(b.version, a.version); } catch {}
+      if (parseSemVer(a.version) && parseSemVer(b.version)) return compareSemVer(b.version, a.version);
     }
     // Transaction time tie-breaker only if exact same version/content
     return (b.temporal.transaction_time ?? 0) - (a.temporal.transaction_time ?? 0);

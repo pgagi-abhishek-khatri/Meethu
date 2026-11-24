@@ -236,10 +236,10 @@ function Rules({ p, run }: { p: Project; run: (x: Promise<unknown>) => void }) {
         <select
           value={kind}
           onChange={(e) => setKind(e.target.value as RuleKind)}
-          className="h-8 rounded-md border border-border/70 bg-input px-2 text-xs text-foreground dark:border-white/10"
+          className="h-8 rounded-md border border-border/70 bg-input px-2 text-xs text-foreground [color-scheme:light] dark:border-white/10 dark:bg-[#1a1d26] dark:text-slate-200 dark:[color-scheme:dark]"
         >
           {Object.entries(RULE_LABELS).map(([k, l]) => (
-            <option key={k} value={k}>
+            <option key={k} value={k} className="bg-background text-foreground dark:bg-[#1a1d26] dark:text-slate-200">
               {l}
             </option>
           ))}
