@@ -1,185 +1,127 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { createCopilot } = require("../../src/copilot/main/service");
 
-// Mock SpeechRecognition environment
-class MockSpeechRecognition {
-  constructor() {
-    this.continuous = false;
-    this.interimResults = false;
-    this.lang = "";
-    this.onstart = null;
-    this.onresult = null;
-    this.onerror = null;
-    this.onend = null;
-    this.started = false;
-    this.stopped = false;
-    this.aborted = false;
-  }
+let canOpen = true;
+try {
+  const D = require("better-sqlite3");
+  new D(":memory:").close();
+} catch {
+  canOpen = false;
+}
+const sqlite = {
+  skip: canOpen ? false : "better-sqlite3 is not built for this runtime",
+};
 
-  start() {
-    this.started = true;
-    if (this.onstart) this.onstart();
-  }
-
-  stop() {
-    this.stopped = true;
-    if (this.onend) this.onend();
-  }
-
-  abort() {
-    this.aborted = true;
-    if (this.onend) this.onend();
-  }
-
-  simulateResult(results, resultIndex = 0) {
-    if (this.onresult) {
-      this.onresult({
-        resultIndex,
-        results,
-      });
-    }
-  }
-
-  simulateError(error) {
-    if (this.onerror) {
-      this.onerror({ error });
-    }
-  }
+function setupCopilot({ env = {}, transcribeAudio = null } = {}) {
+  const handlers = new Map();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-audio-test-"));
+  const electron = {
+    BrowserWindow: class {
+      constructor() {
+        this.webContents = { send: () => {}, isDestroyed: () => false };
+      }
+      setMenuBarVisibility() {}
+      once() {}
+      on() {}
+      isDestroyed() {
+        return false;
+      }
+      isVisible() {
+        return false;
+      }
+      getBounds() {
+        return { x: 0, y: 0, width: 400, height: 600 };
+      }
+      isMinimized() {
+        return false;
+      }
+    },
+    screen: {
+      getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
+      getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
+    },
+    ipcMain: {
+      handle: (name, fn) => handlers.set(name, fn),
+      on: () => {},
+    },
+    dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) },
+    safeStorage: { isEncryptionAvailable: () => false },
+  };
+  const copilot = createCopilot({
+    dir,
+    env,
+    electron,
+    loadRenderer: async () => {},
+    setupAlwaysOnTop: () => {},
+    transcribeAudio,
+    logError: () => {},
+  });
+  return {
+    copilot,
+    invoke: (channel, ...args) => handlers.get(channel)(null, ...args),
+    cleanup: () => {
+      copilot.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  };
 }
 
-test("audioInput mock recognition lifecycle and events", () => {
-  const recognition = new MockSpeechRecognition();
-  assert.equal(recognition.started, false);
+test("copilot:transcribe-audio rejects empty and oversized audio buffers", sqlite, async () => {
+  const { invoke, cleanup } = setupCopilot();
+  try {
+    const empty = await invoke("copilot:transcribe-audio", new ArrayBuffer(0), "audio/webm");
+    assert.deepEqual(empty, { ok: false, error: "No audio was recorded." });
 
-  recognition.start();
-  assert.equal(recognition.started, true);
+    const invalid = await invoke("copilot:transcribe-audio", null, "audio/webm");
+    assert.deepEqual(invalid, { ok: false, error: "No audio was recorded." });
 
-  // Simulate speech transcript result
-  let receivedTranscript = "";
-  let receivedFinal = false;
-
-  const onResultHandler = (event) => {
-    let finalChunk = "";
-    let interimChunk = "";
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const res = event.results[i];
-      if (res.isFinal) {
-        finalChunk += res[0].transcript;
-      } else {
-        interimChunk += res[0].transcript;
-      }
-    }
-    const transcript = (finalChunk || interimChunk).trim();
-    if (transcript) {
-      receivedTranscript = transcript;
-      receivedFinal = Boolean(finalChunk);
-    }
-  };
-
-  recognition.onresult = onResultHandler;
-
-  // 1. Interim result
-  recognition.simulateResult([
-    { 0: { transcript: "what are our" }, isFinal: false }
-  ]);
-  assert.equal(receivedTranscript, "what are our");
-  assert.equal(receivedFinal, false);
-
-  // 2. Final result
-  recognition.simulateResult([
-    { 0: { transcript: "what are our quarterly metrics?" }, isFinal: true }
-  ]);
-  assert.equal(receivedTranscript, "what are our quarterly metrics?");
-  assert.equal(receivedFinal, true);
-
-  recognition.stop();
-  assert.equal(recognition.stopped, true);
+    const tooBig = await invoke(
+      "copilot:transcribe-audio",
+      new Uint8Array(25 * 1024 * 1024 + 1),
+      "audio/webm"
+    );
+    assert.deepEqual(tooBig, { ok: false, error: "Audio recording is too large (max 25 MB)." });
+  } finally {
+    cleanup();
+  }
 });
 
-test("audioInput error handling maps permission and network errors", () => {
-  const recognition = new MockSpeechRecognition();
-
-  let lastError = null;
-  const errorHandler = (event) => {
-    if (event.error === "no-speech" || event.error === "aborted") return;
-    let msg = "Microphone error: " + (event.error || "unknown");
-    if (event.error === "not-allowed") {
-      msg = "Microphone access was denied. Please check permissions.";
-    } else if (event.error === "network") {
-      msg = "Speech recognition network error.";
-    }
-    lastError = msg;
-  };
-
-  recognition.onerror = errorHandler;
-
-  recognition.simulateError("no-speech");
-  assert.equal(lastError, null); // ignored
-
-  recognition.simulateError("aborted");
-  assert.equal(lastError, null); // ignored
-
-  recognition.simulateError("not-allowed");
-  assert.equal(lastError, "Microphone access was denied. Please check permissions.");
-
-  recognition.simulateError("network");
-  assert.equal(lastError, "Speech recognition network error.");
+test("copilot:transcribe-audio uses host transcribeAudio callback when available", sqlite, async () => {
+  let receivedMime = null;
+  let receivedSize = 0;
+  const { invoke, cleanup } = setupCopilot({
+    transcribeAudio: async (buf, mime) => {
+      receivedMime = mime;
+      receivedSize = buf.length;
+      return { ok: true, text: "  What are the action items?  " };
+    },
+  });
+  try {
+    const payload = Uint8Array.from([1, 2, 3, 4]).buffer;
+    const res = await invoke("copilot:transcribe-audio", payload, "audio/webm;codecs=opus");
+    assert.equal(receivedMime, "audio/webm;codecs=opus");
+    assert.equal(receivedSize, 4);
+    assert.deepEqual(res, { ok: true, text: "What are the action items?" });
+  } finally {
+    cleanup();
+  }
 });
 
-test("audioInput accumulates transcript without word duplication across utterances", () => {
-  let finalTranscript = "";
-  let currentInterim = "";
-  let lastDispatched = "";
-
-  const handleResult = (event) => {
-    let sessionFinal = "";
-    let sessionInterim = "";
-
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const res = event.results[i];
-      if (res.isFinal) {
-        sessionFinal += res[0].transcript;
-      } else {
-        sessionInterim += res[0].transcript;
-      }
-    }
-
-    if (sessionFinal) {
-      finalTranscript = (finalTranscript + " " + sessionFinal).trim();
-      currentInterim = "";
-    } else {
-      currentInterim = sessionInterim;
-    }
-
-    const combined = (finalTranscript + " " + currentInterim).trim();
-    if (combined) {
-      lastDispatched = combined;
-    }
-  };
-
-  const recognition = new MockSpeechRecognition();
-  recognition.onresult = handleResult;
-  recognition.start();
-
-  // Utterance 1 interim 1
-  recognition.simulateResult([{ 0: { transcript: "can you" }, isFinal: false }]);
-  assert.equal(lastDispatched, "can you");
-
-  // Utterance 1 interim 2 (streaming update, should replace previous interim, not concatenate)
-  recognition.simulateResult([{ 0: { transcript: "can you summarize" }, isFinal: false }]);
-  assert.equal(lastDispatched, "can you summarize");
-
-  // Utterance 1 final chunk
-  recognition.simulateResult([{ 0: { transcript: "can you summarize" }, isFinal: true }]);
-  assert.equal(finalTranscript, "can you summarize");
-  assert.equal(lastDispatched, "can you summarize");
-
-  // Utterance 2 interim (after natural pause / restart)
-  recognition.simulateResult([{ 0: { transcript: "the key points" }, isFinal: false }]);
-  assert.equal(lastDispatched, "can you summarize the key points");
-
-  // Utterance 2 final
-  recognition.simulateResult([{ 0: { transcript: "the key points?" }, isFinal: true }]);
-  assert.equal(finalTranscript, "can you summarize the key points?");
-  assert.equal(lastDispatched, "can you summarize the key points?");
+test("copilot:transcribe-audio returns clear error when no host STT and no OpenRouter key", sqlite, async () => {
+  const { invoke, cleanup } = setupCopilot({
+    env: {},
+    transcribeAudio: async () => ({ ok: false }),
+  });
+  try {
+    const payload = Uint8Array.from([1, 2, 3, 4]).buffer;
+    const res = await invoke("copilot:transcribe-audio", payload, "audio/webm");
+    assert.equal(res.ok, false);
+    assert.match(res.error, /OpenRouter key/i);
+  } finally {
+    cleanup();
+  }
 });

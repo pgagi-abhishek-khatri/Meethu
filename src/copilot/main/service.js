@@ -54,6 +54,8 @@ function createCopilot({
   setupAlwaysOnTop,
   getActiveEvents = () => [], // calendar events happening now (the app's database), to pick the project
   ffmpegPath = null, // bundled ffmpeg, for audio/video project files
+  transcribeAudio = null, // optional host STT callback: (buffer, mimeType) => Promise<{ ok, text, error }>
+  onOpenReference = null, // optional host callback: ({ fileId, projectId, name, page, snippet }) => void
   engineOptions = {}, // tests
   Database,
   logError = defaultLogError,
@@ -451,6 +453,105 @@ function createCopilot({
   });
   handle("cancel", (id) => engine.cancel(str(id, 40)));
   handle("rerun", (id) => engine.rerun(str(id, 40)));
+  handle("transcribe-audio", async (audioData, mimeType = "audio/webm") => {
+    const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+    let buffer = null;
+    if (Buffer.isBuffer(audioData)) buffer = audioData;
+    else if (audioData instanceof ArrayBuffer) buffer = Buffer.from(audioData);
+    else if (ArrayBuffer.isView(audioData)) {
+      buffer = Buffer.from(audioData.buffer, audioData.byteOffset, audioData.byteLength);
+    }
+    if (!buffer || buffer.length === 0) {
+      return { ok: false, error: "No audio was recorded." };
+    }
+    if (buffer.length > MAX_AUDIO_BYTES) {
+      return { ok: false, error: "Audio recording is too large (max 25 MB)." };
+    }
+
+    const mime = str(mimeType, 80) || "audio/webm";
+
+    // 1. Try host app's local/configured transcription if provided.
+    if (typeof transcribeAudio === "function") {
+      try {
+        const res = await transcribeAudio(buffer, mime);
+        const text = typeof res?.text === "string" ? res.text.trim() : "";
+        if (res?.ok && text) return { ok: true, text };
+      } catch (err) {
+        logError("Copilot host audio transcription failed; checking OpenRouter fallback", err);
+      }
+    }
+
+    // 2. Fallback to Copilot's OpenRouter key + analysis model (supports input_audio).
+    const st = settings.engine();
+    if (!st.apiKey) {
+      return {
+        ok: false,
+        error: "Add your OpenRouter key in Settings to use voice input.",
+      };
+    }
+
+    const voiceMedia = createMedia({ ffmpegPath });
+    let tmpDir = null;
+    try {
+      let payloadBuf = buffer;
+      let format = mime.includes("wav") ? "wav" : mime.includes("mpeg") || mime.includes("mp3") ? "mp3" : null;
+      if (!format) {
+        if (!voiceMedia.available()) {
+          return {
+            ok: false,
+            error: "Audio converter (ffmpeg) is unavailable for voice input.",
+          };
+        }
+        tmpDir = voiceMedia.makeDir();
+        const ext = mime.includes("ogg") ? "ogg" : mime.includes("mp4") ? "m4a" : "webm";
+        const rawPath = path.join(tmpDir, `voice.${ext}`);
+        fs.writeFileSync(rawPath, buffer);
+        const mp3Path = await voiceMedia.workingCopy("audio", rawPath, tmpDir);
+        payloadBuf = fs.readFileSync(mp3Path);
+        format = "mp3";
+      }
+
+      const analyzer = createAnalyzer({
+        apiKey: st.apiKey,
+        ...(st.analysisModel ? { model: st.analysisModel } : {}),
+      });
+      const result = await analyzer.ask(
+        [
+          {
+            type: "text",
+            text: "Transcribe the spoken words in this audio accurately and verbatim. Output only the transcribed text, with no timestamps, labels, or commentary.",
+          },
+          {
+            type: "input_audio",
+            input_audio: {
+              data: payloadBuf.toString("base64"),
+              format,
+            },
+          },
+        ],
+        { maxTokens: 2000 }
+      );
+      const text = String(result?.text ?? "").trim();
+      if (!text) {
+        return { ok: false, error: "No speech was detected in the recording." };
+      }
+      return { ok: true, text };
+    } catch (err) {
+      logError("Copilot voice transcription failed", err);
+      return {
+        ok: false,
+        error: err?.message || "Voice transcription failed.",
+      };
+    } finally {
+      if (tmpDir) {
+        try {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        } catch {
+          // Best-effort temp cleanup
+        }
+      }
+    }
+  });
   handle("thread-create", (title) => engine.createThread({ title: str(title, 40) }));
   handle("thread-rename", (id, title) => engine.renameThread(str(id, 40), str(title, 40)));
   handle("thread-close", (id) => engine.closeThread(str(id, 40)));
@@ -521,9 +622,129 @@ function createCopilot({
     return projectView();
   });
   handle("session-project-get", () => projectView());
-  handle("project-remove", (id) => store.projects.remove(Number(id)));
+  const filesRoot = path.join(dir, "copilot-files");
+  const isManagedFile = (p) => {
+    if (!p) return false;
+    const rel = path.relative(filesRoot, path.resolve(p));
+    return !!rel && !rel.startsWith("..") && !path.isAbsolute(rel);
+  };
+  const deleteManagedFile = (p) => {
+    if (!isManagedFile(p)) return;
+    try {
+      fs.rmSync(p, { force: true });
+    } catch {
+      // Best-effort cleanup
+    }
+  };
+  handle("project-remove", (id) => {
+    const pid = Number(id);
+    for (const f of store.projects.files(pid)) deleteManagedFile(f.path);
+    try {
+      fs.rmSync(path.join(filesRoot, String(pid)), { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup
+    }
+    return store.projects.remove(pid);
+  });
   handle("project-active", (id, active) => store.projects.setActive(Number(id), !!active));
-  handle("project-remove-file", (id) => store.projects.removeFile(Number(id)));
+  handle("project-remove-file", (id) => {
+    const f = store.rag.file(Number(id));
+    if (f) deleteManagedFile(f.path);
+    return store.projects.removeFile(Number(id));
+  });
+  handle("project-download-file", async (id) => {
+    const f = store.rag.file(Number(id));
+    if (!f || !f.path || !fs.existsSync(f.path)) {
+      return { ok: false, error: "File is no longer available on disk." };
+    }
+    const parentWin = win.webContents() ? BrowserWindow.fromWebContents(win.webContents()) : null;
+    const res = await dialog.showSaveDialog(parentWin, {
+      defaultPath: f.name || path.basename(f.path),
+    });
+    if (res.canceled || !res.filePath) {
+      return { ok: false, canceled: true };
+    }
+    try {
+      fs.copyFileSync(f.path, res.filePath);
+      return { ok: true, path: res.filePath };
+    } catch (error) {
+      return { ok: false, error: error?.message || "Failed to save file." };
+    }
+  });
+  handle("project-preview-file", async (id) => {
+    const { classify, MIME, extOf } = require("../rag/config");
+    const f = store.rag.file(Number(id));
+    if (!f) return { ok: false, error: "File not found." };
+    const kind = f.kind || classify(f.name) || "text";
+    const mime = MIME[extOf(f.name)] || "text/plain";
+    const exists = Boolean(f.path && fs.existsSync(f.path));
+
+    if (kind === "office" || !exists) {
+      const chunks = store.rag.fileChunks(f.id);
+      if (!chunks.length) {
+        return {
+          ok: false,
+          error: exists
+            ? "Preview is not ready yet for this document."
+            : "File is no longer available on disk.",
+        };
+      }
+      return {
+        ok: true,
+        kind: "text",
+        name: f.name,
+        mime: "text/plain",
+        text: chunks.map((c) => c.text).join("\n\n---\n\n"),
+        truncated: false,
+      };
+    }
+
+    try {
+      if (kind === "text") {
+        const MAX_TEXT = 200 * 1024;
+        const stat = fs.statSync(f.path);
+        const buf = fs.readFileSync(f.path);
+        const truncated = stat.size > MAX_TEXT;
+        return {
+          ok: true,
+          kind: "text",
+          name: f.name,
+          mime,
+          text: (truncated ? buf.subarray(0, MAX_TEXT) : buf).toString("utf8"),
+          truncated,
+        };
+      }
+      if (kind === "pdf" || kind === "image" || kind === "audio" || kind === "video") {
+        const MAX_MEDIA = 25 * 1024 * 1024;
+        const stat = fs.statSync(f.path);
+        if (stat.size > MAX_MEDIA) {
+          const chunks = store.rag.fileChunks(f.id);
+          if (chunks.length) {
+            return {
+              ok: true,
+              kind: "text",
+              name: f.name,
+              mime: "text/plain",
+              text: chunks.map((c) => c.text).join("\n\n---\n\n"),
+              truncated: true,
+            };
+          }
+          return { ok: false, error: "File is too large to preview inline. Use Download instead." };
+        }
+        const buf = fs.readFileSync(f.path);
+        return {
+          ok: true,
+          kind,
+          name: f.name,
+          mime,
+          dataBase64: buf.toString("base64"),
+        };
+      }
+      return { ok: false, error: "Preview is not supported for this file type." };
+    } catch (error) {
+      return { ok: false, error: error?.message || "Could not load file preview." };
+    }
+  });
   handle("project-add-files", async (id) => {
     const r = await dialog.showOpenDialog(
       win.webContents() ? BrowserWindow.fromWebContents(win.webContents()) : null,
@@ -534,8 +755,9 @@ function createCopilot({
     if (r.canceled) return 0;
     return addPaths(id, r.filePaths);
   });
-  // Files dropped on the Copilot page: only existing regular files are taken.
+  // Files dropped on the Copilot page: only existing regular files are taken and copied into local managed storage.
   const addPaths = (id, paths) => {
+    const pid = Number(id);
     const files = (Array.isArray(paths) ? paths : [])
       .filter((p) => typeof p === "string" && path.isAbsolute(p))
       .filter((p) => {
@@ -546,8 +768,20 @@ function createCopilot({
         }
       })
       .slice(0, 50);
+    const projectDir = path.join(filesRoot, String(pid));
+    if (files.length) fs.mkdirSync(projectDir, { recursive: true });
     for (const p of files) {
-      const f = store.projects.addFileRow(Number(id), p, path.basename(p));
+      const base = path.basename(p);
+      const safeName = base.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const localPath = path.join(projectDir, `${crypto.randomUUID().slice(0, 8)}-${safeName}`);
+      let targetPath = p;
+      try {
+        fs.copyFileSync(p, localPath);
+        targetPath = localPath;
+      } catch (error) {
+        logError("Failed to copy project file to local storage; using original path", error);
+      }
+      const f = store.projects.addFileRow(pid, targetPath, base);
       ingestor.ingest(f).catch((error) => {
         ragLog({ event: "background_ingest_failed", file_id: f.id, error: error?.message });
       }); // reads, splits, embeds and summarises in the background; the page shows its progress
@@ -563,6 +797,33 @@ function createCopilot({
       ragLog({ event: "background_reindex_failed", file_id: f.id, error: error?.message });
     });
     return true;
+  });
+  handle("open-reference", (ref = {}) => {
+    const requestedId = ref?.fileId != null ? Number(ref.fileId) : null;
+    const requestedName = str(ref?.name, 260);
+    let file = requestedId != null && Number.isFinite(requestedId) ? store.rag.file(requestedId) : null;
+    if (!file && requestedName) {
+      const candidates = store.projects
+        .list()
+        .flatMap((p) => p.files.map((f) => ({ ...f, project_id: p.id })));
+      file =
+        candidates.find((f) => projectId != null && f.project_id === projectId && f.name === requestedName) ||
+        candidates.find((f) => f.name === requestedName) ||
+        null;
+    }
+    if (!file) return { ok: false, error: "Referenced file not found in Copilot projects." };
+    const payload = {
+      fileId: file.id,
+      projectId: file.project_id,
+      name: file.name,
+      page: ref?.page != null && Number.isFinite(Number(ref.page)) ? Number(ref.page) : null,
+      where: str(ref?.where, 120) || null,
+      snippet: str(ref?.snippet, 300) || null,
+    };
+    if (typeof onOpenReference === "function") {
+      onOpenReference(payload);
+    }
+    return { ok: true, ...payload };
   });
   handle("sessions-list", () => store.listSessions());
   handle("sessions-count", () => store.countSessions());

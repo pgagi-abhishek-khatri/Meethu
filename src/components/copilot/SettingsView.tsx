@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { CopilotSettings } from "./copilotApi";
 import { onHotkeyKeyDown } from "./copilotFormat";
 import type { CopilotState } from "./copilotState";
@@ -61,6 +61,49 @@ function Text({
     <label className="block">
       {label && <span className="mb-0.5 block text-[12px] text-slate-400">{label}</span>}
       {rows ? <textarea rows={rows} {...common} /> : <input {...common} />}
+    </label>
+  );
+}
+
+function OpacitySlider({
+  opacity,
+  onChange,
+}: {
+  opacity: number;
+  onChange: (patch: { opacity: number }) => void;
+}) {
+  const [val, setVal] = useState(opacity);
+  useEffect(() => {
+    setVal(opacity);
+  }, [opacity]);
+
+  const update = (next: number) => {
+    const clamped = Math.min(1, Math.max(0.3, Math.round(next * 100) / 100));
+    setVal(clamped);
+    onChange({ opacity: clamped });
+  };
+
+  return (
+    <label
+      className="block"
+      onWheel={(e) => {
+        e.preventDefault();
+        const step = e.deltaY < 0 ? 0.05 : -0.05;
+        update(val + step);
+      }}
+    >
+      <span className="mb-0.5 block text-[12px] text-slate-400">
+        Opacity: {Math.round(val * 100)}%
+      </span>
+      <input
+        type="range"
+        min={30}
+        max={100}
+        value={Math.round(val * 100)}
+        onInput={(e) => update(Number((e.target as HTMLInputElement).value) / 100)}
+        onChange={(e) => update(Number(e.target.value) / 100)}
+        className="w-full accent-emerald-400 cursor-pointer"
+      />
     </label>
   );
 }
@@ -183,19 +226,7 @@ export default function SettingsView({ settings: s, state, onSettings }: Props) 
             <span className="text-[11px] text-rose-300">{hotkeyError || s.hotkeyError}</span>
           )}
         </label>
-        <label className="block">
-          <span className="mb-0.5 block text-[12px] text-slate-400">
-            Opacity: {Math.round(s.opacity * 100)}%
-          </span>
-          <input
-            type="range"
-            min={30}
-            max={100}
-            value={Math.round(s.opacity * 100)}
-            onChange={(e) => onSettings({ opacity: Number(e.target.value) / 100 })}
-            className="w-full accent-emerald-400"
-          />
-        </label>
+        <OpacitySlider opacity={s.opacity} onChange={onSettings} />
         <Toggle
           label="Solid only on hover or when a card arrives"
           checked={s.fadeWhenIdle}

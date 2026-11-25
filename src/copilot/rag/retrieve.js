@@ -490,7 +490,10 @@ function createRetriever({
         parts.push(`[${c.file}${where ? ` · ${where}` : ""}${s ? ` · ${passageTag(s)}` : ""}]\n${body}`);
         usedInfo.push({
           file: c.file,
+          fileId: c.file_id,
+          page: c.meta.page ?? null,
           where,
+          snippet: clip(c.text, 160),
           score: Number((cos.get(f.id) ?? 0).toFixed(3)),
           kw: kwRank.get(f.id) ?? null,
           ...(s ? { doc: s.kind, docOrder: s.order, addedNewer: !kept.includes(f) } : {}),

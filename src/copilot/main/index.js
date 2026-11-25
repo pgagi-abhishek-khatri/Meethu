@@ -14,7 +14,7 @@ function loadRenderer(win, flag) {
   return win.loadFile(info.path, { query: { ...info.query, [flag]: "true" } });
 }
 
-function startCopilot({ getActiveEvents } = {}) {
+function startCopilot({ getActiveEvents, transcribeAudio, onOpenReference } = {}) {
   const electron = require("electron");
   const { WindowPositionUtil } = require("../../helpers/windowConfig");
   const { createCopilot } = require("./service");
@@ -26,6 +26,8 @@ function startCopilot({ getActiveEvents } = {}) {
     electron,
     loadRenderer,
     getActiveEvents,
+    transcribeAudio,
+    onOpenReference,
     ffmpegPath: (() => {
       try {
         return require("../../helpers/ffmpegUtils").getFFmpegPath();

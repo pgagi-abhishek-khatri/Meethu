@@ -53,3 +53,14 @@ test("a real OpenRouter key is saved and wins over the .env one", () => {
     "the key never reaches the window"
   );
 });
+
+test("opacity defaults to 50% and clamps within limits", () => {
+  const s = createSettings({ dir: tmp(), env: ENV });
+  assert.equal(s.view().opacity, 0.5, "default opacity is 50%");
+  assert.equal(s.view().fadeWhenIdle, false, "default fadeWhenIdle is false");
+
+  assert.equal(s.update({ opacity: 0.8 }).opacity, 0.8);
+  assert.equal(s.update({ opacity: 0.1 }).opacity, 0.3, "clamped to minimum 0.3");
+  assert.equal(s.update({ opacity: 1.5 }).opacity, 1.0, "clamped to maximum 1.0");
+  assert.equal(s.update({ opacity: "invalid" }).opacity, 0.5, "falls back to default 0.5");
+});

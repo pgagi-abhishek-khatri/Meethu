@@ -244,7 +244,7 @@ function createIngestor({
         .catch(
           (e) => (
             rec("summary_failed", { error: e.message }),
-            docText.slice(0, 240).replace(/\s+/g, " ")
+            docText.slice(0, 500).replace(/\s+/g, " ")
           )
         );
 

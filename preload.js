@@ -67,6 +67,7 @@ const registerListener = (channel, handlerFactory) => {
 const copilotCall = (channel, ...args) => ipcRenderer.invoke(`copilot:${channel}`, ...args);
 contextBridge.exposeInMainWorld("copilot", {
   ask: (q) => copilotCall("ask", q),
+  transcribeAudio: (audioData, mimeType) => copilotCall("transcribe-audio", audioData, mimeType),
   rerun: (id) => copilotCall("rerun", id),
   cancel: (id) => copilotCall("cancel", id),
   getSettings: () => copilotCall("settings-get"),
@@ -89,6 +90,8 @@ contextBridge.exposeInMainWorld("copilot", {
         Array.from(files, (f) => webUtils.getPathForFile(f)).filter(Boolean)
       ),
     removeFile: (id) => copilotCall("project-remove-file", id),
+    downloadFile: (id) => copilotCall("project-download-file", id),
+    previewFile: (id) => copilotCall("project-preview-file", id),
     reindex: (id) => copilotCall("project-reindex", id), // index a file again (after a failure or a change)
   },
   sessionProject: {
@@ -102,6 +105,12 @@ contextBridge.exposeInMainWorld("copilot", {
     remove: (id) => copilotCall("sessions-remove", id),
   },
   openWindow: () => copilotCall("window", "open"),
+  openReference: (ref) => copilotCall("open-reference", ref),
+  onOpenReference: (callback) => {
+    const listener = (_event, ref) => callback(ref);
+    ipcRenderer.on("copilot:open-reference", listener);
+    return () => ipcRenderer.removeListener("copilot:open-reference", listener);
+  },
 });
 
 contextBridge.exposeInMainWorld("electronAPI", {

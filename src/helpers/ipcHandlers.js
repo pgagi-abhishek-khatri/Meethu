@@ -695,6 +695,24 @@ class IPCHandlers {
       try {
         return require("../copilot/main").startCopilot({
           getActiveEvents: () => this.databaseManager?.getActiveEvents?.() ?? [],
+          transcribeAudio: async (buffer) => {
+            // Use local Whisper/Parakeet only if a local server or model is ready; otherwise let Copilot use its OpenRouter key.
+            const whisperReady = Boolean(this.whisperManager?.getSelectedModel?.());
+            const parakeetReady = Boolean(this.parakeetManager?.getSelectedModel?.());
+            if (!whisperReady && !parakeetReady) return { ok: false };
+            const res = parakeetReady
+              ? await this.parakeetManager.transcribeLocalParakeet(buffer, {})
+              : await this.whisperManager.transcribeLocalWhisper(buffer, this._resolveWhisperVadOptions("noteRecording"));
+            const text = typeof res?.text === "string" ? res.text.trim() : "";
+            return res?.success && text ? { ok: true, text } : { ok: false };
+          },
+          onOpenReference: (ref) => {
+            this.windowManager?.showControlPanel?.();
+            const win = this.windowManager?.controlPanelWindow;
+            if (win && !win.isDestroyed()) {
+              win.webContents.send("copilot:open-reference", ref);
+            }
+          },
         });
       } catch (error) {
         debugLogger.error("Copilot failed to start", { error: error?.message }, "copilot");

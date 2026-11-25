@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Plus, Send, X, AlertTriangle, Upload, Mic, FileText } from "../icons";
+import { Send, X, AlertTriangle, Upload, Mic, FileText } from "../icons";
 import { validateUserInput } from "../../copilot/core/validation/inputValidation";
 import { readAttachedFile, formatFileSize, type AttachedDocument } from "./documentReader";
 import { useAudioInput } from "./useAudioInput";
@@ -12,7 +12,6 @@ interface Props {
   onSend: (text: string, attachment?: AttachedDocument | null) => void;
   focusToken?: number; // changes -> focus the box
   disabled?: boolean;
-  onNewThread?: () => void; // opens a side thread
 }
 
 export default function Composer({
@@ -23,7 +22,6 @@ export default function Composer({
   onSend,
   focusToken,
   disabled,
-  onNewThread,
 }: Props) {
   const [text, setText] = useState("");
   const [warning, setWarning] = useState<string | null>(null);
@@ -35,36 +33,33 @@ export default function Composer({
     if (focusToken) ref.current?.focus();
   }, [focusToken]);
 
-  const baseTextRef = useRef("");
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 112)}px`;
+  }, [text]);
 
   const {
     isRecording,
+    isTranscribing,
+    isSupported: isAudioSupported,
     durationSeconds,
-    toggle: toggleAudioRaw,
+    toggle: toggleAudio,
     stop: stopAudio,
-    cancel: cancelAudioRaw,
+    cancel: cancelAudio,
   } = useAudioInput({
     onTranscript: (spokenText) => {
-      const base = baseTextRef.current.trim();
-      setText(base ? `${base} ${spokenText}` : spokenText);
-      if (warning) setWarning(null);
+      setText((prev) => {
+        const trimmedPrev = prev.trim();
+        return trimmedPrev ? `${trimmedPrev} ${spokenText}` : spokenText;
+      });
+      setWarning(null);
     },
     onError: (err) => {
       setWarning(err);
     },
   });
-
-  const toggleAudio = () => {
-    if (!isRecording) {
-      baseTextRef.current = text.trim();
-    }
-    toggleAudioRaw();
-  };
-
-  const cancelAudio = () => {
-    cancelAudioRaw();
-    setText(baseTextRef.current);
-  };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -104,7 +99,7 @@ export default function Composer({
   };
 
   return (
-    <div className="border-t border-white/10 bg-black/20 p-2">
+    <div className="border-t border-white/10 bg-black/20 px-3 py-2.5">
       <input
         ref={fileInputRef}
         type="file"
@@ -113,15 +108,20 @@ export default function Composer({
         className="hidden"
       />
       {quote && (
-        <div className="mb-1.5 flex items-start gap-1 rounded-md bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-200">
+        <div className="mb-2 flex items-start gap-1.5 rounded-lg bg-emerald-500/10 px-2.5 py-1.5 text-[11px] text-emerald-200">
           <span className="line-clamp-2 flex-1">“{quote}”</span>
-          <button type="button" title="Remove quote" onClick={onClearQuote}>
+          <button
+            type="button"
+            title="Remove quote"
+            onClick={onClearQuote}
+            className="rounded p-0.5 text-emerald-300/70 hover:bg-white/10 hover:text-emerald-100"
+          >
             <X size={12} />
           </button>
         </div>
       )}
       {attachment && (
-        <div className="mb-1.5 flex items-center justify-between rounded-md border border-sky-400/25 bg-sky-500/10 px-2.5 py-1 text-[11px] text-sky-200">
+        <div className="mb-2 flex items-center justify-between rounded-lg border border-sky-400/25 bg-sky-500/10 px-2.5 py-1.5 text-[11px] text-sky-200">
           <div className="flex min-w-0 items-center gap-1.5">
             <FileText size={13} className="shrink-0 text-sky-300" />
             <span className="truncate font-medium">{attachment.name}</span>
@@ -139,13 +139,19 @@ export default function Composer({
           </button>
         </div>
       )}
+      {isTranscribing && (
+        <div className="mb-2 flex items-center gap-2 rounded-lg border border-sky-400/30 bg-sky-500/15 px-2.5 py-1.5 text-[11px] text-sky-200">
+          <span className="h-2 w-2 shrink-0 rounded-full bg-sky-400 animate-pulse" />
+          <span>Transcribing voice…</span>
+        </div>
+      )}
       {isRecording && (
-        <div className="mb-1.5 flex items-center justify-between rounded-md border border-rose-400/30 bg-rose-500/15 px-2.5 py-1 text-[11px] text-rose-200">
+        <div className="mb-2 flex items-center justify-between rounded-lg border border-rose-400/30 bg-rose-500/15 px-2.5 py-1.5 text-[11px] text-rose-200">
           <div className="flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-rose-400 animate-ping" />
+            <span className="h-2 w-2 shrink-0 rounded-full bg-rose-400 animate-ping" />
             <span>Listening… {formatDuration(durationSeconds)}</span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={stopAudio}
@@ -168,17 +174,17 @@ export default function Composer({
       {warning && (
         <div
           role="alert"
-          className="mb-1.5 flex items-center justify-between gap-1.5 rounded-lg border border-amber-400/30 bg-amber-500/15 px-2.5 py-1.5 text-[11px] text-amber-200"
+          className="mb-2 flex items-center justify-between gap-1.5 rounded-lg border border-amber-400/30 bg-amber-500/15 px-2.5 py-1.5 text-[11px] text-amber-200"
         >
-          <div className="flex items-center gap-1.5">
+          <div className="flex min-w-0 items-center gap-1.5">
             <AlertTriangle size={13} className="shrink-0 text-amber-300" />
-            <span>{warning}</span>
+            <span className="truncate">{warning}</span>
           </div>
           <button
             type="button"
             title="Dismiss warning"
             onClick={() => setWarning(null)}
-            className="rounded p-0.5 text-amber-300/70 hover:bg-white/10 hover:text-amber-100"
+            className="shrink-0 rounded p-0.5 text-amber-300/70 hover:bg-white/10 hover:text-amber-100"
           >
             <X size={12} />
           </button>
@@ -191,25 +197,15 @@ export default function Composer({
             : "border-white/10 bg-white/[0.05] focus-within:border-emerald-400/50"
         }`}
       >
-        {onNewThread && (
-          <button
-            type="button"
-            title="New thread"
-            onClick={onNewThread}
-            className="rounded p-1 text-slate-500 hover:bg-white/10 hover:text-slate-200"
-          >
-            <Plus size={15} />
-          </button>
-        )}
         <button
           type="button"
           title={attachment ? `Attached: ${attachment.name}` : "Attach document"}
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled}
-          className={`rounded p-1 transition-colors ${
+          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors ${
             attachment
               ? "bg-sky-500/20 text-sky-300 hover:bg-sky-500/30"
-              : "text-slate-500 hover:bg-white/10 hover:text-slate-200"
+              : "text-slate-400 hover:bg-white/10 hover:text-slate-200"
           }`}
         >
           <Upload size={14} />
@@ -230,17 +226,27 @@ export default function Composer({
               send();
             }
           }}
-          className="max-h-28 min-h-[22px] flex-1 resize-none bg-transparent text-[13px] text-slate-100 outline-none placeholder:text-slate-500"
+          className="input-inline max-h-28 min-h-[28px] min-w-0 flex-1 resize-none border-0 bg-transparent px-1 py-1 text-[13px] leading-[20px] text-slate-100 outline-none placeholder:text-slate-500 focus:outline-none focus:ring-0"
         />
         <button
           type="button"
-          title={isRecording ? "Stop voice input" : "Voice input"}
+          title={
+            !isAudioSupported
+              ? "Voice input is unavailable"
+              : isTranscribing
+                ? "Transcribing voice…"
+                : isRecording
+                  ? "Stop voice input"
+                  : "Voice input"
+          }
           onClick={toggleAudio}
-          disabled={disabled}
-          className={`rounded p-1 transition-colors ${
+          disabled={disabled || isTranscribing || !isAudioSupported}
+          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors ${
             isRecording
               ? "bg-rose-500/20 text-rose-300 animate-pulse hover:bg-rose-500/30"
-              : "text-slate-500 hover:bg-white/10 hover:text-slate-200"
+              : isTranscribing || !isAudioSupported
+                ? "text-slate-600 cursor-not-allowed"
+                : "text-slate-400 hover:bg-white/10 hover:text-slate-200"
           }`}
         >
           <Mic size={14} />
@@ -250,12 +256,12 @@ export default function Composer({
           title="Send"
           onClick={send}
           disabled={!text.trim() || disabled}
-          className="rounded p-1 text-emerald-300 hover:bg-white/10 disabled:text-slate-600"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-emerald-300 transition-colors hover:bg-white/10 disabled:text-slate-600 disabled:hover:bg-transparent"
         >
           <Send size={15} />
         </button>
       </div>
-      {target && <div className="mt-1 px-1 text-[10px] text-slate-500">{target}</div>}
+      {target && <div className="mt-1.5 px-1 text-[11px] text-slate-400">{target}</div>}
     </div>
   );
 }

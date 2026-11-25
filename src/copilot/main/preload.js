@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("copilot", {
     return () => ipcRenderer.removeListener("copilot:event", listener);
   },
   ask: (q) => call("ask", q),
+  transcribeAudio: (audioData, mimeType) => call("transcribe-audio", audioData, mimeType),
   pause: () => call("pause", true),
   resume: () => call("resume"),
   togglePause: () => call("pause-toggle"),
@@ -34,6 +35,8 @@ contextBridge.exposeInMainWorld("copilot", {
     setActive: (id, active) => call("project-active", id, active),
     addFiles: (id) => call("project-add-files", id), // opens a file picker in main
     removeFile: (id) => call("project-remove-file", id),
+    downloadFile: (id) => call("project-download-file", id),
+    previewFile: (id) => call("project-preview-file", id),
     reindex: (id) => call("project-reindex", id), // index a file again (after a failure or a change)
   },
   // The project of the meeting on now: pick one (remember = teach the calendar rule), or null to clear.
@@ -46,5 +49,7 @@ contextBridge.exposeInMainWorld("copilot", {
     get: (id) => call("sessions-get", id),
     remove: (id) => call("sessions-remove", id),
   },
+  openWindow: undefined,
+  openReference: (ref) => call("open-reference", ref),
   window: (action, value) => call("window", action, value), // expand | mode (orb|peek|full) | opacity | hide | close
 });

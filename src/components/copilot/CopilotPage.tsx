@@ -27,7 +27,7 @@ import CopilotProjects from "./CopilotProjects";
 import { WORKING } from "./copilotFormat";
 import CopilotMeetings, { MeetingRow } from "./CopilotMeetings";
 import { Block, PaneHeader } from "./CopilotPane";
-import type { PastSession, Project } from "./copilotApi";
+import type { FileReferenceTarget, PastSession, Project } from "./copilotApi";
 
 type Section = "overview" | "projects" | "meetings" | "behaviour" | "audio" | "settings";
 const SECTIONS: { id: Section; label: string; icon: typeof Home }[] = [
@@ -401,13 +401,27 @@ function AudioAndKeys() {
   );
 }
 
-export default function CopilotPage() {
+export default function CopilotPage({
+  pendingRef,
+  onClearPendingRef,
+}: {
+  pendingRef?: FileReferenceTarget | null;
+  onClearPendingRef?: () => void;
+} = {}) {
   const [section, setSection] = useState<Section>("overview");
   const [projects, setProjects] = useState<Project[]>([]);
   const [meetings, setMeetings] = useState<PastSession[]>([]);
   const [meetingCount, setMeetingCount] = useState<number | null>(null);
   const [projectId, setProjectId] = useState<number | null>(null);
   const [meetingId, setMeetingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!pendingRef) return;
+    setSection("projects");
+    if (pendingRef.projectId != null) {
+      setProjectId(pendingRef.projectId);
+    }
+  }, [pendingRef]);
 
   const loadProjects = useCallback(
     () => void window.copilot?.projects.list().then(setProjects),
@@ -478,6 +492,8 @@ export default function CopilotPage() {
         reload={loadProjects}
         selected={projectId}
         onSelect={setProjectId}
+        pendingRef={pendingRef}
+        onClearPendingRef={onClearPendingRef}
       />
     ),
     meetings: (

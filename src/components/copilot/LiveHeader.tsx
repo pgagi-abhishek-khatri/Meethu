@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronUp, Pause, Play, X } from "../icons";
+import { ChevronDown, ChevronUp, Pause, Play, Plus, X } from "../icons";
 import type { CopilotState, Skipped } from "./copilotState";
 
 // The AI account refuses every call: say so plainly and point at the fix.
@@ -40,9 +40,11 @@ export const speakerName = (label: string) => {
 export function LiveStrip({
   state,
   onTogglePause,
+  onNewThread,
 }: {
   state: CopilotState;
   onTogglePause?: () => void;
+  onNewThread?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   if (state.phase !== "live") return null;
@@ -51,7 +53,7 @@ export function LiveStrip({
   const isPaused = !!state.paused;
   return (
     <div className="border-b border-white/10">
-      <div className="flex w-full items-center justify-between px-3 py-1.5 text-[11px] text-slate-400">
+      <div className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-[11px] text-slate-400">
         <button
           type="button"
           title={state.summary ? "Show what the copilot remembers" : undefined}
@@ -79,30 +81,42 @@ export function LiveStrip({
             <span className="shrink-0 rounded-full bg-white/10 px-1.5 text-slate-400">memory</span>
           )}
         </button>
-        {onTogglePause && (
-          <button
-            type="button"
-            onClick={onTogglePause}
-            title={isPaused ? "Resume proactive listening" : "Pause proactive listening"}
-            className={`ms-2 flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium transition-colors ${
-              isPaused
-                ? "border border-amber-400/40 bg-amber-500/20 text-amber-200 hover:bg-amber-500/30"
-                : "border border-white/10 text-slate-400 hover:bg-white/10 hover:text-slate-200"
-            }`}
-          >
-            {isPaused ? (
-              <>
-                <Play className="h-2.5 w-2.5" fill="currentColor" />
-                <span>Resume</span>
-              </>
-            ) : (
-              <>
-                <Pause className="h-2.5 w-2.5" fill="currentColor" />
-                <span>Pause</span>
-              </>
-            )}
-          </button>
-        )}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {onTogglePause && (
+            <button
+              type="button"
+              onClick={onTogglePause}
+              title={isPaused ? "Resume proactive listening" : "Pause proactive listening"}
+              className={`flex h-6 shrink-0 items-center gap-1 rounded px-2 text-[10px] font-medium transition-colors ${
+                isPaused
+                  ? "border border-amber-400/40 bg-amber-500/20 text-amber-200 hover:bg-amber-500/30"
+                  : "border border-white/10 text-slate-400 hover:bg-white/10 hover:text-slate-200"
+              }`}
+            >
+              {isPaused ? (
+                <>
+                  <Play className="h-2.5 w-2.5" fill="currentColor" />
+                  <span>Resume</span>
+                </>
+              ) : (
+                <>
+                  <Pause className="h-2.5 w-2.5" fill="currentColor" />
+                  <span>Pause</span>
+                </>
+              )}
+            </button>
+          )}
+          {onNewThread && (
+            <button
+              type="button"
+              onClick={onNewThread}
+              title="New thread"
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-white/10 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-200"
+            >
+              <Plus size={12} />
+            </button>
+          )}
+        </div>
       </div>
       {open && state.summary && (
         <p className="max-h-40 overflow-y-auto whitespace-pre-wrap px-3 pb-2 text-[12px] leading-snug text-slate-400">

@@ -24,6 +24,13 @@ export interface Card {
   confidence?: Confidence;
   sources?: Source[];
   files?: string[];
+  fileRefs?: {
+    name: string;
+    fileId?: number;
+    page?: number | null;
+    where?: string;
+    snippet?: string;
+  }[];
   attachmentName?: string;
   timing?: { firstTokenMs?: number; totalMs?: number } | null;
   truncated?: boolean;
@@ -284,6 +291,7 @@ export function reduce(state: CopilotState, e: CopilotEvent): CopilotState {
                   deep: e.deep,
                   focus: e.focus,
                   files: e.files ?? (e.attachmentName ? [e.attachmentName] : o?.files) ?? [],
+                  fileRefs: e.fileRefs ?? o?.fileRefs,
                   attachmentName: e.attachmentName ?? o?.attachmentName,
                 }
         ),
@@ -300,6 +308,7 @@ export function reduce(state: CopilotState, e: CopilotEvent): CopilotState {
                 body: e.body ?? c.body,
                 confidence: e.confidence ?? c.confidence,
                 files: e.files ?? c.files,
+                fileRefs: e.fileRefs ?? c.fileRefs,
                 attachmentName: e.attachmentName ?? c.attachmentName,
               }
             : c
@@ -316,6 +325,7 @@ export function reduce(state: CopilotState, e: CopilotEvent): CopilotState {
           confidence: e.confidence,
           sources: e.sources ?? [],
           files: e.files ?? (e.attachmentName ? [e.attachmentName] : o?.files) ?? [],
+          fileRefs: e.fileRefs ?? o?.fileRefs,
           attachmentName: e.attachmentName ?? o?.attachmentName,
           timing: e.timing ?? null,
           truncated: !!e.truncated,

@@ -37,6 +37,7 @@ export default function Card({
   onSkipGaps,
 }: Props) {
   const [openSource, setOpenSource] = useState<number | null>(null);
+  const [showAllRefs, setShowAllRefs] = useState(false);
   const [copied, setCopied] = useState<{ text: string; ok: boolean } | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(
@@ -61,22 +62,46 @@ export default function Card({
   };
   const working = card.status === "queued" || card.status === "searching";
 
-  const docSources: string[] = [];
-  if (card.attachmentName && !docSources.includes(card.attachmentName)) {
-    docSources.push(card.attachmentName);
+  const docRefs: {
+    name: string;
+    fileId?: number;
+    page?: number | null;
+    where?: string;
+    snippet?: string;
+  }[] = [];
+  const seenRefKeys = new Set<string>();
+  const pushRef = (ref: {
+    name: string;
+    fileId?: number;
+    page?: number | null;
+    where?: string;
+    snippet?: string;
+  }) => {
+    if (!ref.name) return;
+    const key = `${ref.fileId ?? ref.name}:${ref.page ?? ref.where ?? ""}`;
+    if (seenRefKeys.has(key)) return;
+    seenRefKeys.add(key);
+    docRefs.push(ref);
+  };
+  if (Array.isArray(card.fileRefs) && card.fileRefs.length > 0) {
+    for (const r of card.fileRefs) pushRef(r);
+  }
+  if (card.attachmentName && !docRefs.some((r) => r.name === card.attachmentName)) {
+    pushRef({ name: card.attachmentName });
   }
   if (Array.isArray(card.files)) {
     for (const f of card.files) {
       const name = typeof f === "string" ? f : (f as any)?.name || (f as any)?.file || "";
-      if (name && !docSources.includes(name)) {
-        docSources.push(name);
+      if (name && !docRefs.some((r) => r.name === name)) {
+        pushRef({ name });
       }
     }
   }
+  const visibleDocRefs = showAllRefs ? docRefs : docRefs.slice(0, 1);
 
   return (
     <article
-      className={`rounded-xl border border-white/10 bg-white/[0.04] p-3 text-[13px] leading-snug text-slate-200 ${
+      className={`rounded-xl border border-white/10 bg-white/[0.04] p-3 text-[13px] leading-snug text-slate-200 transition-all duration-150 hover:border-white/20 hover:bg-white/[0.07] ${
         card.feedback === "down" ? "opacity-50" : ""
       }`}
     >
@@ -113,19 +138,47 @@ export default function Card({
         <Loader2 size={14} className="mt-2 animate-spin text-slate-500" />
       )}
 
-      {(docSources.length > 0 || !!card.sources?.length) && (
+      {(docRefs.length > 0 || !!card.sources?.length) && (
         <ul className="mt-2 flex flex-wrap items-center gap-1.5">
-          {docSources.map((doc, i) => (
-            <li key={doc + i}>
-              <span
-                title={`From document: ${doc}`}
-                className="inline-flex items-center gap-1 rounded-md border border-sky-400/20 bg-sky-400/10 px-1.5 py-0.5 text-[11px] font-medium text-sky-300"
+          {visibleDocRefs.map((ref, i) => (
+            <li key={`${ref.name}-${ref.page ?? ref.where ?? i}`}>
+              <button
+                type="button"
+                title={
+                  ref.snippet
+                    ? `${ref.name}${ref.where ? ` (${ref.where})` : ""}\n${ref.snippet}`
+                    : `Open ${ref.name} in desktop app`
+                }
+                onClick={() =>
+                  void window.copilot?.openReference?.({
+                    fileId: ref.fileId,
+                    name: ref.name,
+                    page: ref.page ?? null,
+                    where: ref.where ?? null,
+                    snippet: ref.snippet ?? null,
+                  })
+                }
+                className="inline-flex items-center gap-1 rounded-md border border-sky-400/20 bg-sky-400/10 px-1.5 py-0.5 text-[11px] font-medium text-sky-300 transition-colors hover:border-sky-400/40 hover:bg-sky-400/20"
               >
                 <FileText size={11} className="shrink-0 text-sky-400" />
-                <span className="truncate max-w-[180px]">From: {docBasename(doc)}</span>
-              </span>
+                <span className="max-w-[180px] truncate">
+                  From: {docBasename(ref.name)}
+                  {ref.page != null ? ` · p.${ref.page}` : ref.where ? ` · ${ref.where}` : ""}
+                </span>
+              </button>
             </li>
           ))}
+          {docRefs.length > 1 && (
+            <li>
+              <button
+                type="button"
+                onClick={() => setShowAllRefs((v) => !v)}
+                className="rounded-md bg-white/[0.06] px-1.5 py-0.5 text-[11px] font-medium text-sky-300 hover:bg-white/10"
+              >
+                {showAllRefs ? "less" : `+${docRefs.length - 1} more`}
+              </button>
+            </li>
+          )}
           {card.sources?.slice(0, 3).map((s, i) => (
             <li key={s.url + i}>
               <button
@@ -211,19 +264,17 @@ export default function Card({
           ))}
         </div>
       )}
-      {card.status === "done" && (
+      {card.status === "done" && !card.deep && !card.deepened && !card.label && (
         <div className="mt-2 flex items-center gap-3 text-[11px]">
-          {!card.deep && !card.deepened && !card.label && (
-            <button
-              type="button"
-              onClick={onDeeper}
-              className="flex items-center gap-0.5 text-slate-500 hover:text-emerald-300"
-            >
-              <span>Rerun with high effort</span>
-              <ChevronRight size={11} />
-            </button>
-          )}
-          {onDismissCard && (
+          <button
+            type="button"
+            onClick={onDeeper}
+            className="flex items-center gap-0.5 text-slate-500 hover:text-emerald-300"
+          >
+            <span>Rerun with high effort</span>
+            <ChevronRight size={11} />
+          </button>
+          {/* {onDismissCard && (
             <button
               type="button"
               onClick={onDismissCard}
@@ -242,7 +293,7 @@ export default function Card({
             }
           >
             {card.feedback === "down" ? "Marked not helpful · undo" : "Not helpful"}
-          </button>
+          </button> */}
         </div>
       )}
     </article>

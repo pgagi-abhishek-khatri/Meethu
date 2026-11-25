@@ -103,6 +103,26 @@ export interface PastSessionDetail {
   }[];
 }
 
+export interface FileReferenceTarget {
+  fileId?: number;
+  projectId?: number;
+  name: string;
+  page?: number | null;
+  where?: string | null;
+  snippet?: string | null;
+}
+
+export interface ProjectFilePreview {
+  ok: boolean;
+  kind?: string;
+  name?: string;
+  mime?: string;
+  text?: string;
+  dataBase64?: string;
+  truncated?: boolean;
+  error?: string;
+}
+
 export interface CopilotBridge {
   onEvent(cb: (e: CopilotEvent) => void): () => void;
   ask(q: {
@@ -118,6 +138,10 @@ export interface CopilotBridge {
       type?: string;
     };
   }): Promise<string | false>;
+  transcribeAudio?(
+    audioData: ArrayBuffer,
+    mimeType?: string
+  ): Promise<{ ok: boolean; text?: string; error?: string }>;
   pause?(): Promise<boolean>;
   resume?(): Promise<boolean>;
   togglePause?(): Promise<boolean>;
@@ -148,6 +172,8 @@ export interface CopilotBridge {
     addFiles(id: number): Promise<number>;
     addDropped?(id: number, files: FileList | File[]): Promise<number>; // control panel only
     removeFile(id: number): Promise<void>;
+    downloadFile?(id: number): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>;
+    previewFile?(id: number): Promise<ProjectFilePreview>;
     reindex(id: number): Promise<boolean>;
   };
   sessionProject: {
@@ -161,6 +187,8 @@ export interface CopilotBridge {
     remove(id: string): Promise<void>;
   };
   openWindow?(): Promise<void>; // control panel only: show the live window
+  openReference?(ref: FileReferenceTarget): Promise<{ ok: boolean; error?: string }>;
+  onOpenReference?(cb: (ref: FileReferenceTarget) => void): () => void;
   window(
     action: "expand" | "mode" | "opacity" | "hide" | "close" | "open",
     value?: unknown // mode: "orb" | "peek" | "full"

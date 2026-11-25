@@ -40,6 +40,7 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
     let started = false;
     let firstVisibleMs = null; // when the card first reached the window (latency report)
     let files = job.attachmentName ? [job.attachmentName] : [];
+    let fileRefs = [];
     const start = () => {
       if (started) return;
       started = true;
@@ -50,6 +51,7 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
         focus: job.focus,
         attachmentName: job.attachmentName,
         files: files.length ? files : (job.attachmentName ? [job.attachmentName] : []),
+        ...(fileRefs.length ? { fileRefs } : {}),
       });
     };
     if (!job.proactive || job.web) start();
@@ -76,6 +78,7 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
         files = Array.from(
           new Set([...(job.attachmentName ? [job.attachmentName] : []), ...extraFiles])
         );
+        fileRefs = Array.isArray(extra?.fileRefs) ? extra.fileRefs : [];
         if (extra?.deliverable) deliverable = extra.deliverable;
         return model({
           messages: build({
@@ -102,6 +105,7 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
               ...a,
               attachmentName: job.attachmentName,
               files,
+              ...(fileRefs.length ? { fileRefs } : {}),
             });
           },
         })
@@ -140,6 +144,7 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
               },
               usage: r.usage,
               files, // which project files the answer was given passages from
+              ...(fileRefs.length ? { fileRefs } : {}),
               attachmentName: job.attachmentName,
               ...(deliverable !== job.deliverable ? { deliverable } : {}),
             };

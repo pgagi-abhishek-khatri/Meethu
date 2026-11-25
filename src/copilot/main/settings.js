@@ -30,7 +30,7 @@ const DEFAULTS = {
   mediaEmbedMinutes: 5, // per audio/video file: how long it is embedded as sound/picture (costly); after that, from its transcript
   maxParallel: 2,
   hotkey: "CommandOrControl+Alt+C", // shows / hides the window ("" = none)
-  opacity: 1,
+  opacity: 0.5,
   fadeWhenIdle: false, // the full panel is translucent until the mouse is over it or a card arrives
   retentionDays: 90, // 0 = keep forever
   window: { expanded: false, compact: null, expandedBounds: null, orb: null },
@@ -57,7 +57,8 @@ function sanitize(patch, current) {
     else if (key === "mediaEmbedMinutes")
       out[key] = Math.min(240, Math.max(0, Math.round(Number(v)) || 0));
     else if (key === "maxParallel") out[key] = Math.min(6, Math.max(1, Math.round(Number(v)) || d));
-    else if (key === "opacity") out[key] = Math.min(1, Math.max(0.3, Number(v) || 1));
+    else if (key === "opacity")
+      out[key] = Math.min(1, Math.max(0.3, Number.isFinite(Number(v)) ? Number(v) : 0.5));
     else if (key === "retentionDays") out[key] = Math.max(0, Math.round(Number(v)) || 0);
     else if (key === "window")
       out[key] = { ...current.window, ...(v && typeof v === "object" ? v : {}) };

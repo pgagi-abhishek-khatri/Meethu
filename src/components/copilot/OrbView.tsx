@@ -124,11 +124,13 @@ export function Peek({
         type="button"
         style={NO_DRAG}
         onClick={onOpen}
-        className="min-h-0 flex-1 overflow-hidden px-3 pb-3 text-start"
+        className="group min-h-0 flex-1 overflow-hidden px-3 pb-3 text-start transition-all duration-150 active:scale-[0.99]"
       >
         {card ? (
           <>
-            <h3 className="mb-0.5 text-[13px] font-semibold text-slate-50">{card.title}</h3>
+            <h3 className="mb-0.5 text-[13px] font-semibold text-slate-50 transition-colors group-hover:text-emerald-300">
+              {card.title}
+            </h3>
             <div className="copilot-md text-[12px] leading-snug">
               <MarkdownRenderer content={card.body ?? ""} />
             </div>

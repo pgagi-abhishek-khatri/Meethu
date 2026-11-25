@@ -9,7 +9,7 @@ import ContextView, { SummaryBlock } from "./ContextView";
 import SettingsView from "./SettingsView";
 import { LiveStrip, ProblemBanner, SkippedBox } from "./LiveHeader";
 import { Orb, Peek } from "./OrbView";
-import type { Project } from "./copilotApi";
+import type { Project, CopilotSettings } from "./copilotApi";
 import { PastMeeting } from "./PastMeetings";
 import type { AttachedDocument } from "./documentReader";
 
@@ -24,6 +24,24 @@ function useWidth() {
     return () => window.removeEventListener("resize", on);
   }, []);
   return w;
+}
+
+function findScrollableAncestor(target: EventTarget | null, deltaY: number): HTMLElement | null {
+  let el = target && target instanceof Element ? (target as HTMLElement) : null;
+  while (el && el !== document.body && el !== document.documentElement) {
+    if (el.getAttribute("data-copilot-root")) break;
+    const style = window.getComputedStyle(el);
+    const overflowY = style.overflowY;
+    if (overflowY === "auto" || overflowY === "scroll") {
+      const canScrollUp = deltaY < 0 && el.scrollTop > 1;
+      const canScrollDown = deltaY > 0 && el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+      if (canScrollUp || canScrollDown) {
+        return el;
+      }
+    }
+    el = el.parentElement;
+  }
+  return null;
 }
 
 function ThreadChips({
@@ -42,7 +60,7 @@ function ThreadChips({
   unseen: Set<string>;
 }) {
   return (
-    <div className="flex items-center gap-1 overflow-x-auto px-3 pt-2">
+    <div className="flex items-center gap-1.5 overflow-x-auto border-b border-white/10 px-3 py-1.5">
       {threads.map((t) => (
         <span
           key={t.id}
@@ -129,6 +147,88 @@ export default function CopilotApp() {
   // ---- window modes: orb (small), peek (newest card beside it), full (the panel) ----
   const mode = state.mode;
   const [hovered, setHovered] = useState(false);
+  const [localOpacity, setLocalOpacity] = useState<number | null>(null);
+  const currentOpacityRef = useRef(settings?.opacity ?? 0.5);
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wheelAccumulator = useRef(0);
+
+  useEffect(() => {
+    if (settings?.opacity != null) {
+      currentOpacityRef.current = settings.opacity;
+      setLocalOpacity(settings.opacity);
+    }
+  }, [settings?.opacity]);
+
+  const applyOpacityChange = useCallback(
+    (step: number) => {
+      const cur = currentOpacityRef.current;
+      const next = Math.round(Math.min(1, Math.max(0.3, cur + step)) * 100) / 100;
+      if (next === cur) return;
+
+      currentOpacityRef.current = next;
+      setLocalOpacity(next);
+
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = setTimeout(() => {
+        void updateSettings({ opacity: next });
+      }, 150);
+    },
+    [updateSettings]
+  );
+
+  const handleSettingsUpdate = useCallback(
+    (patch: Partial<CopilotSettings> & { apiKey?: string }) => {
+      if (patch.opacity !== undefined) {
+        currentOpacityRef.current = patch.opacity;
+        setLocalOpacity(patch.opacity);
+      }
+      return updateSettings(patch);
+    },
+    [updateSettings]
+  );
+
+  useEffect(() => {
+    if (mode !== "full") return;
+
+    const handleWheel = (e: WheelEvent) => {
+      // Horizontal swipe or tilt wheel adjustments:
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY) && Math.abs(e.deltaX) >= 5) {
+        wheelAccumulator.current += e.deltaX;
+        if (Math.abs(wheelAccumulator.current) >= 30) {
+          const step = wheelAccumulator.current > 0 ? 0.05 : -0.05;
+          wheelAccumulator.current = 0;
+          applyOpacityChange(step);
+        }
+        return;
+      }
+
+      const scrollable = findScrollableAncestor(e.target, e.deltaY);
+      if (!scrollable || e.altKey || e.ctrlKey || e.shiftKey || e.metaKey) {
+        if (Math.abs(e.deltaY) < 3) return;
+        wheelAccumulator.current += e.deltaY;
+        if (Math.abs(wheelAccumulator.current) >= 30) {
+          const step = wheelAccumulator.current < 0 ? 0.05 : -0.05;
+          wheelAccumulator.current = 0;
+          applyOpacityChange(step);
+        }
+        if (!scrollable) {
+          e.preventDefault();
+        }
+      }
+    };
+
+    window.addEventListener("wheel", handleWheel, { passive: false });
+    return () => {
+      window.removeEventListener("wheel", handleWheel);
+    };
+  }, [mode, applyOpacityChange]);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, []);
+
   const setMode = useCallback(
     (m: "orb" | "peek" | "full") => void window.copilot?.window("mode", m),
     []
@@ -140,7 +240,6 @@ export default function CopilotApp() {
     (c) => c.threadId === "main" && (c.status === "streaming" || c.status === "done")
   ).length;
   const [seenDone, setSeenDone] = useState(0); // finished cards already looked at (orb badge)
-  const lastDone = useRef(doneCount);
   const lastShown = useRef(shownCount);
   const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearPeek = () => {
@@ -153,16 +252,19 @@ export default function CopilotApp() {
   };
   const peekMs = (settings?.peekSeconds ?? 8) * 1000;
   // A new card while small: peek at it as soon as its first words arrive; shrink again once it is done (below).
+  // "Before the meeting" cards do not trigger the peek popup.
   useEffect(() => {
     if (shownCount > lastShown.current && mode !== "full") {
-      clearPeek();
-      setMode("peek");
+      const card = newest;
+      if (card?.label !== "Before the meeting") {
+        clearPeek();
+        setMode("peek");
+      }
     }
     lastShown.current = shownCount;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shownCount]);
   useEffect(() => {
-    lastDone.current = doneCount;
     if (doneCount > 0 && tab !== "copilot") setUnseen(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doneCount]);
@@ -288,7 +390,7 @@ export default function CopilotApp() {
   const centerBody = viewing ? (
     <PastMeeting id={viewing} onBack={() => setViewing(null)} onDeleted={() => setViewing(null)} />
   ) : tab === "settings" ? (
-    <SettingsView settings={settings} state={state} onSettings={updateSettings} />
+    <SettingsView settings={settings} state={state} onSettings={handleSettingsUpdate} />
   ) : tab === "transcript" ? (
     <TranscriptView
       segments={state.segments}
@@ -302,7 +404,7 @@ export default function CopilotApp() {
     <ContextView
       summary={state.summary}
       settings={settings}
-      onSettings={updateSettings}
+      onSettings={handleSettingsUpdate}
       phase={state.phase}
       onPickPast={setViewing}
     />
@@ -338,43 +440,56 @@ export default function CopilotApp() {
           skipped={state.skipped.length}
           live={state.phase === "live"}
           paused={state.paused}
-          onHover={() => {
-            if (newest || state.skipped.length) {
-              setMode("peek");
-              backToOrb(peekMs);
-            }
-          }}
+          onHover={() => {}}
           onOpen={() => setMode("full")}
         />
       </>
     );
-  if (mode === "peek")
+  if (mode === "peek") {
+    if (newest?.label === "Before the meeting") {
+      setMode("orb");
+      return null;
+    }
     return (
       <>
         {style}
         <Peek
           card={newest}
           skipped={state.skipped.length}
-          onOpen={() => setMode("full")}
+          onOpen={() => {
+            void handleSettingsUpdate({ opacity: 1.0 });
+            setMode("full");
+          }}
           onHover={clearPeek}
           onLeave={() => backToOrb(1500)}
           onClose={() => setMode("orb")}
         />
       </>
     );
+  }
 
-  const faded = !!settings?.fadeWhenIdle && !hovered && ended === false;
+  const currentOpacity = localOpacity ?? settings?.opacity ?? 0.5;
+  const isFadeWhenIdle = !!settings?.fadeWhenIdle;
+
+  const effectiveOpacity =
+    tab === "settings"
+      ? currentOpacity
+      : isFadeWhenIdle
+        ? (hovered || ended ? 1 : currentOpacity)
+        : currentOpacity;
+
   return (
     <div
-      className="dark flex h-screen min-h-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-[#12141a] text-slate-200 transition-opacity [color-scheme:dark]"
-      style={{ opacity: faded ? (settings?.opacity ?? 1) : 1 }}
+      data-copilot-root="true"
+      className="dark flex h-screen min-h-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-[#12141a] text-slate-200 transition-opacity duration-200 ease-out [color-scheme:dark]"
+      style={{ opacity: effectiveOpacity }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
       {style}
       <header
         style={{ WebkitAppRegion: "drag" }}
-        className="flex items-center gap-1 border-b border-white/10 px-2 py-1.5 [&_button]:[-webkit-app-region:no-drag] [&_select]:[-webkit-app-region:no-drag]"
+        className="flex items-center gap-1 border-b border-white/10 px-3 py-1.5 [&_button]:[-webkit-app-region:no-drag] [&_select]:[-webkit-app-region:no-drag]"
       >
         {tabBtn("copilot", "Copilot")}
         {tabBtn("transcript", "Transcript")}
@@ -384,11 +499,21 @@ export default function CopilotApp() {
             title={status.text}
             className={`me-1 inline-block h-2 w-2 rounded-full ${status.dot}`}
           />
+          {state.phase !== "live" && (
+            <button
+              type="button"
+              title="New thread"
+              onClick={() => void newThread()}
+              className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-white/10 hover:text-slate-200"
+            >
+              <Plus size={14} />
+            </button>
+          )}
           <button
             type="button"
             title="Shrink to the orb"
             onClick={() => setMode("orb")}
-            className="rounded p-1 hover:bg-white/10"
+            className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-white/10 hover:text-slate-200"
           >
             <Minus size={14} />
           </button>
@@ -396,7 +521,7 @@ export default function CopilotApp() {
             type="button"
             title="Settings"
             onClick={() => go("settings")}
-            className={`rounded p-1 hover:bg-white/10 ${tab === "settings" ? "text-white" : ""}`}
+            className={`flex h-7 w-7 items-center justify-center rounded-lg hover:bg-white/10 hover:text-slate-200 ${tab === "settings" ? "bg-white/10 text-white" : ""}`}
           >
             <Settings size={14} />
           </button>
@@ -404,7 +529,7 @@ export default function CopilotApp() {
             type="button"
             title={expanded ? "Collapse" : "Expand"}
             onClick={() => void window.copilot?.window("expand", !expanded)}
-            className="rounded p-1 hover:bg-white/10"
+            className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-white/10 hover:text-slate-200"
           >
             <svg
               width="14"
@@ -427,7 +552,11 @@ export default function CopilotApp() {
       </header>
 
       <ProblemBanner kind={state.problem} onFix={() => go("settings")} />
-      <LiveStrip state={state} onTogglePause={togglePause} />
+      <LiveStrip
+        state={state}
+        onTogglePause={togglePause}
+        onNewThread={() => void newThread()}
+      />
       {state.phase === "live" && (projects.length > 0 || state.project.name) && (
         <div className="flex items-center gap-2 border-b border-white/10 px-3 py-1 text-[11px] text-slate-400">
           <span className="shrink-0">Project</span>
@@ -480,7 +609,6 @@ export default function CopilotApp() {
             onClearQuote={() => setQuote("")}
             onSend={(t, doc) => send(t, composerThread, doc)}
             focusToken={focusToken}
-            onNewThread={() => void newThread()}
           />
         </main>
 

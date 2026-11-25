@@ -421,9 +421,32 @@ function createEngine({
       used: r.used,
       passages: r.text,
     });
-    return { passages: r.text, files: [...new Set(r.used.map((u) => u.file))] };
+    return fromRag(r);
   }
   // Did the project search find enough to answer from (core/answer/sufficiency.js)? Only a search D1 asked for
+  const refsFromUsed = (used = []) => {
+    const seen = new Set();
+    const out = [];
+    for (const u of used) {
+      if (!u?.file) continue;
+      const key = `${u.fileId ?? u.file}:${u.page ?? u.where ?? ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        name: u.file,
+        ...(u.fileId != null ? { fileId: u.fileId } : {}),
+        ...(u.page != null ? { page: u.page } : {}),
+        ...(u.where ? { where: u.where } : {}),
+        ...(u.snippet ? { snippet: u.snippet } : {}),
+      });
+    }
+    return out;
+  };
+  const fromRag = (r) => ({
+    passages: r.text,
+    files: [...new Set(r.used.map((u) => u.file))],
+    fileRefs: refsFromUsed(r.used),
+  });
   // (spec.project; typed questions and reruns set it too) can be "none": an unasked look (projectAuto) returns
   // passages only when something matches closely, so finding nothing there is normal. Passages the temporal
   // router or the authoritative lookup resolved are "enough". Never throws.
@@ -613,13 +636,18 @@ function createEngine({
                   text: r.text,
                   used: r.used,
                   files: [...new Set(r.used.map((u) => u.file))],
+                  fileRefs: refsFromUsed(r.used),
                 };
               }
 
               // If temporalRouter already resolved authoritative project chunks from SQLite, return directly
               // so okf.router does not truncate them against a short YAML metadata summary.
               if (resolvedByTemporal && ragResult?.text) {
-                return { passages: ragResult.text, files: ragResult.files || [] };
+                return {
+                  passages: ragResult.text,
+                  files: ragResult.files || [],
+                  fileRefs: ragResult.fileRefs || [],
+                };
               }
 
               if (okf && okf.router && okf.registry) {
@@ -645,8 +673,11 @@ function createEngine({
                 });
                 // a canonical OKF document answered it: the files' own search result no longer decides
                 if (routed.okfDocId) sufficiency = "enough";
+                const routedRefs = ragResult?.fileRefs?.length
+                  ? ragResult.fileRefs
+                  : (routed.files || []).map((name) => ({ name }));
                 return withSufficiency(
-                  { passages: routed.passages, files: routed.files },
+                  { passages: routed.passages, files: routed.files, fileRefs: routedRefs },
                   spec,
                   sufficiency
                 );
@@ -657,8 +688,9 @@ function createEngine({
                   ? {
                       passages: ragResult.text || ragResult.passages || "",
                       files: ragResult.files || [],
+                      fileRefs: ragResult.fileRefs || [],
                     }
-                  : { passages: "", files: [] },
+                  : { passages: "", files: [], fileRefs: [] },
                 spec,
                 sufficiency
               );

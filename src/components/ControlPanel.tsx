@@ -146,6 +146,22 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
   const [showSearch, setShowSearch] = useState(false);
   const showDiscarded = useShowDiscarded();
   const [activeView, setActiveView] = useState<ControlPanelView>("home");
+  const [pendingCopilotRef, setPendingCopilotRef] = useState<{
+    fileId?: number;
+    projectId?: number;
+    name: string;
+    page?: number | null;
+    where?: string | null;
+    snippet?: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    const off = window.copilot?.onOpenReference?.((ref) => {
+      setPendingCopilotRef(ref);
+      setActiveView("copilot");
+    });
+    return () => off?.();
+  }, []);
   const [integrationsSection, setIntegrationsSection] = useState<IntegrationsSection>(
     DEFAULT_INTEGRATIONS_SECTION
   );
@@ -1270,7 +1286,10 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
               )}
               {activeView === "copilot" && (
                 <Suspense fallback={null}>
-                  <CopilotPage />
+                  <CopilotPage
+                    pendingRef={pendingCopilotRef}
+                    onClearPendingRef={() => setPendingCopilotRef(null)}
+                  />
                 </Suspense>
               )}
               {activeView === "upload" && policyActionsAllowed && (

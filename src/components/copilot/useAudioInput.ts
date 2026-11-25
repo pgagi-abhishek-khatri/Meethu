@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+export type AudioInputStatus = "idle" | "recording" | "transcribing";
+
 export interface UseAudioInputOptions {
   onTranscript: (text: string, isFinal?: boolean) => void;
   onError?: (error: string) => void;
 }
 
 export interface UseAudioInputReturn {
+  status: AudioInputStatus;
   isRecording: boolean;
+  isTranscribing: boolean;
   isSupported: boolean;
   durationSeconds: number;
   error: string | null;
@@ -16,252 +20,252 @@ export interface UseAudioInputReturn {
   toggle: () => void;
 }
 
-// Global speech recognition constructor interface
-type SpeechRecognitionConstructor = new () => any;
+const PREFERRED_MIME_TYPES = [
+  "audio/webm;codecs=opus",
+  "audio/webm",
+  "audio/ogg;codecs=opus",
+  "audio/mp4",
+];
 
-function getSpeechRecognition(): SpeechRecognitionConstructor | null {
-  if (typeof window === "undefined") return null;
-  const w = window as any;
-  return w.SpeechRecognition || w.webkitSpeechRecognition || null;
+export function resolveAudioMimeType(): string | undefined {
+  if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") {
+    return undefined;
+  }
+  return PREFERRED_MIME_TYPES.find((type) => MediaRecorder.isTypeSupported(type));
+}
+
+export function mapMediaErrorMessage(err: unknown): string {
+  const name = (err as { name?: string })?.name || "";
+  const message = err instanceof Error ? err.message : String(err || "");
+  if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+    return "Microphone access was denied. Please check permissions.";
+  }
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+    return "No microphone was found.";
+  }
+  if (name === "NotReadableError" || name === "TrackStartError") {
+    return "Microphone is already in use by another application.";
+  }
+  return message ? `Could not start audio input: ${message}` : "Could not start audio input.";
 }
 
 export function useAudioInput({ onTranscript, onError }: UseAudioInputOptions): UseAudioInputReturn {
-  const [isRecording, setIsRecording] = useState(false);
+  const [status, setStatus] = useState<AudioInputStatus>("idle");
   const [durationSeconds, setDurationSeconds] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
-  const isSupported = typeof window !== "undefined" && getSpeechRecognition() !== null;
-  const recognitionRef = useRef<any>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const restartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const shouldRecordRef = useRef(false);
-  const cancelledRef = useRef(false);
-  const finalTranscriptRef = useRef("");
-  const currentInterimRef = useRef("");
+  const isSupported =
+    typeof navigator !== "undefined" &&
+    Boolean(navigator.mediaDevices?.getUserMedia) &&
+    typeof MediaRecorder !== "undefined";
 
-  const clearTimer = () => {
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cancelledRef = useRef(false);
+  const mimeTypeRef = useRef<string>("audio/webm");
+
+  const onTranscriptRef = useRef(onTranscript);
+  onTranscriptRef.current = onTranscript;
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+
+  const clearTimer = useCallback(() => {
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
-  };
+  }, []);
 
-  const clearRestartTimeout = () => {
-    if (restartTimeoutRef.current) {
-      clearTimeout(restartTimeoutRef.current);
-      restartTimeoutRef.current = null;
+  const releaseStream = useCallback(() => {
+    recorderRef.current = null;
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => {
+        try {
+          track.stop();
+        } catch {
+          // Ignore track stop errors during cleanup
+        }
+      });
+      streamRef.current = null;
     }
-  };
+  }, []);
+
+  const reportError = useCallback((msg: string) => {
+    setError(msg);
+    onErrorRef.current?.(msg);
+  }, []);
+
+  const finishRecording = useCallback(async () => {
+    clearTimer();
+    const mimeType = mimeTypeRef.current || "audio/webm";
+    const blob = new Blob(chunksRef.current, { type: mimeType });
+    chunksRef.current = [];
+    releaseStream();
+
+    if (cancelledRef.current) {
+      setStatus("idle");
+      setDurationSeconds(0);
+      return;
+    }
+
+    if (blob.size === 0) {
+      setStatus("idle");
+      reportError("No audio was recorded.");
+      return;
+    }
+
+    const transcribe = window.copilot?.transcribeAudio;
+    if (typeof transcribe !== "function") {
+      setStatus("idle");
+      reportError("Voice transcription is unavailable in this environment.");
+      return;
+    }
+
+    setStatus("transcribing");
+    try {
+      const buffer = await blob.arrayBuffer();
+      const res = await transcribe(buffer, mimeType);
+      if (cancelledRef.current) {
+        return;
+      }
+      const text = typeof res?.text === "string" ? res.text.trim() : "";
+      if (!res?.ok || !text) {
+        reportError(res?.error || "No speech was detected in the recording.");
+      } else {
+        setError(null);
+        onTranscriptRef.current(text, true);
+      }
+    } catch (err) {
+      if (!cancelledRef.current) {
+        reportError(err instanceof Error ? err.message : "Voice transcription failed.");
+      }
+    } finally {
+      setStatus("idle");
+    }
+  }, [clearTimer, releaseStream, reportError]);
 
   const stop = useCallback(() => {
-    shouldRecordRef.current = false;
-    cancelledRef.current = false;
-    clearRestartTimeout();
     clearTimer();
-    if (recognitionRef.current) {
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
       try {
-        recognitionRef.current.stop();
+        recorder.stop();
       } catch {
-        // Ignored if already stopped
+        releaseStream();
+        setStatus("idle");
       }
+    } else if (status === "recording") {
+      releaseStream();
+      setStatus("idle");
     }
-    setIsRecording(false);
-  }, []);
+  }, [clearTimer, releaseStream, status]);
 
   const cancel = useCallback(() => {
-    shouldRecordRef.current = false;
     cancelledRef.current = true;
-    clearRestartTimeout();
     clearTimer();
-    finalTranscriptRef.current = "";
-    currentInterimRef.current = "";
-    if (recognitionRef.current) {
+    chunksRef.current = [];
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
       try {
-        recognitionRef.current.abort();
+        recorder.stop();
       } catch {
-        // Ignored if already aborted
+        releaseStream();
       }
+    } else {
+      releaseStream();
     }
-    setIsRecording(false);
+    setStatus("idle");
     setDurationSeconds(0);
-  }, []);
+    setError(null);
+  }, [clearTimer, releaseStream]);
 
-  const startSession = useCallback(() => {
-    if (!shouldRecordRef.current || cancelledRef.current) return;
-    const SpeechRec = getSpeechRecognition();
+  const start = useCallback(async () => {
+    if (recorderRef.current || status !== "idle") return;
+    setError(null);
+    cancelledRef.current = false;
 
-    if (!SpeechRec) {
-      const msg = "Speech recognition is not supported in this environment.";
-      setError(msg);
-      onError?.(msg);
-      shouldRecordRef.current = false;
-      setIsRecording(false);
-      clearTimer();
+    if (!isSupported) {
+      reportError("Audio recording is not supported in this environment.");
       return;
     }
 
     try {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.onstart = null;
-          recognitionRef.current.onresult = null;
-          recognitionRef.current.onerror = null;
-          recognitionRef.current.onend = null;
-          recognitionRef.current.abort();
-        } catch {
-          // Cleanup old instance
-        }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (cancelledRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
       }
 
-      const recognition = new SpeechRec();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = typeof navigator !== "undefined" ? (navigator.language || "en-US") : "en-US";
+      const chosenMime = resolveAudioMimeType();
+      const recorder = chosenMime
+        ? new MediaRecorder(stream, { mimeType: chosenMime })
+        : new MediaRecorder(stream);
 
-      recognition.onstart = () => {
-        // Recognition session is active
-      };
+      mimeTypeRef.current = recorder.mimeType || chosenMime || "audio/webm";
+      chunksRef.current = [];
 
-      recognition.onresult = (event: any) => {
-        if (cancelledRef.current || !shouldRecordRef.current) return;
-        let sessionFinal = "";
-        let sessionInterim = "";
-
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const res = event.results[i];
-          if (res.isFinal) {
-            sessionFinal += res[0].transcript;
-          } else {
-            sessionInterim += res[0].transcript;
-          }
-        }
-
-        if (sessionFinal) {
-          finalTranscriptRef.current = (
-            finalTranscriptRef.current + " " + sessionFinal
-          ).trim();
-          currentInterimRef.current = "";
-        } else {
-          currentInterimRef.current = sessionInterim;
-        }
-
-        const combined = (
-          finalTranscriptRef.current + " " + currentInterimRef.current
-        ).trim();
-        if (combined) {
-          onTranscript(combined, Boolean(sessionFinal));
+      recorder.ondataavailable = (e: BlobEvent) => {
+        if (e.data && e.data.size > 0) {
+          chunksRef.current.push(e.data);
         }
       };
-
-      recognition.onerror = (event: any) => {
-        if (cancelledRef.current || !shouldRecordRef.current) return;
-        const err = event.error;
-        // "no-speech" occurs during normal pauses in conversation.
-        // "aborted" occurs on session resets. Neither should terminate recording.
-        if (err === "no-speech" || err === "aborted") {
-          return;
-        }
-
-        let msg = "Microphone error: " + (err || "unknown");
-        if (err === "not-allowed") {
-          msg = "Microphone access was denied. Please check permissions.";
-          shouldRecordRef.current = false;
-          setIsRecording(false);
-          clearTimer();
-        } else if (err === "network") {
-          msg = "Speech recognition network error.";
-        }
-        setError(msg);
-        onError?.(msg);
-      };
-
-      recognition.onend = () => {
-        // Chromium ends recognition on silence/turn boundaries.
-        // If the user is still recording, automatically restart so input doesn't stop after 1 second.
-        if (shouldRecordRef.current && !cancelledRef.current) {
-          clearRestartTimeout();
-          restartTimeoutRef.current = setTimeout(() => {
-            if (shouldRecordRef.current && !cancelledRef.current) {
-              startSession();
-            }
-          }, 50);
-        } else {
-          clearTimer();
-          setIsRecording(false);
-        }
-      };
-
-      recognitionRef.current = recognition;
-      recognition.start();
-    } catch (e: any) {
-      if (shouldRecordRef.current && !cancelledRef.current) {
-        clearRestartTimeout();
-        restartTimeoutRef.current = setTimeout(() => {
-          if (shouldRecordRef.current && !cancelledRef.current) {
-            try {
-              startSession();
-            } catch (err: any) {
-              const msg = "Could not start audio input: " + (err?.message || String(err));
-              setError(msg);
-              onError?.(msg);
-              shouldRecordRef.current = false;
-              setIsRecording(false);
-              clearTimer();
-            }
-          }
-        }, 150);
-      } else {
-        const msg = "Could not start audio input: " + (e?.message || String(e));
-        setError(msg);
-        onError?.(msg);
-        shouldRecordRef.current = false;
-        setIsRecording(false);
+      recorder.onerror = () => {
         clearTimer();
-      }
-    }
-  }, [onError, onTranscript]);
+        releaseStream();
+        setStatus("idle");
+        reportError("Microphone recording error occurred.");
+      };
+      recorder.onstop = () => {
+        void finishRecording();
+      };
 
-  const start = useCallback(() => {
-    setError(null);
-    cancelledRef.current = false;
-    shouldRecordRef.current = true;
-    finalTranscriptRef.current = "";
-    currentInterimRef.current = "";
-    setIsRecording(true);
-    setDurationSeconds(0);
-    clearTimer();
-    clearRestartTimeout();
-    timerRef.current = setInterval(() => {
-      setDurationSeconds((d) => d + 1);
-    }, 1000);
-    startSession();
-  }, [startSession]);
+      recorderRef.current = recorder;
+      streamRef.current = stream;
+      setDurationSeconds(0);
+      setStatus("recording");
+      clearTimer();
+      timerRef.current = setInterval(() => {
+        setDurationSeconds((d) => d + 1);
+      }, 1000);
+      recorder.start(250);
+    } catch (err) {
+      clearTimer();
+      releaseStream();
+      setStatus("idle");
+      reportError(mapMediaErrorMessage(err));
+    }
+  }, [clearTimer, finishRecording, isSupported, releaseStream, reportError, status]);
 
   const toggle = useCallback(() => {
-    if (isRecording) {
+    if (status === "recording") {
       stop();
-    } else {
-      start();
+    } else if (status === "idle") {
+      void start();
     }
-  }, [isRecording, start, stop]);
+  }, [start, status, stop]);
 
   useEffect(() => {
     return () => {
+      cancelledRef.current = true;
       clearTimer();
-      clearRestartTimeout();
-      shouldRecordRef.current = false;
-      if (recognitionRef.current) {
+      const recorder = recorderRef.current;
+      if (recorder && recorder.state !== "inactive") {
         try {
-          recognitionRef.current.abort();
+          recorder.stop();
         } catch {
-          // Cleanup on unmount
+          // Ignore stop errors on unmount
         }
       }
+      releaseStream();
     };
-  }, []);
+  }, [clearTimer, releaseStream]);
 
   return {
-    isRecording,
+    status,
+    isRecording: status === "recording",
+    isTranscribing: status === "transcribing",
     isSupported,
     durationSeconds,
     error,

@@ -212,7 +212,9 @@ function createCopilotWindow({
         fit({ x: target.x ?? b.x, y: target.y ?? b.y, width: target.width, height: target.height })
       );
     },
-    setOpacity: (v) => alive() && win.setOpacity(Math.min(1, Math.max(0.3, Number(v) || 1))),
+    setOpacity: (v) =>
+      alive() &&
+      win.setOpacity(Math.min(1, Math.max(0.3, Number.isFinite(Number(v)) ? Number(v) : 0.5))),
   };
 }
 

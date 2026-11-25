@@ -44,8 +44,10 @@ const RAG = {
   catalogFiles: 12,
   catalogChars: 420,
   catalogBudget: 1800, // characters of the summary catalog in the answer prompt
-  summaryPartChars: 400_000,
-  summaryMaxWords: 60,
+  summaryPartChars: 24_000,
+  summaryMinWords: 60,
+  summaryMaxWords: 350,
+  summaryMaxChars: 2500,
   // "summary": one short line per file (before file profiles). "profile": each reader gets its slice of the
   // file profiles (profile.js), the characters split over the files by size. COPILOT_CATALOG overrides it.
   catalogMode: "summary",

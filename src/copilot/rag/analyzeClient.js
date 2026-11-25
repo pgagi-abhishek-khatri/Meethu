@@ -105,29 +105,30 @@ function createAnalyzer({
       );
       return { ...r, lines: parseTimed(r.text, offset) };
     },
-    // 2-3 plain sentences: what the file is and what it holds, so a model can tell whether to look inside.
+    // Length-scaled summary: short files stay concise (~60 words), while multi-page documents scale up to capture major sections.
     async summarize({ name, kind, text }) {
       const s = String(text ?? "");
-      const partLimit = cfg.summaryPartChars ?? 400_000;
-      const maxWords = cfg.summaryMaxWords ?? 60;
+      const partLimit = cfg.summaryPartChars ?? 24_000;
+      const budget = computeSummaryBudget(s.length, cfg);
 
       if (s.length <= partLimit) {
         const r = await ask(
           [
             {
               type: "text",
-              text: `File: ${name} (${kind})\n\nContent:\n${s}\n\nWrite at most ${maxWords} words in plain English: what this file is, what it contains (the main topics, names and numbers worth knowing), and when it would be useful in a meeting. No preamble, no bullet points.`,
+              text: `File: ${name} (${kind})\n\nContent:\n${s}\n\nWrite a clear summary of about ${budget.targetWords} words in plain English: what this file is, all major sections/topics, key names, figures, and takeaways worth knowing in a meeting. No preamble.`,
             },
           ],
-          { maxTokens: 300 }
+          { maxTokens: budget.maxTokens }
         );
-        return { ...r, summary: r.text.replace(/\s+/g, " ").slice(0, 500) };
+        return { ...r, summary: r.text.replace(/\s+/g, " ").trim().slice(0, budget.maxChars) };
       }
 
       // Map-reduce over parts split at heading/paragraph boundaries
       const parts = splitSummaryParts(s, partLimit);
       let totalTokens = 0;
       let totalCost = 0;
+      const partWords = Math.max(50, Math.min(120, Math.round(budget.targetWords / Math.max(1.5, parts.length * 0.55))));
 
       const partSummaries = [];
       for (let i = 0; i < parts.length; i++) {
@@ -135,17 +136,17 @@ function createAnalyzer({
           [
             {
               type: "text",
-              text: `File: ${name} (${kind})\nPart ${i + 1} of ${parts.length}\n\nContent:\n${parts[i]}\n\nWrite at most ${Math.round(maxWords * 0.8)} words in plain English: what this part covers, key topics, names and numbers worth knowing. No preamble, no bullet points.`,
+              text: `File: ${name} (${kind})\nPart ${i + 1} of ${parts.length}\n\nContent:\n${parts[i]}\n\nWrite at most ${partWords} words in plain English: what this part covers, key topics, names, and numbers worth knowing. No preamble, no bullet points.`,
             },
           ],
-          { maxTokens: 250 }
+          { maxTokens: 350 }
         );
         totalTokens += r.tokens || 0;
         totalCost += r.cost || 0;
         partSummaries.push(r.text.trim());
       }
 
-      const reducePrompt = `File: ${name} (${kind})\nBelow are summaries of the file's ${parts.length} parts, in order:\n\n${partSummaries.map((ps, i) => `--- Part ${i + 1} ---\n${ps}`).join("\n\n")}\n\nWrite at most ${maxWords} words in plain English: what this file is, what it contains (the main topics, names and numbers worth knowing across all parts), and when it would be useful in a meeting. No preamble, no bullet points.`;
+      const reducePrompt = `File: ${name} (${kind})\nBelow are summaries of the file's ${parts.length} parts, in order:\n\n${partSummaries.map((ps, i) => `--- Part ${i + 1} ---\n${ps}`).join("\n\n")}\n\nSynthesize a comprehensive summary of about ${budget.targetWords} words in plain English covering all major sections across every part, key topics, names, numbers, and when it would be useful in a meeting. No preamble.`;
 
       const reduceRes = await ask(
         [
@@ -154,14 +155,14 @@ function createAnalyzer({
             text: reducePrompt,
           },
         ],
-        { maxTokens: 300 }
+        { maxTokens: budget.maxTokens }
       );
       totalTokens += reduceRes.tokens || 0;
       totalCost += reduceRes.cost || 0;
 
       return {
         ...reduceRes,
-        summary: reduceRes.text.replace(/\s+/g, " ").slice(0, 500),
+        summary: reduceRes.text.replace(/\s+/g, " ").trim().slice(0, budget.maxChars),
         tokens: totalTokens,
         cost: totalCost,
       };
@@ -215,4 +216,18 @@ function splitSummaryParts(text, maxChars) {
   return parts.length ? parts : [String(text ?? "")];
 }
 
-module.exports = { createAnalyzer, parseTimed, splitSummaryParts, mmss };
+// Scale word/token/char budget with document length (~1 page = 60w, 10+ pages = up to 350w).
+function computeSummaryBudget(charCount, cfg = RAG) {
+  const minWords = cfg.summaryMinWords ?? 60;
+  const maxWords = cfg.summaryMaxWords ?? 350;
+  const maxChars = cfg.summaryMaxChars ?? 2500;
+  const ratio = Math.min(1, Math.max(0, (charCount - 4000) / 36000));
+  const targetWords = Math.round(minWords + ratio * (maxWords - minWords));
+  return {
+    targetWords,
+    maxTokens: Math.round(300 + ratio * 600),
+    maxChars: Math.round(600 + ratio * (maxChars - 600)),
+  };
+}
+
+module.exports = { createAnalyzer, parseTimed, splitSummaryParts, computeSummaryBudget, mmss };

@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CloudUpload,
+  Download,
+  Eye,
   FileAudio,
   FileText,
   Folder,
@@ -21,7 +23,7 @@ import { BlurField, useCopilotSettings } from "./CopilotFields";
 import { PaneHeader, Block } from "./CopilotPane";
 import { WORKING, runThenReload } from "./copilotFormat";
 import { useToast } from "../ui/useToast";
-import type { Project, ProjectFile, RuleKind } from "./copilotApi";
+import type { FileReferenceTarget, Project, ProjectFile, ProjectFilePreview, RuleKind } from "./copilotApi";
 
 const RULE_LABELS: Record<RuleKind, string> = {
   title: "Title contains",
@@ -66,12 +68,196 @@ function StatusChip({ f }: { f: ProjectFile }) {
   );
 }
 
+function FilePreviewModal({
+  preview,
+  onClose,
+  onDownload,
+}: {
+  preview: {
+    fileId: number;
+    data: ProjectFilePreview;
+    page?: number | null;
+    snippet?: string | null;
+  } | null;
+  onClose: () => void;
+  onDownload: (fileId: number) => void;
+}) {
+  const highlightRef = useRef<HTMLSpanElement | null>(null);
+  const objectUrl = useMemo(() => {
+    const base64 = preview?.data.dataBase64;
+    if (!base64) return null;
+    const raw = atob(base64);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    const blob = new Blob([bytes], { type: preview.data.mime || "application/octet-stream" });
+    return URL.createObjectURL(blob);
+  }, [preview]);
+
+  useEffect(() => {
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [objectUrl]);
+
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [preview, onClose]);
+
+  useEffect(() => {
+    if (preview?.data.kind === "text" && preview.snippet && highlightRef.current) {
+      highlightRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [preview]);
+
+  if (!preview) return null;
+  const { fileId, data, page, snippet } = preview;
+  const pdfUrl =
+    objectUrl && data.kind === "pdf"
+      ? `${objectUrl}${page != null && page > 0 ? `#page=${page}` : ""}`
+      : objectUrl;
+
+  const renderHighlightedText = (text: string) => {
+    if (!snippet) return text || "Empty document.";
+    const needle = snippet.trim().slice(0, 60);
+    if (!needle) return text;
+    const idx = text.toLowerCase().indexOf(needle.toLowerCase());
+    if (idx === -1) return text;
+    return (
+      <>
+        {text.slice(0, idx)}
+        <span
+          ref={highlightRef}
+          className="rounded bg-amber-400/25 px-0.5 text-amber-100 ring-1 ring-amber-400/40"
+        >
+          {text.slice(idx, idx + needle.length)}
+        </span>
+        {text.slice(idx + needle.length)}
+      </>
+    );
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-xs"
+      onClick={onClose}
+    >
+      <div
+        className="flex h-[90vh] w-[92vw] max-w-6xl flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl dark:border-white/15 dark:bg-[#141720]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-border/70 px-4 py-2.5 dark:border-white/10">
+          <div className="flex min-w-0 items-center gap-2">
+            <FileText size={15} className="shrink-0 text-muted-foreground" />
+            <span className="truncate text-sm font-medium text-foreground">{data.name}</span>
+            {page != null && page > 0 && (
+              <span className="shrink-0 rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-medium text-sky-300">
+                Page {page}
+              </span>
+            )}
+            {data.truncated && (
+              <span className="shrink-0 rounded-full bg-warning/15 px-2 py-0.5 text-[10px] text-warning">
+                Preview truncated
+              </span>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 gap-1.5 px-2.5 text-xs"
+              onClick={() => onDownload(fileId)}
+            >
+              <Download size={13} />
+              Download
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7"
+              title="Close preview"
+              onClick={onClose}
+            >
+              <X size={14} />
+            </Button>
+          </div>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col overflow-auto p-4">
+          {data.kind === "text" && (
+            <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-foreground/90">
+              {renderHighlightedText(data.text || "Empty document.")}
+            </pre>
+          )}
+          {data.kind === "image" && objectUrl && (
+            <div className="flex flex-1 items-center justify-center">
+              <img
+                src={objectUrl}
+                alt={data.name || "Preview"}
+                className="max-h-full rounded-lg object-contain"
+              />
+            </div>
+          )}
+          {data.kind === "pdf" && pdfUrl && (
+            <iframe
+              src={pdfUrl}
+              title={data.name || "PDF Preview"}
+              className="min-h-[75vh] w-full flex-1 rounded-lg border border-border/50 bg-white"
+            />
+          )}
+          {data.kind === "audio" && objectUrl && (
+            <div className="flex flex-1 items-center justify-center py-10">
+              <audio controls src={objectUrl} className="w-full max-w-md" />
+            </div>
+          )}
+          {data.kind === "video" && objectUrl && (
+            <div className="flex flex-1 items-center justify-center">
+              <video controls src={objectUrl} className="max-h-full w-full rounded-lg" />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // One file and how far the copilot got with it.
-function FileRow({ f, run }: { f: ProjectFile; run: (p: Promise<unknown>) => void }) {
+function FileRow({
+  f,
+  run,
+  onPreview,
+  onDownload,
+  previewLoading,
+  downloadLoading,
+}: {
+  f: ProjectFile;
+  run: (p: Promise<unknown>) => void;
+  onPreview: (fileId: number) => void;
+  onDownload: (fileId: number) => void;
+  previewLoading: boolean;
+  downloadLoading: boolean;
+}) {
   const api = window.copilot!.projects;
   const Icon = KIND_ICON[f.kind ?? ""] ?? FileText;
+  const [expanded, setExpanded] = useState(false);
   const detail =
     f.status === "error" ? f.error : f.status === "ready" ? f.summary : (f.note ?? null);
+  const meta = [sizeLabel(f.bytes), f.status === "ready" && `${f.chunks} passages`]
+    .filter(Boolean)
+    .join(" · ");
+  const hasLongDetail = Boolean(detail && (detail.length > 150 || detail.includes("\n")));
+  const collapsedDetail = useMemo(() => {
+    if (!detail || !hasLongDetail) return detail;
+    const flat = detail.replace(/\s+/g, " ").trim();
+    if (flat.length <= 150) return flat;
+    const cut = flat.slice(0, 150);
+    const lastSpace = cut.lastIndexOf(" ");
+    return (lastSpace > 100 ? cut.slice(0, lastSpace) : cut).trimEnd();
+  }, [detail, hasLongDetail]);
+
   return (
     <div className="group flex items-start gap-3 px-3 py-2.5">
       <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-foreground/5 text-foreground/60 dark:bg-white/5">
@@ -84,22 +270,57 @@ function FileRow({ f, run }: { f: ProjectFile; run: (p: Promise<unknown>) => voi
           </span>
           <StatusChip f={f} />
         </div>
-        <p
-          className={cn(
-            "mt-0.5 line-clamp-2 text-[11.5px] leading-relaxed",
-            f.status === "error" ? "text-destructive/90" : "text-muted-foreground"
-          )}
-          title={detail ?? undefined}
-        >
-          {[sizeLabel(f.bytes), f.status === "ready" && `${f.chunks} passages`, detail]
-            .filter(Boolean)
-            .join(" · ")}
-        </p>
+        {meta && (
+          <p className="mt-0.5 text-[11px] text-muted-foreground/80">{meta}</p>
+        )}
+        {detail && (
+          <p
+            className={cn(
+              "mt-0.5 text-[11.5px] leading-relaxed",
+              f.status === "error" ? "text-destructive/90" : "text-muted-foreground"
+            )}
+          >
+            {expanded || !hasLongDetail ? detail : `${collapsedDetail}…`}
+            {hasLongDetail && (
+              <button
+                type="button"
+                onClick={() => setExpanded((v) => !v)}
+                className="ms-1.5 inline font-medium text-primary hover:underline"
+              >
+                {expanded ? "less" : "more"}
+              </button>
+            )}
+          </p>
+        )}
         {f.note && f.status === "ready" && (
           <p className="mt-0.5 text-[11px] text-warning">{f.note}</p>
         )}
       </div>
-      <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition-opacity group-hover:opacity-100">
+      <div className="flex shrink-0 items-center gap-0.5 opacity-70 transition-opacity group-hover:opacity-100">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          title="Preview file"
+          disabled={previewLoading}
+          onClick={() => onPreview(f.id)}
+        >
+          {previewLoading ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          title="Download file"
+          disabled={downloadLoading}
+          onClick={() => onDownload(f.id)}
+        >
+          {downloadLoading ? (
+            <Loader2 size={13} className="animate-spin" />
+          ) : (
+            <Download size={13} />
+          )}
+        </Button>
         {(f.status === "error" || f.status === "ready") && (
           <Button
             variant="ghost"
@@ -125,12 +346,106 @@ function FileRow({ f, run }: { f: ProjectFile; run: (p: Promise<unknown>) => voi
   );
 }
 
-function Files({ p, run }: { p: Project; run: (x: Promise<unknown>) => void }) {
+function Files({
+  p,
+  run,
+  pendingRef,
+  onClearPendingRef,
+}: {
+  p: Project;
+  run: (x: Promise<unknown>) => void;
+  pendingRef?: FileReferenceTarget | null;
+  onClearPendingRef?: () => void;
+}) {
   const api = window.copilot!.projects;
   const { settings, update } = useCopilotSettings();
+  const { toast } = useToast();
   const [over, setOver] = useState(false);
+  const [preview, setPreview] = useState<{
+    fileId: number;
+    data: ProjectFilePreview;
+    page?: number | null;
+    snippet?: string | null;
+  } | null>(null);
+  const [loadingPreviewId, setLoadingPreviewId] = useState<number | null>(null);
+  const [loadingDownloadId, setLoadingDownloadId] = useState<number | null>(null);
   const ready = p.files.filter((f) => f.status === "ready").length;
   const failed = p.files.filter((f) => f.status === "error").length;
+
+  const handlePreview = useCallback(
+    async (fileId: number, target?: { page?: number | null; snippet?: string | null }) => {
+      if (!api.previewFile) return;
+      setLoadingPreviewId(fileId);
+      try {
+        const res = await api.previewFile(fileId);
+        if (!res.ok) {
+          toast({
+            title: "Preview unavailable",
+            description: res.error || "Could not preview this file.",
+            variant: "destructive",
+          });
+        } else {
+          setPreview({
+            fileId,
+            data: res,
+            page: target?.page ?? null,
+            snippet: target?.snippet ?? null,
+          });
+        }
+      } catch (error) {
+        toast({
+          title: "Preview failed",
+          description: error instanceof Error ? error.message : String(error),
+          variant: "destructive",
+        });
+      } finally {
+        setLoadingPreviewId(null);
+      }
+    },
+    [api, toast]
+  );
+
+  useEffect(() => {
+    if (!pendingRef) return;
+    const targetFile =
+      (pendingRef.fileId != null ? p.files.find((f) => f.id === pendingRef.fileId) : undefined) ||
+      p.files.find((f) => f.name === pendingRef.name);
+    if (!targetFile) return;
+    onClearPendingRef?.();
+    void handlePreview(targetFile.id, {
+      page: pendingRef.page ?? null,
+      snippet: pendingRef.snippet ?? null,
+    });
+  }, [pendingRef, p.files, onClearPendingRef, handlePreview]);
+
+  const handleDownload = async (fileId: number) => {
+    if (!api.downloadFile) return;
+    setLoadingDownloadId(fileId);
+    try {
+      const res = await api.downloadFile(fileId);
+      if (!res.ok && !res.canceled) {
+        toast({
+          title: "Download failed",
+          description: res.error || "Could not save this file.",
+          variant: "destructive",
+        });
+      } else if (res.ok) {
+        toast({
+          title: "File saved",
+          description: res.path ? `Saved to ${res.path}` : "Download complete.",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: "Download failed",
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive",
+      });
+    } finally {
+      setLoadingDownloadId(null);
+    }
+  };
+
   return (
     <Block
       title="Files"
@@ -140,6 +455,11 @@ function Files({ p, run }: { p: Project; run: (x: Promise<unknown>) => void }) {
           : "Proposals, price lists, specs, decks, recordings. Read once in the background, then searched live."
       }
     >
+      <FilePreviewModal
+        preview={preview}
+        onClose={() => setPreview(null)}
+        onDownload={(fileId) => void handleDownload(fileId)}
+      />
       {settings && !settings.ragEnabled && (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-foreground/85">
           File search in meetings is off.
@@ -170,7 +490,15 @@ function Files({ p, run }: { p: Project; run: (x: Promise<unknown>) => void }) {
         {p.files.length > 0 && (
           <div className="divide-y divide-border/60 dark:divide-border-subtle/50">
             {p.files.map((f) => (
-              <FileRow key={f.id} f={f} run={run} />
+              <FileRow
+                key={f.id}
+                f={f}
+                run={run}
+                onPreview={(id) => void handlePreview(id)}
+                onDownload={(id) => void handleDownload(id)}
+                previewLoading={loadingPreviewId === f.id}
+                downloadLoading={loadingDownloadId === f.id}
+              />
             ))}
           </div>
         )}
@@ -259,7 +587,17 @@ function Rules({ p, run }: { p: Project; run: (x: Promise<unknown>) => void }) {
   );
 }
 
-function ProjectDetail({ p, reload }: { p: Project; reload: () => void }) {
+function ProjectDetail({
+  p,
+  reload,
+  pendingRef,
+  onClearPendingRef,
+}: {
+  p: Project;
+  reload: () => void;
+  pendingRef?: FileReferenceTarget | null;
+  onClearPendingRef?: () => void;
+}) {
   const api = window.copilot!.projects;
   const { toast } = useToast();
   const run = (f: Promise<unknown>) =>
@@ -311,7 +649,7 @@ function ProjectDetail({ p, reload }: { p: Project; reload: () => void }) {
         </Button>
       </div>
 
-      <Files p={p} run={run} />
+      <Files p={p} run={run} pendingRef={pendingRef} onClearPendingRef={onClearPendingRef} />
 
       <Block
         title="Context"
@@ -343,11 +681,15 @@ export default function CopilotProjects({
   reload,
   selected,
   onSelect,
+  pendingRef,
+  onClearPendingRef,
 }: {
   list: Project[];
   reload: () => void;
   selected: number | null;
   onSelect: (id: number | null) => void;
+  pendingRef?: FileReferenceTarget | null;
+  onClearPendingRef?: () => void;
 }) {
   const [name, setName] = useState("");
   const [adding, setAdding] = useState(false);
@@ -452,7 +794,13 @@ export default function CopilotProjects({
       </div>
       {p && (
         <div className="border-t border-border/60 pt-5 dark:border-white/8">
-          <ProjectDetail key={p.id} p={p} reload={reload} />
+          <ProjectDetail
+            key={p.id}
+            p={p}
+            reload={reload}
+            pendingRef={pendingRef}
+            onClearPendingRef={onClearPendingRef}
+          />
         </div>
       )}
     </div>
