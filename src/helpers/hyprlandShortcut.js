@@ -5,9 +5,9 @@ const os = require("os");
 const { randomUUID } = require("crypto");
 const debugLogger = require("./debugLogger");
 
-const DBUS_SERVICE_NAME = "com.openwhispr.App";
-const DBUS_OBJECT_PATH = "/com/openwhispr/App";
-const DBUS_INTERFACE = "com.openwhispr.App";
+const DBUS_SERVICE_NAME = "com.meethu.App";
+const DBUS_OBJECT_PATH = "/com/meethu/App";
+const DBUS_INTERFACE = "com.meethu.App";
 const DBUS_NAME_REQUEST_TIMEOUT_MS = 5000;
 
 const SLOT_TOGGLE_METHOD = {
@@ -67,11 +67,11 @@ const VALID_HOTKEY_PATTERN =
   /^((CommandOrControl|CmdOrCtrl|Control|Ctrl|Alt|Option|Shift|Super|Meta|Win|Command|Cmd)(\+(CommandOrControl|CmdOrCtrl|Control|Ctrl|Alt|Option|Shift|Super|Meta|Win|Command|Cmd))*(\+)?)?(F([1-9]|1[0-9]|2[0-4])|[A-Za-z0-9]|Space|Escape|Tab|Backspace|Delete|Insert|Home|End|PageUp|PageDown|ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Enter|PrintScreen|ScrollLock|Pause|Backquote|`|,|\.|\/|-|=|;|'|\[|\]|\\|Plus)?$/i;
 
 const BINDS_FILENAMES = {
-  conf: "openwhispr-binds.conf",
-  lua: "openwhispr-binds.lua",
+  conf: "meethu-binds.conf",
+  lua: "meethu-binds.lua",
 };
 const MANAGED_HEADER_TEXT = [
-  "OpenWhispr keybinds (managed automatically)",
+  "Meethu keybinds (managed automatically)",
   "If you delete this file, also remove the matching load line from your Hyprland config.",
 ];
 const MANAGED_HEADER_VARIANTS = new Set([

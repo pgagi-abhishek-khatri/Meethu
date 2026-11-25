@@ -923,19 +923,30 @@ export default function TranscriptionModelPicker({
     setGpuActivating(!!result?.willRestart);
   };
 
-  const handleGpuDelete = async () => {
-    const result =
-      gpuBackend === "cuda"
-        ? await window.electronAPI?.deleteCudaWhisperBinary?.()
-        : await window.electronAPI?.deleteVulkanWhisperBinary?.();
-    if (result?.success) {
-      setGpuDownloaded(false);
-      setGpuFailed(false);
-      setGpuNeedsUpdate(false);
-      setGpuDownloadError(null);
-      setGpuActivating(false);
-      setGpuActive(false);
-    }
+  const handleGpuDelete = () => {
+    showConfirmDialog({
+      title: t("gpu.removeConfirmTitle", { defaultValue: "Remove GPU acceleration?" }),
+      description: t("gpu.removeConfirmDescription", {
+        defaultValue: "This removes the downloaded GPU runtime files from your device.",
+      }),
+      confirmText: t("gpu.remove"),
+      cancelText: t("common.cancel"),
+      variant: "destructive",
+      onConfirm: async () => {
+        const result =
+          gpuBackend === "cuda"
+            ? await window.electronAPI?.deleteCudaWhisperBinary?.()
+            : await window.electronAPI?.deleteVulkanWhisperBinary?.();
+        if (result?.success) {
+          setGpuDownloaded(false);
+          setGpuFailed(false);
+          setGpuNeedsUpdate(false);
+          setGpuDownloadError(null);
+          setGpuActivating(false);
+          setGpuActive(false);
+        }
+      },
+    });
   };
 
   const handleGpuCancel = async () => {

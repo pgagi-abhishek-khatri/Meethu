@@ -190,10 +190,15 @@ export interface CopilotBridge {
     remove(id: string): Promise<void>;
   };
   openWindow?(): Promise<void>; // control panel only: show the live window
+  closeWindow?(): Promise<void>; // control panel only: hide the live window
+  isWindowOpen?(): Promise<boolean>; // control panel only: whether the live window is visible
+  onWindowState?(cb: (open: boolean) => void): () => void; // control panel only: live window visibility
+  onSettingsUpdated?(cb: (settings: CopilotSettings) => void): () => void; // control panel only: settings sync
   openReference?(ref: FileReferenceTarget): Promise<{ ok: boolean; error?: string }>;
   onOpenReference?(cb: (ref: FileReferenceTarget) => void): () => void;
+  openSettings?(section?: string): Promise<void>;
   window(
-    action: "expand" | "mode" | "opacity" | "hide" | "close" | "open",
+    action: "expand" | "mode" | "opacity" | "hide" | "close" | "open" | "drag-start" | "drag-stop",
     value?: unknown // mode: "orb" | "peek" | "full"
   ): Promise<void>;
 }

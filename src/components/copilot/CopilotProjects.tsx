@@ -236,6 +236,7 @@ function FileRow({
   run,
   onPreview,
   onDownload,
+  onRemove,
   previewLoading,
   downloadLoading,
 }: {
@@ -243,6 +244,7 @@ function FileRow({
   run: (p: Promise<unknown>) => void;
   onPreview: (fileId: number) => void;
   onDownload: (fileId: number) => void;
+  onRemove: (file: ProjectFile) => void;
   previewLoading: boolean;
   downloadLoading: boolean;
 }) {
@@ -341,7 +343,7 @@ function FileRow({
           size="icon"
           className="h-7 w-7"
           title="Remove file"
-          onClick={() => run(api.removeFile(f.id))}
+          onClick={() => onRemove(f)}
         >
           <X size={14} />
         </Button>
@@ -373,6 +375,7 @@ function Files({
   } | null>(null);
   const [loadingPreviewId, setLoadingPreviewId] = useState<number | null>(null);
   const [loadingDownloadId, setLoadingDownloadId] = useState<number | null>(null);
+  const [pendingRemoveFile, setPendingRemoveFile] = useState<ProjectFile | null>(null);
   const ready = p.files.filter((f) => f.status === "ready").length;
   const failed = p.files.filter((f) => f.status === "error").length;
 
@@ -500,6 +503,7 @@ function Files({
                 run={run}
                 onPreview={(id) => void handlePreview(id)}
                 onDownload={(id) => void handleDownload(id)}
+                onRemove={setPendingRemoveFile}
                 previewLoading={loadingPreviewId === f.id}
                 downloadLoading={loadingDownloadId === f.id}
               />
@@ -525,6 +529,22 @@ function Files({
           )}
         </button>
       </div>
+
+      <ConfirmDialog
+        open={pendingRemoveFile !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRemoveFile(null);
+        }}
+        title={pendingRemoveFile ? `Remove "${pendingRemoveFile.name}"?` : ""}
+        description="This removes the file from the project. Your file on disk is not touched."
+        confirmText="Remove"
+        variant="destructive"
+        onConfirm={() => {
+          if (!pendingRemoveFile) return;
+          run(api.removeFile(pendingRemoveFile.id));
+          setPendingRemoveFile(null);
+        }}
+      />
     </Block>
   );
 }
@@ -533,6 +553,7 @@ function Rules({ p, run }: { p: Project; run: (x: Promise<unknown>) => void }) {
   const api = window.copilot!.projects;
   const [kind, setKind] = useState<RuleKind>("title");
   const [pattern, setPattern] = useState("");
+  const [pendingRemoveRule, setPendingRemoveRule] = useState<Project["rules"][number] | null>(null);
   const add = () => {
     if (!pattern.trim()) return;
     run(api.addRule(p.id, kind, pattern.trim()));
@@ -555,7 +576,7 @@ function Rules({ p, run }: { p: Project; run: (x: Promise<unknown>) => void }) {
               <button
                 type="button"
                 title="Remove rule"
-                onClick={() => run(api.removeRule(r.id))}
+                onClick={() => setPendingRemoveRule(r)}
                 className="rounded-full p-0.5 text-muted-foreground hover:bg-foreground/8 hover:text-foreground"
               >
                 <X size={11} />
@@ -591,6 +612,22 @@ function Rules({ p, run }: { p: Project; run: (x: Promise<unknown>) => void }) {
           Add
         </Button>
       </div>
+
+      <ConfirmDialog
+        open={pendingRemoveRule !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRemoveRule(null);
+        }}
+        title={pendingRemoveRule ? `Remove rule "${pendingRemoveRule.pattern}"?` : ""}
+        description="Meetings matching this rule will no longer auto-select this project."
+        confirmText="Remove"
+        variant="destructive"
+        onConfirm={() => {
+          if (!pendingRemoveRule) return;
+          run(api.removeRule(pendingRemoveRule.id));
+          setPendingRemoveRule(null);
+        }}
+      />
     </Block>
   );
 }

@@ -1,7 +1,7 @@
 {
-  "name": "open-whispr",
+  "name": "meethu",
   "version": "1.10.4",
-  "description": "A desktop dictation application using whisper.cpp for speech-to-text transcription",
+  "description": "Privacy-first desktop voice dictation, meeting transcription, notes & copilot",
   "main": "main.js",
   "private": true,
   "engines": {
@@ -95,8 +95,8 @@
     "desktop-app"
   ],
   "author": {
-    "name": "OpenWhispr Team",
-    "email": "support@openwhispr.com"
+    "name": "Meethu Team",
+    "email": "support@meethu.com"
   },
   "license": "MIT",
   "devDependencies": {

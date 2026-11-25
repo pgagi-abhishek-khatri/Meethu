@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, Trash2 } from "../icons";
+import { ConfirmDialog } from "../ui/dialog";
 import MarkdownRenderer from "../ui/MarkdownRenderer";
 import type { PastSession, PastSessionDetail } from "./copilotApi";
 
@@ -55,6 +56,7 @@ export function PastMeeting({
   onDeleted: () => void;
 }) {
   const [d, setD] = useState<PastSessionDetail | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   useEffect(() => {
     void window.copilot?.sessions.get(id).then(setD);
   }, [id]);
@@ -62,6 +64,18 @@ export function PastMeeting({
   const cards = d.cards.filter((c) => c.status === "done");
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="Delete this meeting?"
+        description="Its transcript and cards are removed from the copilot."
+        confirmText="Delete"
+        variant="destructive"
+        onConfirm={async () => {
+          await window.copilot?.sessions.remove(id);
+          onDeleted();
+        }}
+      />
       <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2 text-[12px] text-slate-300">
         <button
           type="button"
@@ -74,10 +88,7 @@ export function PastMeeting({
         <button
           type="button"
           title="Delete this meeting"
-          onClick={async () => {
-            await window.copilot?.sessions.remove(id);
-            onDeleted();
-          }}
+          onClick={() => setConfirmDelete(true)}
           className="text-slate-500 hover:text-rose-300"
         >
           <Trash2 size={14} />

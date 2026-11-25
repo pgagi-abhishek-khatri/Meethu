@@ -55,7 +55,7 @@ export function LiveStrip({
   const isPaused = !!state.paused;
   return (
     <div className="border-b border-white/10">
-      <div className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-[11px] text-slate-400">
+      <div className="flex w-full items-center justify-between gap-2 px-3 py-2 text-[11.5px] text-slate-400">
         <button
           type="button"
           title={state.summary ? "Show what the copilot remembers" : undefined}
@@ -63,16 +63,16 @@ export function LiveStrip({
           className="flex min-w-0 flex-1 items-center gap-2 text-start"
         >
           {isPaused ? (
-            <Pause className="h-3 w-3 shrink-0 text-amber-400" />
+            <Pause className="h-3 w-3 shrink-0 text-slate-400" />
           ) : (
             <span
-              className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                state.busy ? "animate-pulse bg-sky-400" : "bg-emerald-400"
+              className={`h-2 w-2 shrink-0 rounded-full ${
+                state.busy ? "animate-pulse bg-primary" : "bg-emerald-400"
               }`}
             />
           )}
           <span
-            className={`shrink-0 ${isPaused ? "font-medium text-amber-300" : "text-slate-300"}`}
+            className={`shrink-0 font-medium ${isPaused ? "text-slate-300" : "text-slate-200"}`}
           >
             {isPaused ? "Paused" : state.busy ? "Thinking" : "Listening"}
           </span>
@@ -80,7 +80,9 @@ export function LiveStrip({
             {!isPaused && last?.text ? `${who}“${tail(last.text)}”` : ""}
           </span>
           {state.summary && (
-            <span className="shrink-0 rounded-full bg-white/10 px-1.5 text-slate-400">memory</span>
+            <span className="shrink-0 rounded-md border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[10px] text-slate-400">
+              memory
+            </span>
           )}
         </button>
         <div className="flex shrink-0 items-center gap-1.5">
@@ -89,10 +91,10 @@ export function LiveStrip({
               type="button"
               onClick={onTogglePause}
               title={isPaused ? "Resume proactive listening" : "Pause proactive listening"}
-              className={`flex h-6 shrink-0 items-center gap-1 rounded px-2 text-[10px] font-medium transition-colors ${
+              className={`flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[11px] font-medium transition-colors ${
                 isPaused
-                  ? "border border-amber-400/40 bg-amber-500/20 text-amber-200 hover:bg-amber-500/30"
-                  : "border border-white/10 text-slate-400 hover:bg-white/10 hover:text-slate-200"
+                  ? "border-primary/40 bg-primary/15 text-blue-200 hover:bg-primary/25"
+                  : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08] hover:text-slate-100"
               }`}
             >
               {isPaused ? (
@@ -113,7 +115,7 @@ export function LiveStrip({
               type="button"
               onClick={onEnd}
               title="End the meeting note"
-              className="flex h-6 shrink-0 items-center rounded border border-rose-400/40 bg-rose-500/20 px-2 text-[10px] font-medium text-rose-200 transition-colors hover:bg-rose-500/30"
+              className="flex h-7 shrink-0 items-center rounded-md border border-white/10 bg-white/[0.04] px-2.5 text-[11px] font-medium text-slate-300 transition-colors hover:border-destructive/40 hover:bg-destructive/15 hover:text-rose-200"
             >
               End meeting
             </button>
@@ -123,9 +125,9 @@ export function LiveStrip({
               type="button"
               onClick={onNewThread}
               title="New thread"
-              className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-white/10 text-slate-400 transition-colors hover:bg-white/10 hover:text-slate-200"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-white/10 bg-white/[0.04] text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-slate-100"
             >
-              <Plus size={12} />
+              <Plus size={13} />
             </button>
           )}
         </div>

@@ -142,6 +142,27 @@ export default function CopilotSettingsTab({ embedded = false }: { embedded?: bo
           >
             <HotkeyField value={s.hotkey} onChange={(hotkey) => update({ hotkey })} />
           </SettingsRow>
+          <SettingsRow label={`Window opacity (${Math.round(s.opacity * 100)}%)`}>
+            <input
+              type="range"
+              min={30}
+              max={100}
+              value={Math.round(s.opacity * 100)}
+              onChange={(e) => {
+                const opacity = Math.min(1, Math.max(0.3, Math.round(Number(e.target.value)) / 100));
+                update({ opacity });
+              }}
+              className="w-36 accent-primary cursor-pointer"
+            />
+          </SettingsRow>
+          <SettingsRow label="Solid only on hover or when a card arrives">
+            <Toggle
+              checked={s.fadeWhenIdle}
+              onChange={(fadeWhenIdle) =>
+                update({ fadeWhenIdle, opacity: fadeWhenIdle ? 0.5 : 1 })
+              }
+            />
+          </SettingsRow>
         </SettingsGroup>
       </SettingsSection>
 

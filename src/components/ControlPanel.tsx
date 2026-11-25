@@ -83,7 +83,8 @@ import {
 } from "../helpers/translationChain";
 import { applyChineseScript, resolveChineseScriptTarget } from "../utils/chineseScript";
 import { getAgentName } from "../utils/agentName";
-import HistoryView from "./HistoryView";
+import CopilotOverview from "./copilot/CopilotOverview";
+import type { FileReferenceTarget } from "./copilot/copilotApi";
 import BackgroundActionToastListener from "./notes/BackgroundActionToastListener";
 import AssistantNoteUndoListener from "./notes/AssistantNoteUndoListener";
 import { providerErrorToastProps } from "../utils/describeProviderError";
@@ -105,9 +106,10 @@ const SettingsModal = React.lazy(() => import("./SettingsModal"));
 const ReferralModal = React.lazy(() => import("./ReferralModal"));
 const PersonalNotesView = React.lazy(() => import("./notes/PersonalNotesView"));
 const InsightsView = React.lazy(() => import("./InsightsView"));
-const DictionaryView = React.lazy(() => import("./DictionaryView"));
-const CopilotPage = React.lazy(() => import("./copilot/CopilotPage"));
-const UploadAudioView = React.lazy(() => import("./notes/UploadAudioView"));
+// const DictionaryView = React.lazy(() => import("./DictionaryView"));
+const CopilotProjectsView = React.lazy(() =>
+  import("./copilot/CopilotSettingsSections").then((m) => ({ default: m.CopilotProjectsView }))
+);
 const IntegrationsView = React.lazy(() => import("./IntegrationsView"));
 const ChatView = React.lazy(() => import("./chat/ChatView"));
 const CommandSearch = React.lazy(() => import("./CommandSearch"));
@@ -146,19 +148,12 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
   const [showSearch, setShowSearch] = useState(false);
   const showDiscarded = useShowDiscarded();
   const [activeView, setActiveView] = useState<ControlPanelView>("home");
-  const [pendingCopilotRef, setPendingCopilotRef] = useState<{
-    fileId?: number;
-    projectId?: number;
-    name: string;
-    page?: number | null;
-    where?: string | null;
-    snippet?: string | null;
-  } | null>(null);
+  const [pendingCopilotRef, setPendingCopilotRef] = useState<FileReferenceTarget | null>(null);
 
   useEffect(() => {
     const off = window.copilot?.onOpenReference?.((ref) => {
       setPendingCopilotRef(ref);
-      setActiveView("copilot");
+      setActiveView("projects");
     });
     return () => off?.();
   }, []);
@@ -1225,28 +1220,19 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
                   </div>
                 )}
               {activeView === "home" && (
-                <HistoryView
-                  history={history}
-                  isLoading={isLoading}
-                  hotkey={hotkey}
-                  aiCTADismissed={aiCTADismissed}
-                  setAiCTADismissed={setAiCTADismissed}
-                  useCleanupModel={useCleanupModel}
-                  copyToClipboard={copyToClipboard}
-                  deleteTranscription={deleteTranscription}
-                  clearAllTranscriptions={clearAllTranscriptions}
-                  onShowAudioInFolder={showAudioInFolder}
-                  onRetryTranscription={retryTranscription}
-                  showDiscarded={showDiscarded}
-                  onToggleDiscarded={toggleShowDiscarded}
-                  userName={user?.name}
-                  onOpenSettings={(section) => {
-                    setSettingsSection(section);
-                    setShowSettings(true);
+                <CopilotOverview
+                  onNavigateSection={(section) => {
+                    if (section === "projects") {
+                      setActiveView("projects");
+                    } else if (section === "audio") {
+                      setSettingsSection("copilotAudio");
+                      setShowSettings(true);
+                    } else if (section === "meetings") {
+                      setActiveView("personal-notes");
+                    }
                   }}
-                  onOpenIntegrations={() => {
-                    setIntegrationsSection("calendars");
-                    setActiveView("integrations");
+                  onOpenMeeting={() => {
+                    setActiveView("personal-notes");
                   }}
                 />
               )}
@@ -1279,31 +1265,16 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
                   />
                 </Suspense>
               )}
-              {activeView === "dictionary" && (
+              {/* {activeView === "dictionary" && (
                 <Suspense fallback={null}>
                   <DictionaryView />
                 </Suspense>
-              )}
-              {activeView === "copilot" && (
+              )} */}
+              {activeView === "projects" && (
                 <Suspense fallback={null}>
-                  <CopilotPage
+                  <CopilotProjectsView
                     pendingRef={pendingCopilotRef}
                     onClearPendingRef={() => setPendingCopilotRef(null)}
-                  />
-                </Suspense>
-              )}
-              {activeView === "upload" && policyActionsAllowed && (
-                <Suspense fallback={null}>
-                  <UploadAudioView
-                    onNoteCreated={(noteId, folderId) => {
-                      setActiveNoteId(noteId);
-                      if (folderId) setActiveFolderId(folderId);
-                      setActiveView("personal-notes");
-                    }}
-                    onOpenSettings={(section) => {
-                      setSettingsSection(section);
-                      setShowSettings(true);
-                    }}
                   />
                 </Suspense>
               )}

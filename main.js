@@ -49,7 +49,7 @@ const DEFAULT_OAUTH_PROTOCOL_BY_CHANNEL = {
   staging: "openwhispr-staging",
   production: "openwhispr",
 };
-const BASE_WINDOWS_APP_ID = "com.gizmolabs.openwhispr";
+const BASE_WINDOWS_APP_ID = "com.pgagi.meethu";
 const DEFAULT_AUTH_BRIDGE_PORT = 5199;
 
 function isElectronBinaryExec() {
@@ -69,7 +69,13 @@ function inferDefaultChannel() {
 }
 
 function resolveAppChannel() {
-  const rawChannel = (process.env.OPENWHISPR_CHANNEL || process.env.VITE_OPENWHISPR_CHANNEL || "")
+  const rawChannel = (
+    process.env.MEETHU_CHANNEL ||
+    process.env.VITE_MEETHU_CHANNEL ||
+    process.env.OPENWHISPR_CHANNEL ||
+    process.env.VITE_OPENWHISPR_CHANNEL ||
+    ""
+  )
     .trim()
     .toLowerCase();
 
@@ -81,15 +87,20 @@ function resolveAppChannel() {
 }
 
 const APP_CHANNEL = resolveAppChannel();
+process.env.MEETHU_CHANNEL = APP_CHANNEL;
 process.env.OPENWHISPR_CHANNEL = APP_CHANNEL;
 
 function configureChannelUserDataPath() {
-  if (APP_CHANNEL === "production") {
-    return;
+  if (APP_CHANNEL !== "production") {
+    const isolatedPath = path.join(app.getPath("appData"), `Meethu-${APP_CHANNEL}`);
+    app.setPath("userData", isolatedPath);
   }
-
-  const isolatedPath = path.join(app.getPath("appData"), `OpenWhispr-${APP_CHANNEL}`);
-  app.setPath("userData", isolatedPath);
+  try {
+    const { migrateFromOpenWhispr } = require("./src/helpers/postMigrationDetector");
+    migrateFromOpenWhispr({ channel: APP_CHANNEL });
+  } catch {
+    // Non-fatal if migration check fails
+  }
 }
 
 configureChannelUserDataPath();
@@ -132,7 +143,7 @@ if (process.platform === "linux" && process.env.XDG_SESSION_TYPE === "wayland") 
 // Set desktop filename so Wayland compositors can match windows to the .desktop entry.
 // This allows XDG portals (e.g. PipeWire) to persist permissions across sessions.
 if (process.platform === "linux") {
-  app.setDesktopName("open-whispr.desktop");
+  app.setDesktopName("meethu.desktop");
 }
 
 // Group all windows under single taskbar entry on Windows
@@ -266,8 +277,8 @@ if (!gotSingleInstanceLock) {
 const isLiveWindow = (window) => window && !window.isDestroyed();
 
 // Ensure macOS menus use the proper casing for the app name
-if (process.platform === "darwin" && app.getName() !== "OpenWhispr") {
-  app.setName("OpenWhispr");
+if (process.platform === "darwin" && app.getName() !== "Meethu") {
+  app.setName("Meethu");
 }
 
 // Add global error handling for uncaught exceptions

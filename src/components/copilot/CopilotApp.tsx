@@ -1,19 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Minus, Plus, Settings, X } from "../icons";
+import { AlertTriangle, Check, Key, Minus, Plus, Settings, Sparkles, X } from "../icons";
 import { MAIN_THREAD, cardsOf, type Skipped } from "./copilotState";
 import { useCopilot } from "./useCopilot";
 import CardFeed from "./CardFeed";
 import Composer from "./Composer";
 import TranscriptView from "./TranscriptView";
 import ContextView, { SummaryBlock } from "./ContextView";
-import SettingsView from "./SettingsView";
 import { LiveStrip, ProblemBanner, SkippedBox } from "./LiveHeader";
 import { Orb, Peek } from "./OrbView";
 import type { Project, CopilotSettings } from "./copilotApi";
 import { PastMeeting } from "./PastMeetings";
 import type { AttachedDocument } from "./documentReader";
 
-type Tab = "copilot" | "transcript" | "context" | "settings";
+type Tab = "copilot" | "transcript" | "context";
 const EXPANDED_FROM = 900; // px: wide enough for the three-pane layout (main resizes the window)
 
 function useWidth() {
@@ -261,15 +260,27 @@ export default function CopilotApp() {
   }, [newest?.id, newest?.status, mode]);
 
   // The meeting stopped: close the window, shrink it, or leave it, as set. A recap still being written is awaited.
+  // Only trigger on a live -> ended transition, never when opening the window while a prior meeting is already ended.
+  const prevPhaseRef = useRef(state.phase);
+  const justEndedRef = useRef(false);
+  if (prevPhaseRef.current !== state.phase) {
+    justEndedRef.current = prevPhaseRef.current === "live" && state.phase === "ended";
+    prevPhaseRef.current = state.phase;
+  }
   const ended = state.phase === "ended";
   const working = state.cards.some(
     (c) => c.status === "queued" || c.status === "searching" || c.status === "streaming"
   );
   useEffect(() => {
-    if (!ended || !settings) return;
-    if (settings.onEnd === "orb") setMode("orb");
-    else if (settings.onEnd === "close") {
-      const t = setTimeout(() => void window.copilot?.window("close"), working ? 25000 : 6000);
+    if (!ended || !justEndedRef.current || !settings) return;
+    if (settings.onEnd === "orb") {
+      justEndedRef.current = false;
+      setMode("orb");
+    } else if (settings.onEnd === "close") {
+      const t = setTimeout(() => {
+        justEndedRef.current = false;
+        void window.copilot?.window("close");
+      }, working ? 25000 : 6000);
       return () => clearTimeout(t);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -361,8 +372,6 @@ export default function CopilotApp() {
 
   const centerBody = viewing ? (
     <PastMeeting id={viewing} onBack={() => setViewing(null)} onDeleted={() => setViewing(null)} />
-  ) : tab === "settings" ? (
-    <SettingsView settings={settings} state={state} onSettings={handleSettingsUpdate} />
   ) : tab === "transcript" ? (
     <TranscriptView
       segments={state.segments}
@@ -444,6 +453,22 @@ export default function CopilotApp() {
   const isFadeWhenIdle = !!settings?.fadeWhenIdle;
 
   const effectiveOpacity = isFadeWhenIdle && (hovered || ended) ? 1 : currentOpacity;
+  const needsSetup = settings !== null && (!settings.hasKey || !!settings.keyWarning);
+
+  if (needsSetup && settings) {
+    return (
+      <CopilotCredentialOnboarding
+        style={style}
+        settings={settings}
+        opacity={effectiveOpacity}
+        onMouseEnter={() => setMouseIn(true)}
+        onMouseLeave={() => setMouseIn(false)}
+        onSaveKey={(apiKey) => updateSettings({ apiKey })}
+        onMinimize={() => setMode("orb")}
+        onClose={() => void window.copilot?.window("hide")}
+      />
+    );
+  }
 
   return (
     <div
@@ -487,8 +512,8 @@ export default function CopilotApp() {
           <button
             type="button"
             title="Settings"
-            onClick={() => go("settings")}
-            className={`flex h-7 w-7 items-center justify-center rounded-lg hover:bg-white/10 hover:text-slate-200 ${tab === "settings" ? "bg-white/10 text-white" : ""}`}
+            onClick={() => void window.copilot?.openSettings?.("copilot")}
+            className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-white/10 hover:text-slate-200"
           >
             <Settings size={14} />
           </button>
@@ -503,7 +528,10 @@ export default function CopilotApp() {
         </div>
       </header>
 
-      <ProblemBanner kind={state.problem} onFix={() => go("settings")} />
+      <ProblemBanner
+        kind={state.problem}
+        onFix={() => void window.copilot?.openSettings?.(state.problem === "key" ? "copilotAudio" : "copilot")}
+      />
       <LiveStrip
         state={state}
         onTogglePause={togglePause}
@@ -511,24 +539,27 @@ export default function CopilotApp() {
         onEnd={() => void window.copilot?.stopMeeting?.()}
       />
       {state.phase !== "live" && tab === "copilot" && settings?.hasKey && (
-        <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-1.5 text-[11px] text-slate-400">
+        <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2 text-[11.5px] text-slate-400">
           <span>{state.phase === "ended" ? "Meeting ended" : "No meeting note running"}</span>
           <button
             type="button"
-            onClick={() => void window.copilot?.startMeeting?.()}
-            className="rounded border border-emerald-400/40 bg-emerald-500/20 px-2 py-0.5 text-[10px] font-medium text-emerald-200 hover:bg-emerald-500/30"
+            onClick={() => {
+              if (mode !== "full") setMode("full");
+              void window.copilot?.startMeeting?.();
+            }}
+            className="flex h-7 items-center rounded-md border border-primary/40 bg-primary/15 px-2.5 text-[11px] font-medium text-blue-200 transition-colors hover:bg-primary/25"
           >
             Start meeting notes
           </button>
         </div>
       )}
       {state.phase === "live" && (projects.length > 0 || state.project.name) && (
-        <div className="flex items-center gap-2 border-b border-white/10 px-3 py-1 text-[11px] text-slate-400">
-          <span className="shrink-0">Project</span>
+        <div className="flex items-center gap-2.5 border-b border-white/10 px-3 py-2 text-[11.5px] text-slate-400">
+          <span className="shrink-0 font-medium">Project</span>
           <select
             value={state.project.projectId ?? ""}
             onChange={(e) => pickProject(e.target.value)}
-            className="min-w-0 flex-1 truncate rounded border border-white/10 bg-[#1a1d26] px-1.5 py-0.5 text-slate-200 outline-none [color-scheme:dark]"
+            className="h-7 min-w-0 flex-1 truncate rounded-md border border-white/10 bg-white/[0.04] px-2 text-[11.5px] text-slate-200 outline-none transition-colors hover:bg-white/[0.07] focus:border-primary/50 [color-scheme:dark]"
           >
             <option value="" className="bg-[#1a1d26] text-slate-200">
               None
@@ -619,6 +650,164 @@ export default function CopilotApp() {
             />
           </section>
         )}
+      </div>
+    </div>
+  );
+}
+
+function CopilotCredentialOnboarding({
+  style,
+  settings,
+  opacity,
+  onMouseEnter,
+  onMouseLeave,
+  onSaveKey,
+  onMinimize,
+  onClose,
+}: {
+  style: React.ReactNode;
+  settings: CopilotSettings;
+  opacity: number;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+  onSaveKey: (apiKey: string) => Promise<CopilotSettings | undefined>;
+  onMinimize: () => void;
+  onClose: () => void;
+}) {
+  const [apiKey, setApiKey] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const keyValid = settings.hasKey && !settings.keyWarning;
+  const issueMessage = error || settings.keyError || settings.keyWarning || null;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = apiKey.trim();
+    if (!trimmed) {
+      setError("Please enter your OpenRouter API key (starts with sk-or-).");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const next = await onSaveKey(trimmed);
+      if (next?.keyError) {
+        setError(next.keyError);
+      } else if (next?.keyWarning) {
+        setError(next.keyWarning);
+      } else if (next?.hasKey) {
+        setApiKey("");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not verify and save key.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      data-copilot-root="true"
+      className="dark flex h-screen min-h-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-[#12141a] text-slate-200 transition-opacity duration-200 ease-out [color-scheme:dark]"
+      style={{ opacity }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
+      {style}
+      <header
+        style={{ WebkitAppRegion: "drag" }}
+        className="flex items-center gap-2 border-b border-white/10 px-3 py-2 [&_button]:[-webkit-app-region:no-drag]"
+      >
+        <Sparkles size={14} className="text-primary" />
+        <span className="text-[12px] font-medium text-slate-200">Meeting Copilot · Setup</span>
+        <div className="ms-auto flex items-center gap-1 text-slate-400">
+          <button
+            type="button"
+            title="Shrink to the orb"
+            onClick={onMinimize}
+            className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-white/10 hover:text-slate-200"
+          >
+            <Minus size={14} />
+          </button>
+          <button
+            type="button"
+            title="Close window"
+            onClick={onClose}
+            className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-white/10 hover:text-slate-200"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      </header>
+
+      <div className="flex flex-1 flex-col justify-center overflow-y-auto p-5">
+        <div className="mx-auto w-full max-w-sm space-y-4">
+          <div className="space-y-1.5 text-center">
+            <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-primary/15 text-blue-300">
+              <Key size={18} />
+            </div>
+            <h2 className="text-sm font-semibold text-slate-100">
+              API credentials required
+            </h2>
+            <p className="text-[12px] leading-relaxed text-slate-400">
+              Add your required OpenRouter API key to unlock the copilot card. It is stored
+              encrypted on this computer.
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2.5 text-[12px]">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium text-slate-200">OpenRouter API Key</span>
+              {keyValid ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[10.5px] font-medium text-blue-300">
+                  <Check size={11} /> Verified
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-[10.5px] font-medium text-slate-300">
+                  <AlertTriangle size={11} /> Required
+                </span>
+              )}
+            </div>
+          </div>
+
+          {issueMessage && (
+            <div className="rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-[11.5px] leading-relaxed text-rose-200">
+              {issueMessage}
+            </div>
+          )}
+
+          <form onSubmit={(e) => void handleSubmit(e)} className="space-y-2.5">
+            <label className="block space-y-1">
+              <span className="text-[11px] font-medium text-slate-400">
+                OpenRouter API Key
+              </span>
+              <input
+                type="password"
+                value={apiKey}
+                onChange={(e) => {
+                  setApiKey(e.target.value);
+                  if (error) setError(null);
+                }}
+                placeholder="sk-or-..."
+                autoFocus
+                className="w-full rounded-lg border border-white/10 bg-[#1a1d26] px-2.5 py-2 text-[12.5px] text-slate-100 outline-none placeholder:text-slate-500 focus:border-primary/60"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={saving || !apiKey.trim()}
+              className="w-full rounded-lg border border-primary/40 bg-primary/20 px-3 py-2 text-[12.5px] font-medium text-blue-100 transition-colors hover:bg-primary/30 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {saving ? "Verifying & saving…" : "Verify & unlock copilot"}
+            </button>
+          </form>
+
+          <p className="text-center text-[11px] text-slate-500">
+            Keys start with <code className="text-slate-400">sk-or-</code>. Get one at{" "}
+            <span className="text-slate-400">openrouter.ai/keys</span>.
+          </p>
+        </div>
       </div>
     </div>
   );

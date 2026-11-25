@@ -56,6 +56,7 @@ contextBridge.exposeInMainWorld("copilot", {
   },
   openWindow: undefined,
   openReference: (ref) => call("open-reference", ref),
+  openSettings: (section) => call("open-settings", section),
   stopMeeting: () => call("stop-meeting"),
   startMeeting: () => call("start-meeting"),
   window: (action, value) => call("window", action, value), // expand | mode (orb|peek|full) | opacity | hide | close

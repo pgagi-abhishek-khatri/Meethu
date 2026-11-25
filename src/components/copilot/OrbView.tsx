@@ -1,10 +1,12 @@
+import { useEffect, useRef } from "react";
 import { Pause, X } from "../icons";
 import MarkdownRenderer from "../ui/MarkdownRenderer";
 import type { Card } from "./copilotState";
 import { useLevel } from "./levelStore";
 
-// The small modes of the copilot window. The window is frameless and transparent: the ring drags it, the
-// centre is the button (hover = peek at the newest card, click = open the panel).
+// The small modes of the copilot window. The window is frameless and transparent: dragging anywhere on the
+// orb moves the window via IPC, while a plain click on the centre button opens the panel.
+const DRAG_THRESHOLD_PX = 4;
 const NO_DRAG = { WebkitAppRegion: "no-drag" } as const;
 const DRAG = { WebkitAppRegion: "drag" } as const;
 
@@ -48,18 +50,70 @@ export function Orb({
   onHover: () => void;
   onOpen: () => void;
 }) {
+  const dragOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const draggingRef = useRef(false);
+  const suppressClickRef = useRef(false);
+
+  useEffect(() => {
+    const stopDrag = () => {
+      dragOriginRef.current = null;
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      suppressClickRef.current = true;
+      void window.copilot?.window("drag-stop");
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      const origin = dragOriginRef.current;
+      if (!origin || draggingRef.current) return;
+      if (e.buttons === 0) {
+        stopDrag();
+        return;
+      }
+      if (Math.hypot(e.screenX - origin.x, e.screenY - origin.y) < DRAG_THRESHOLD_PX) return;
+      draggingRef.current = true;
+      void window.copilot?.window("drag-start");
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", stopDrag);
+    window.addEventListener("blur", stopDrag);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", stopDrag);
+      window.removeEventListener("blur", stopDrag);
+      if (draggingRef.current) {
+        draggingRef.current = false;
+        void window.copilot?.window("drag-stop");
+      }
+    };
+  }, []);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    suppressClickRef.current = false;
+    dragOriginRef.current = { x: e.screenX, y: e.screenY };
+  };
+
+  const handleClick = () => {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      return;
+    }
+    onOpen();
+  };
+
   return (
     <div
-      style={DRAG}
-      className="flex h-16 w-16 items-center justify-center rounded-full border border-white/15 bg-[#12141a]/95 shadow-lg"
+      onMouseDown={handleMouseDown}
+      className="flex h-16 w-16 cursor-grab items-center justify-center rounded-full border border-white/15 bg-[#12141a]/95 shadow-lg active:cursor-grabbing"
     >
       <button
         type="button"
-        style={NO_DRAG}
         title={paused ? "Copilot is paused (click to open)" : "Open the copilot"}
         onMouseEnter={onHover}
-        onClick={onOpen}
-        className={`relative flex h-9 w-9 items-center justify-center rounded-full ${
+        onClick={handleClick}
+        className={`relative flex h-9 w-9 cursor-pointer items-center justify-center rounded-full ${
           unseen
             ? "animate-pulse bg-emerald-400 text-slate-900"
             : busy

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { FolderOpen, Plus, Trash2, X } from "../icons";
+import { ConfirmDialog } from "../ui/dialog";
 import type { Project, CopilotSettings } from "./copilotApi";
 import { RecentsList } from "./PastMeetings";
 
@@ -32,6 +33,11 @@ export default function ContextView({ summary, settings, onSettings, phase, onPi
   const [projects, setProjects] = useState<Project[]>([]);
   const [name, setName] = useState("");
   const [plan, setPlan] = useState(settings?.plan ?? "");
+  const [confirmTarget, setConfirmTarget] = useState<
+    | { type: "project"; project: Project }
+    | { type: "file"; file: Project["files"][number] }
+    | null
+  >(null);
   useEffect(() => setPlan(settings?.plan ?? ""), [settings?.plan]);
 
   const refresh = () => window.copilot?.projects.list().then(setProjects);
@@ -89,7 +95,7 @@ export default function ContextView({ summary, settings, onSettings, phase, onPi
                 <button
                   type="button"
                   title="Delete project"
-                  onClick={() => void act(() => window.copilot?.projects.remove(p.id))}
+                  onClick={() => setConfirmTarget({ type: "project", project: p })}
                   className="rounded p-1 text-slate-500 hover:bg-white/10 hover:text-rose-300"
                 >
                   <Trash2 size={14} />
@@ -103,7 +109,7 @@ export default function ContextView({ summary, settings, onSettings, phase, onPi
                       <button
                         type="button"
                         title="Remove file"
-                        onClick={() => void act(() => window.copilot?.projects.removeFile(f.id))}
+                        onClick={() => setConfirmTarget({ type: "file", file: f })}
                         className="text-slate-600 hover:text-rose-300"
                       >
                         <X size={12} />
@@ -148,6 +154,36 @@ export default function ContextView({ summary, settings, onSettings, phase, onPi
         </h3>
         <RecentsList refreshKey={phase} onPick={onPickPast} />
       </section>
+
+      <ConfirmDialog
+        open={confirmTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirmTarget(null);
+        }}
+        title={
+          confirmTarget?.type === "project"
+            ? `Delete "${confirmTarget.project.name}"?`
+            : confirmTarget?.type === "file"
+              ? `Remove "${confirmTarget.file.name}"?`
+              : ""
+        }
+        description={
+          confirmTarget?.type === "project"
+            ? "Its files, context and rules are removed from the copilot. Your files on disk are not touched."
+            : "This removes the file from the project. Your file on disk is not touched."
+        }
+        confirmText={confirmTarget?.type === "project" ? "Delete" : "Remove"}
+        variant="destructive"
+        onConfirm={() => {
+          if (!confirmTarget) return;
+          if (confirmTarget.type === "project") {
+            void act(() => window.copilot?.projects.remove(confirmTarget.project.id));
+          } else {
+            void act(() => window.copilot?.projects.removeFile(confirmTarget.file.id));
+          }
+          setConfirmTarget(null);
+        }}
+      />
     </div>
   );
 }

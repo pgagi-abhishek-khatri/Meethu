@@ -1,5 +1,5 @@
 {
-  description = "OpenWhispr – privacy-first voice dictation, meeting transcription & notes";
+  description = "Meethu – privacy-first voice dictation, meeting transcription & notes";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -16,16 +16,16 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
-          openwhispr = pkgs.callPackage ./nix/package.nix { };
+          meethu = pkgs.callPackage ./nix/package.nix { };
         in
         {
-          default = openwhispr;
-          openwhispr = openwhispr;
+          default = meethu;
+          meethu = meethu;
         }
       );
 
       overlays.default = _final: _prev: {
-        openwhispr = self.packages.x86_64-linux.openwhispr;
+        meethu = self.packages.x86_64-linux.meethu;
       };
 
       nixosModules.default = import ./nix/module.nix self;

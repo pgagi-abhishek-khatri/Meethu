@@ -12,9 +12,9 @@ const os = require("os");
 const path = require("path");
 const { execFileSync, spawnSync } = require("child_process");
 
-const ICON_BUNDLE = path.join(__dirname, "..", "src", "assets", "openwhispr.icon");
+const ICON_BUNDLE = path.join(__dirname, "..", "src", "assets", "meethu.icon");
 const OUTPUT_CAR = path.join(__dirname, "..", "src", "assets", "Assets.car");
-const APP_ICON_NAME = "openwhispr";
+const APP_ICON_NAME = "meethu";
 
 if (process.platform !== "darwin") {
   console.log("compile-macos-icon: not macOS, skipping");

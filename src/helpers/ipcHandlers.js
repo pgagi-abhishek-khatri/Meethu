@@ -711,6 +711,7 @@ class IPCHandlers {
           },
           onStopMeeting: () => this.windowManager?.meetingDetectionEngine?.stopMeeting?.(),
           onStartMeeting: () => this.windowManager?.startManualMeeting?.({ activate: false }),
+          onOpenSettings: (section = "copilot") => this.windowManager?.openSettings?.(section),
           onOpenReference: (ref) => {
             this.windowManager?.showControlPanel?.();
             const win = this.windowManager?.controlPanelWindow;

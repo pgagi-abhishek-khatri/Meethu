@@ -2,31 +2,31 @@ const { execFileSync } = require("child_process");
 const debugLogger = require("./debugLogger");
 const GnomeGlobalShortcutsPortal = require("./gnomeGlobalShortcutsPortal");
 
-const DBUS_SERVICE_NAME = "com.openwhispr.App";
-const DBUS_OBJECT_PATH = "/com/openwhispr/App";
-const DBUS_INTERFACE = "com.openwhispr.App";
+const DBUS_SERVICE_NAME = "com.meethu.App";
+const DBUS_OBJECT_PATH = "/com/meethu/App";
+const DBUS_INTERFACE = "com.meethu.App";
 
 // Per-slot gsettings paths and display names
 const SLOT_CONFIG = {
   dictation: {
-    path: "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/openwhispr/",
-    name: "OpenWhispr Toggle",
+    path: "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/meethu/",
+    name: "Meethu Toggle",
   },
   meeting: {
-    path: "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/openwhispr-meeting/",
-    name: "OpenWhispr Meeting",
+    path: "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/meethu-meeting/",
+    name: "Meethu Meeting",
   },
   voiceAgent: {
-    path: "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/openwhispr-voice-agent/",
-    name: "OpenWhispr Voice Assistant",
+    path: "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/meethu-voice-agent/",
+    name: "Meethu Voice Assistant",
   },
   translation: {
-    path: "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/openwhispr-translation/",
-    name: "OpenWhispr Translation",
+    path: "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/meethu-translation/",
+    name: "Meethu Translation",
   },
   copilot: {
-    path: "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/openwhispr-copilot/",
-    name: "OpenWhispr Copilot",
+    path: "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/meethu-copilot/",
+    name: "Meethu Copilot",
   },
 };
 

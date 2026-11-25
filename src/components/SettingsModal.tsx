@@ -13,6 +13,8 @@ import {
   ShieldCheck,
   Users,
   SquareSparkle,
+  Sparkles,
+  AudioLines,
 } from "./icons";
 import SidebarModal, { type SidebarItem } from "./ui/SidebarModal";
 import SettingsPage, { AccountAvatar, SettingsSectionType } from "./SettingsPage";
@@ -122,6 +124,27 @@ export default function SettingsModal({ open, onOpenChange, initialSection }: Se
         icon: Brain,
         description: t("settingsModal.sections.llms.description"),
         group: t("settingsModal.groups.aiModels"),
+      },
+      {
+        id: "copilot",
+        label: "Copilot",
+        icon: Sparkles,
+        description: "Pace, models, window behavior and file search",
+        group: "Copilot",
+      },
+      {
+        id: "copilotBehaviour",
+        label: "Behaviour",
+        icon: Brain,
+        description: "Learned guide, global context and card prompts",
+        group: "Copilot",
+      },
+      {
+        id: "copilotAudio",
+        label: "Audio & keys",
+        icon: AudioLines,
+        description: "OpenRouter key, meeting transcription and mic denoise",
+        group: "Copilot",
       },
       {
         id: "privacyData",

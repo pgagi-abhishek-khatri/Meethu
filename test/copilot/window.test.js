@@ -4,7 +4,7 @@ const { createCopilotWindow, SIZES } = require("../../src/copilot/main/window");
 
 const AREA = { x: 0, y: 0, width: 1920, height: 1080 };
 
-function fakeElectron() {
+function fakeElectron({ visibleOnCreate = true } = {}) {
   const created = [];
   class BrowserWindow {
     constructor(opts) {
@@ -13,17 +13,56 @@ function fakeElectron() {
           throw new TypeError(`bad ${k}: ${opts[k]}`);
       this.opts = opts;
       this.bounds = { x: opts.x, y: opts.y, width: opts.width, height: opts.height };
+      this.visible = visibleOnCreate;
+      this.destroyed = false;
+      this.handlers = new Map();
       this.webContents = { isDestroyed: () => false, send() {}, on() {}, once() {} };
       created.push(this);
     }
     setMenuBarVisibility() {}
-    once() {}
-    on() {}
+    setResizable() {}
+    setMinimumSize() {}
+    emit(event, ...args) {
+      for (const fn of this.handlers.get(event) ?? []) fn(...args);
+    }
+    once(event, fn) {
+      const wrap = (...args) => {
+        this.handlers.set(
+          event,
+          (this.handlers.get(event) ?? []).filter((h) => h !== wrap)
+        );
+        fn(...args);
+      };
+      this.on(event, wrap);
+    }
+    on(event, fn) {
+      const list = this.handlers.get(event) ?? [];
+      list.push(fn);
+      this.handlers.set(event, list);
+    }
+    show() {
+      this.visible = true;
+      this.emit("show");
+    }
+    showInactive() {
+      this.visible = true;
+      this.emit("show");
+    }
+    hide() {
+      this.visible = false;
+      this.emit("hide");
+    }
+    close() {
+      this.visible = false;
+      this.destroyed = true;
+      this.emit("closed");
+    }
+    focus() {}
     isDestroyed() {
-      return false;
+      return this.destroyed;
     }
     isVisible() {
-      return true;
+      return this.visible;
     }
     isMinimized() {
       return false;
@@ -82,4 +121,61 @@ test("window: good saved bounds are kept, and expand ignores a broken saved rect
   assert.deepEqual([win.opts.x, win.opts.y, win.opts.width, win.opts.height], [100, 50, 420, 650]);
   assert.doesNotThrow(() => w.expand(true));
   assert.equal(win.bounds.width, SIZES.expanded.width);
+});
+
+test("window: isOpen stays true before ready-to-show and notifies on open, hide, and closed", () => {
+  const e = fakeElectron({ visibleOnCreate: false });
+  const events = [];
+  const w = createCopilotWindow({
+    BrowserWindow: e.BrowserWindow,
+    screen: e.screen,
+    loadRenderer: () => Promise.resolve(),
+    setupAlwaysOnTop: () => {},
+    getWindowState: () => ({ expanded: false }),
+    saveWindowState: () => {},
+    onVisibilityChange: (open) => events.push(open),
+  });
+
+  const win = w.open({ focus: true, startMode: "full" });
+  assert.equal(win.isVisible(), false);
+  assert.equal(w.isOpen(), true);
+  assert.deepEqual(events, [true]);
+
+  win.emit("ready-to-show");
+  assert.equal(win.isVisible(), true);
+  assert.equal(w.isOpen(), true);
+
+  w.hide();
+  assert.equal(w.isOpen(), false);
+  assert.deepEqual(events, [true, false]);
+
+  w.open({ focus: true, startMode: "full" });
+  assert.equal(w.isOpen(), true);
+  assert.deepEqual(events, [true, false, true]);
+
+  win.close();
+  assert.equal(w.isOpen(), false);
+  assert.deepEqual(events, [true, false, true, false]);
+});
+
+test("window: open with startMode=full restores from orb mode after hide", () => {
+  const e = fakeElectron({ visibleOnCreate: false });
+  const w = createCopilotWindow({
+    BrowserWindow: e.BrowserWindow,
+    screen: e.screen,
+    loadRenderer: () => Promise.resolve(),
+    setupAlwaysOnTop: () => {},
+    getWindowState: () => ({ expanded: false }),
+    saveWindowState: () => {},
+  });
+
+  const win = w.open({ focus: true, startMode: "orb" });
+  win.emit("ready-to-show");
+  assert.equal(w.mode(), "orb");
+
+  w.hide();
+  w.open({ focus: true, startMode: "full" });
+  assert.equal(w.mode(), "full");
+  assert.equal(win.bounds.width, SIZES.compact.width);
+  win.close();
 });

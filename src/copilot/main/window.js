@@ -22,10 +22,22 @@ function createCopilotWindow({
   setupAlwaysOnTop,
   getWindowState,
   saveWindowState,
+  onVisibilityChange = () => {},
 }) {
   let win = null;
   let mode = "full";
   let orbAt = null; // top-left of the orb; peek grows from its corner
+  let dragTimer = null;
+  let dragOffset = { x: 0, y: 0 };
+  let pendingShow = false;
+  let lastReportedOpen = false;
+
+  const notifyVisibility = (open) => {
+    const next = !!open;
+    if (next === lastReportedOpen) return;
+    lastReportedOpen = next;
+    onVisibilityChange(next);
+  };
 
   // Electron needs a whole rectangle of integers; the saved orb spot is only { x, y }.
   const areaOf = (b) =>
@@ -98,7 +110,7 @@ function createCopilotWindow({
       transparent: true,
       hasShadow: false,
       backgroundColor: "#00000000",
-      resizable: true,
+      resizable: mode === "full",
       skipTaskbar: true,
       autoHideMenuBar: true,
       webPreferences: {
@@ -113,7 +125,18 @@ function createCopilotWindow({
     const w = win;
     w.setMenuBarVisibility(false);
     setupAlwaysOnTop(w);
-    w.once("ready-to-show", () => (focus ? w.show() : w.showInactive()));
+    w.once("ready-to-show", () => {
+      if (!pendingShow || w.isDestroyed()) return;
+      focus ? w.show() : w.showInactive();
+    });
+    w.on("show", () => {
+      pendingShow = false;
+      notifyVisibility(true);
+    });
+    w.on("hide", () => {
+      pendingShow = false;
+      notifyVisibility(false);
+    });
     const saveBounds = () => {
       if (w.isDestroyed() || w.isMinimized()) return;
       const b = w.getBounds();
@@ -143,11 +166,17 @@ function createCopilotWindow({
         send("copilot:hover", over);
       }
     }, 100);
+    hoverTimer.unref?.();
     w.webContents.on("did-finish-load", () => (wasOver = null)); // a reloaded page must be told again
     w.on("closed", () => {
+      stopDrag();
       clearTimeout(t);
       clearInterval(hoverTimer);
-      if (win === w) win = null;
+      if (win === w) {
+        win = null;
+        pendingShow = false;
+        notifyVisibility(false);
+      }
     });
     loadRenderer(w, "copilot").catch(() => {});
     return w;
@@ -166,21 +195,59 @@ function createCopilotWindow({
     };
   }
 
-  const alive = () => win && !win.isDestroyed();
+  const alive = () => !!(win && !win.isDestroyed());
+
+  function stopDrag() {
+    if (dragTimer) {
+      clearInterval(dragTimer);
+      dragTimer = null;
+    }
+    if (alive() && mode === "orb") {
+      const b = win.getBounds();
+      orbAt = { x: b.x, y: b.y };
+      saveWindowState({ orb: orbAt });
+    }
+  }
+
+  function startDrag() {
+    if (!alive()) return;
+    stopDrag();
+    const cursor = screen.getCursorScreenPoint();
+    const [wx, wy] = win.getPosition();
+    dragOffset = { x: cursor.x - wx, y: cursor.y - wy };
+    dragTimer = setInterval(() => {
+      if (!alive()) {
+        stopDrag();
+        return;
+      }
+      const c = screen.getCursorScreenPoint();
+      const b = win.getBounds();
+      const rawX = c.x - dragOffset.x;
+      const rawY = c.y - dragOffset.y;
+      const area = areaOf({ x: rawX, y: rawY, width: b.width, height: b.height });
+      const x = Math.min(Math.max(rawX, area.x), area.x + area.width - b.width);
+      const y = Math.min(Math.max(rawY, area.y), area.y + area.height - b.height);
+      win.setPosition(Math.round(x), Math.round(y));
+    }, 16);
+  }
 
   function setMode(next) {
     if (!alive() || !MODES.has(next) || next === mode) return;
+    stopDrag();
     // Leaving the orb: remember where it was dropped.
     if (mode === "orb") orbAt = { x: win.getBounds().x, y: win.getBounds().y };
     mode = next;
     const state = getWindowState();
     if (next === "orb") {
+      win.setResizable(false);
       win.setMinimumSize(0, 0);
       win.setBounds({ ...ORB, ...(orbAt ?? defaultOrbAt()) });
     } else if (next === "peek") {
+      win.setResizable(false);
       win.setMinimumSize(0, 0);
       win.setBounds(fit(peekBounds()));
     } else {
+      win.setResizable(true);
       win.setMinimumSize(340, 360);
       const target = state.expanded
         ? (state.expandedBounds ?? SIZES.expanded)
@@ -197,24 +264,44 @@ function createCopilotWindow({
   }
 
   return {
-    isOpen: () => alive() && win.isVisible(),
+    isOpen: () => alive() && (win.isVisible() || pendingShow),
     mode: () => mode,
     open({ focus = false, startMode } = {}) {
-      if (!alive()) return create({ focus, startMode });
-      if (!win.isVisible()) focus ? win.show() : win.showInactive();
-      else if (focus) win.focus();
+      if (!alive()) {
+        pendingShow = true;
+        notifyVisibility(true);
+        return create({ focus, startMode });
+      }
+      if (MODES.has(startMode) && mode !== startMode) setMode(startMode);
+      if (!win.isVisible()) {
+        pendingShow = true;
+        notifyVisibility(true);
+        focus ? win.show() : win.showInactive();
+      } else if (focus) {
+        win.focus();
+      }
       return win;
     },
     // The hotkey: show it without stealing focus, or hide it ("presenting mode": events keep flowing, it is only hidden).
     toggle() {
-      if (alive() && win.isVisible()) win.hide();
+      if (alive() && (win.isVisible() || pendingShow)) this.hide();
       else this.open({ focus: false });
     },
-    hide: () => alive() && win.hide(),
-    close: () => alive() && win.close(),
+    hide() {
+      pendingShow = false;
+      if (alive()) win.hide();
+      notifyVisibility(false);
+    },
+    close() {
+      pendingShow = false;
+      if (alive()) win.close();
+      notifyVisibility(false);
+    },
     send,
     webContents: () => (alive() ? win.webContents : null),
     setMode,
+    startDrag,
+    stopDrag,
     // Full mode only: switch between the compact panel and the three-pane one.
     expand(on) {
       if (!alive() || mode !== "full") return;

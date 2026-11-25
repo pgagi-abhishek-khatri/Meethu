@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useShallow } from "zustand/react/shallow";
 import { Plus, Sparkles } from "../icons";
 import { useToast } from "../ui/useToast";
+import { ConfirmDialog } from "../ui/dialog";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
 import NoteEditor from "./NoteEditor";
 import SpacesTree from "./SpacesTree";
@@ -606,15 +607,25 @@ export default function PersonalNotesView({
     loadFolders();
   }, [activeFolderId]);
 
+  const [deleteNoteTarget, setDeleteNoteTarget] = useState<NoteItem | null>(null);
+
   const handleDelete = useCallback(
-    async (id: number) => {
-      if (shouldCancelPendingSavesForDelete(draftRef.current?.noteId ?? null, id)) {
-        cancelPendingSaves(id);
-      }
-      await window.electronAPI.deleteNote(id);
+    (id: number) => {
+      const note = notes.find((n) => n.id === id) ?? null;
+      setDeleteNoteTarget(note ?? ({ id } as NoteItem));
     },
-    [cancelPendingSaves]
+    [notes]
   );
+
+  const confirmDeleteNote = useCallback(async () => {
+    if (!deleteNoteTarget) return;
+    const { id } = deleteNoteTarget;
+    if (shouldCancelPendingSavesForDelete(draftRef.current?.noteId ?? null, id)) {
+      cancelPendingSaves(id);
+    }
+    await window.electronAPI.deleteNote(id);
+    setDeleteNoteTarget(null);
+  }, [deleteNoteTarget, cancelPendingSaves]);
 
   const handleMoveNote = useCallback(
     async (noteId: number, target: NoteMoveTarget) => {
@@ -1095,6 +1106,26 @@ export default function PersonalNotesView({
       <NotesStructureIntroDialog
         open={showStructureIntro}
         onOpenChange={handleStructureIntroOpenChange}
+      />
+
+      <ConfirmDialog
+        open={deleteNoteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteNoteTarget(null);
+        }}
+        title={t("noteEditor.deleteConfirmTitle")}
+        description={
+          deleteNoteTarget?.title
+            ? t("noteEditor.deleteConfirmDescriptionWithTitle", {
+                title: deleteNoteTarget.title,
+                defaultValue: `"${deleteNoteTarget.title}" will be permanently deleted and cannot be recovered.`,
+              })
+            : t("noteEditor.deleteConfirmDescription")
+        }
+        confirmText={t("noteEditor.deleteConfirm")}
+        cancelText={t("common.cancel")}
+        variant="destructive"
+        onConfirm={() => void confirmDeleteNote()}
       />
     </div>
   );

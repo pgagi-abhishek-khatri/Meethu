@@ -30,10 +30,11 @@ const USER_AGENT = "OpenWhispr/1.0";
 
 // Writable yt-dlp cache, seeded from the read-only bundle so the binary can
 // self-update (the bundled copy is read-only / inside the signed bundle).
-// OPENWHISPR_YTDLP_CACHE_DIR overrides the location (relocate it, or isolate it in tests).
+// MEETHU_YTDLP_CACHE_DIR (or legacy OPENWHISPR_YTDLP_CACHE_DIR) overrides the location.
 const YT_DLP_CACHE_DIR =
+  process.env.MEETHU_YTDLP_CACHE_DIR ||
   process.env.OPENWHISPR_YTDLP_CACHE_DIR ||
-  path.join(os.homedir(), ".cache", "openwhispr", "yt-dlp");
+  path.join(os.homedir(), ".cache", "meethu", "yt-dlp");
 const YT_DLP_UPDATE_THROTTLE_MS = 24 * 60 * 60 * 1000;
 // Bound the self-update so a stalled GitHub request can never hang a download
 // or wedge the single-flight flag. Overridable via options.timeoutMs for tests.

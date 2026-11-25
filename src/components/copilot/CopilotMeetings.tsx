@@ -252,6 +252,8 @@ export default function CopilotMeetings({
 }) {
   const [q, setQ] = useState("");
   const [projectFilter, setProjectFilter] = useState<number | "all">("all");
+  const [deleteTarget, setDeleteTarget] = useState<PastSession | null>(null);
+  const { toast } = useToast();
   const nameOf = useMemo(() => new Map(projects.map((p) => [p.id, p.name])), [projects]);
   const shown = list.filter((s) => {
     if (projectFilter !== "all" && s.project_id !== projectFilter) return false;
@@ -327,7 +329,13 @@ export default function CopilotMeetings({
       {shown.length ? (
         <div className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border/70 bg-card/50 dark:divide-border-subtle/50 dark:border-border-subtle dark:bg-surface-2/50">
           {shown.map((s) => (
-            <MeetingRow key={s.id} s={s} project={nameOf.get(s.project_id ?? -1)} onOpen={onOpen} />
+            <MeetingRow
+              key={s.id}
+              s={s}
+              project={nameOf.get(s.project_id ?? -1)}
+              onOpen={onOpen}
+              onDelete={setDeleteTarget}
+            />
           ))}
         </div>
       ) : (
@@ -343,6 +351,31 @@ export default function CopilotMeetings({
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) setDeleteTarget(null);
+        }}
+        title={deleteTarget ? `Delete "${deleteTarget.title || "Meeting"}"?` : ""}
+        description="Its transcript and cards are removed from the copilot."
+        confirmText="Delete"
+        variant="destructive"
+        onConfirm={async () => {
+          if (!deleteTarget) return;
+          try {
+            await window.copilot?.sessions.remove(deleteTarget.id);
+            setDeleteTarget(null);
+            reload();
+          } catch (error) {
+            toast({
+              title: "The meeting could not be deleted",
+              description: error instanceof Error ? error.message : String(error),
+              variant: "destructive",
+            });
+          }
+        }}
+      />
     </div>
   );
 }
@@ -351,16 +384,25 @@ export function MeetingRow({
   s,
   project,
   onOpen,
+  onDelete,
 }: {
   s: PastSession;
   project?: string;
   onOpen: (id: string) => void;
+  onDelete?: (s: PastSession) => void;
 }) {
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={() => onOpen(s.id)}
-      className="flex w-full items-start gap-3 px-4 py-3 text-start transition-colors hover:bg-foreground/3 dark:hover:bg-white/3"
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen(s.id);
+        }
+      }}
+      className="flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-start transition-colors hover:bg-foreground/3 dark:hover:bg-white/3"
     >
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
@@ -385,6 +427,22 @@ export function MeetingRow({
             .join(" · ")}
         </div>
       </div>
-    </button>
+      {onDelete && (
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+          title="Delete meeting"
+          aria-label={`Delete ${s.title || "Meeting"}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(s);
+          }}
+        >
+          <Trash2 size={14} />
+        </Button>
+      )}
+    </div>
   );
 }

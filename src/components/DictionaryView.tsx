@@ -41,6 +41,7 @@ export default function DictionaryView() {
   const [editingWord, setEditingWord] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
+  const [pendingRemoveWord, setPendingRemoveWord] = useState<string | null>(null);
   const addInputRef = useRef<HTMLInputElement>(null);
 
   const pendingImportCount = useMemo(() => parseDictionaryImportText(bulkText).length, [bulkText]);
@@ -100,9 +101,9 @@ export default function DictionaryView() {
 
   const handleRemove = useCallback(
     (word: string) => {
-      updateCustomDictionary({ remove: [word] });
+      setPendingRemoveWord(word);
     },
-    [updateCustomDictionary]
+    []
   );
 
   const startEdit = useCallback((word: string) => {
@@ -199,6 +200,31 @@ export default function DictionaryView() {
         description={t("dictionary.clearDescription")}
         onConfirm={() => updateCustomDictionary({ remove: userWords })}
         variant="destructive"
+      />
+      <ConfirmDialog
+        open={pendingRemoveWord !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRemoveWord(null);
+        }}
+        title={t("dictionary.removeConfirmTitle", {
+          defaultValue: "Remove word?",
+        })}
+        description={
+          pendingRemoveWord
+            ? t("dictionary.removeConfirmDescription", {
+                word: pendingRemoveWord,
+                defaultValue: `Remove "${pendingRemoveWord}" from your custom dictionary?`,
+              })
+            : ""
+        }
+        confirmText={t("common.remove", { defaultValue: "Remove" })}
+        cancelText={t("common.cancel")}
+        variant="destructive"
+        onConfirm={() => {
+          if (!pendingRemoveWord) return;
+          updateCustomDictionary({ remove: [pendingRemoveWord] });
+          setPendingRemoveWord(null);
+        }}
       />
 
       <div className={cn(PAGE_CONTENT_WIDTH_CLASS, "px-6 pt-6")}>

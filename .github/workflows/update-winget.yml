@@ -58,7 +58,7 @@ jobs:
         # handed a PAT that can write to every public repo the owner can reach.
         uses: vedantmgoyal9/winget-releaser@b7370d4d152efdce803a26cc6ca9eee58cb2ad54 # v2
         with:
-          identifier: OpenWhispr.OpenWhispr
+          identifier: Meethu.Meethu
           release-tag: v${{ steps.release.outputs.version }}
-          installers-regex: 'OpenWhispr-Setup-.*\.exe$'
+          installers-regex: 'Meethu-Setup-.*\.exe$'
           token: ${{ secrets.WINGET_TOKEN }}

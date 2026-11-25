@@ -19,15 +19,22 @@ remove_target() {
   fi
 }
 
-echo "Stopping running OpenWhispr/Electron processes..."
+echo "Stopping running Meethu/Electron processes..."
+pkill -f "Meethu" 2>/dev/null || true
+pkill -f "meethu" 2>/dev/null || true
 pkill -f "OpenWhispr" 2>/dev/null || true
 pkill -f "open-whispr" 2>/dev/null || true
-pkill -f "Electron Helper.*OpenWhispr" 2>/dev/null || true
+pkill -f "Electron Helper.*Meethu" 2>/dev/null || true
 
-echo "Removing /Applications/OpenWhispr.app (requires admin)..."
+echo "Removing /Applications/Meethu.app (requires admin)..."
+remove_target "/Applications/Meethu.app"
 remove_target "/Applications/OpenWhispr.app"
 
 echo "Purging Application Support data..."
+remove_target "$HOME/Library/Application Support/Meethu"
+remove_target "$HOME/Library/Application Support/meethu"
+remove_target "$HOME/Library/Application Support/Meethu-dev"
+remove_target "$HOME/Library/Application Support/com.pgagi.meethu"
 remove_target "$HOME/Library/Application Support/OpenWhispr"
 remove_target "$HOME/Library/Application Support/open-whispr"
 remove_target "$HOME/Library/Application Support/OpenWhispr-dev"
@@ -35,6 +42,11 @@ remove_target "$HOME/Library/Application Support/com.openwhispr"
 remove_target "$HOME/Library/Application Support/com.openwhispr.OpenWhispr"
 
 echo "Removing caches, logs, and saved state..."
+remove_target "$HOME/Library/Caches/meethu"
+remove_target "$HOME/Library/Caches/com.pgagi.meethu"
+remove_target "$HOME/Library/Preferences/com.pgagi.meethu.plist"
+remove_target "$HOME/Library/Logs/Meethu"
+remove_target "$HOME/Library/Saved Application State/com.pgagi.meethu.savedState"
 remove_target "$HOME/Library/Caches/open-whispr"
 remove_target "$HOME/Library/Caches/com.openwhispr.OpenWhispr"
 remove_target "$HOME/Library/Preferences/com.openwhispr.OpenWhispr.plist"
@@ -44,18 +56,21 @@ remove_target "$HOME/Library/Saved Application State/com.openwhispr.OpenWhispr.s
 
 echo "Cleaning temporary files..."
 shopt -s nullglob
-for tmp in /tmp/openwhispr*; do
+for tmp in /tmp/meethu* /tmp/openwhispr*; do
   remove_target "$tmp"
 done
-for crash in "$HOME/Library/Application Support/CrashReporter"/OpenWhispr_*; do
+for crash in "$HOME/Library/Application Support/CrashReporter"/Meethu_* "$HOME/Library/Application Support/CrashReporter"/OpenWhispr_*; do
   remove_target "$crash"
 done
 shopt -u nullglob
 
-read -r -p "Remove downloaded Whisper models and caches (~/.cache/whisper, ~/Library/Application Support/whisper)? [y/N]: " wipe_models
+read -r -p "Remove downloaded Whisper models and caches (~/.cache/meethu, ~/.cache/whisper)? [y/N]: " wipe_models
 if [[ "$wipe_models" =~ ^[Yy]$ ]]; then
+  remove_target "$HOME/.cache/meethu"
+  remove_target "$HOME/.cache/openwhispr"
   remove_target "$HOME/.cache/whisper"
   remove_target "$HOME/Library/Application Support/whisper"
+  remove_target "$HOME/Library/Application Support/Meethu/models"
   remove_target "$HOME/Library/Application Support/OpenWhispr/models"
 fi
 
@@ -71,9 +86,9 @@ fi
 cat <<'EOF'
 macOS keeps microphone, screen recording, and accessibility approvals even after files are removed.
 Reset them if you want a truly fresh start:
-  tccutil reset Microphone com.openwhispr.app
-  tccutil reset Accessibility com.openwhispr.app
-  tccutil reset ScreenCapture com.openwhispr.app
+  tccutil reset Microphone com.pgagi.meethu
+  tccutil reset Accessibility com.pgagi.meethu
+  tccutil reset ScreenCapture com.pgagi.meethu
 
 Full uninstall complete. Reboot if you removed permissions, then reinstall or run npm scripts on a clean tree.
 EOF

@@ -36,6 +36,7 @@ export function useCopilot() {
         settingsRef.current = next;
         setSettings(next);
       }
+      return next;
     },
     []
   );

@@ -1,4 +1,4 @@
-# NixOS module for OpenWhispr.
+# NixOS module for Meethu.
 #
 # Installs the app and configures everything Wayland auto-paste needs, which is
 # the main pain point for Nix users (see issue #728): ydotool, the uinput kernel
@@ -17,11 +17,11 @@ self:
   ...
 }:
 let
-  cfg = config.programs.openwhispr;
+  cfg = config.programs.meethu;
 in
 {
-  options.programs.openwhispr = {
-    enable = lib.mkEnableOption "OpenWhispr voice dictation app with Wayland auto-paste support";
+  options.programs.meethu = {
+    enable = lib.mkEnableOption "Meethu voice dictation app with Wayland auto-paste support";
 
     users = lib.mkOption {
       type = lib.types.listOf lib.types.str;

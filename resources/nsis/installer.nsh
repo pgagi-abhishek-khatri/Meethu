@@ -8,7 +8,7 @@
 ; scoped inbound BLOCK rule suppresses the prompt and closes the port to the
 ; network; loopback is never filtered, so transcription is unaffected.
 ; netsh needs elevation — per-user installs skip this silently.
-!define SHERPA_FIREWALL_RULE "OpenWhispr Local Transcription Server (sherpa-onnx)"
+!define SHERPA_FIREWALL_RULE "Meethu Local Transcription Server (sherpa-onnx)"
 
 ; Electron writes the launch-at-login entry itself, so nothing in the generated
 ; uninstaller knows to remove it, and Windows keeps listing a startup item that
@@ -34,15 +34,18 @@
   ; Guarded by isUpdated so an in-place update does not silently turn launch at
   ; login off for a user who had enabled it.
   ${ifNot} ${isUpdated}
+    !insertmacro DeleteAutoStartEntry "com.pgagi.meethu"
+    !insertmacro DeleteAutoStartEntry "com.pgagi.meethu.staging"
+    !insertmacro DeleteAutoStartEntry "com.pgagi.meethu.development"
     !insertmacro DeleteAutoStartEntry "com.gizmolabs.openwhispr"
     !insertmacro DeleteAutoStartEntry "com.gizmolabs.openwhispr.staging"
     !insertmacro DeleteAutoStartEntry "com.gizmolabs.openwhispr.development"
     nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="${SHERPA_FIREWALL_RULE}"'
-    StrCpy $0 "$PROFILE\.cache\openwhispr\models"
+    StrCpy $0 "$PROFILE\.cache\meethu\models"
     IfFileExists "$0\*.*" 0 +3
       RMDir /r "$0"
-      DetailPrint "Removed OpenWhispr cached models"
-    StrCpy $1 "$PROFILE\.cache\openwhispr"
+      DetailPrint "Removed Meethu cached models"
+    StrCpy $1 "$PROFILE\.cache\meethu"
     RMDir "$1"
   ${endIf}
 !macroend

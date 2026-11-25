@@ -6,9 +6,9 @@ const path = require("path");
 const DEFAULTS = {
   enabled: true, // the copilot listens to meetings and may show cards (needs a key)
   autoOpen: true, // open the window when a meeting recording starts
-  idleMode: "orb", // how it opens: "orb" (a small button that peeks when something is ready) or "full" (the whole panel)
+  idleMode: "full", // how it opens: "full" (the whole panel/card) or "orb" (a small button that peeks when something is ready)
   peekSeconds: 8, // how long a new card stays up beside the orb
-  onEnd: "close", // when the meeting stops: "close" the window, shrink it to the "orb", or "keep" it as it is
+  onEnd: "keep", // when the meeting stops: "keep" it open as a card, shrink to "orb", or "close"
   mainModel: "", // "" = built-in default
   deepModel: "", // the "Rerun with high effort" model ("" = built-in)
   summaryModel: "",

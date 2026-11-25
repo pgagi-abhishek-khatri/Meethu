@@ -37,9 +37,9 @@ describe("modelDirUtils cache policy (#1279, #1399)", () => {
   function createRedirectedWindowsFixture() {
     setPlatform("win32");
     const home = path.join(tempRoot, "Users", "stan");
-    const legacyRoot = path.join(home, ".cache", "openwhispr");
+    const legacyRoot = path.join(home, ".cache", "meethu");
     const redirectedProfile = path.join(tempRoot, "RedirectedUsers", "stan");
-    const redirectedRoot = path.join(redirectedProfile, ".cache", "openwhispr");
+    const redirectedRoot = path.join(redirectedProfile, ".cache", "meethu");
     process.env.USERPROFILE = redirectedProfile;
     return { home, legacyRoot, redirectedRoot };
   }
@@ -66,6 +66,7 @@ describe("modelDirUtils cache policy (#1279, #1399)", () => {
   beforeEach(() => {
     tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ow-cache-test-"));
     process.env = { ...originalEnv };
+    delete process.env.MEETHU_CACHE_ROOT;
     delete process.env.OPENWHISPR_CACHE_ROOT;
     delete process.env.USERPROFILE;
     delete process.env.XDG_CACHE_HOME;
@@ -124,7 +125,7 @@ describe("modelDirUtils cache policy (#1279, #1399)", () => {
 
     const { getCacheRoot } = loadFresh(home);
 
-    assert.strictEqual(getCacheRoot(), path.join(xdgCacheHome, "openwhispr"));
+    assert.strictEqual(getCacheRoot(), path.join(xdgCacheHome, "meethu"));
   });
 
   it("gives OPENWHISPR_CACHE_ROOT precedence over XDG_CACHE_HOME", () => {
@@ -146,7 +147,7 @@ describe("modelDirUtils cache policy (#1279, #1399)", () => {
 
     const { getCacheRoot } = loadFresh(home);
 
-    assert.strictEqual(getCacheRoot(), path.join(home, ".cache", "openwhispr"));
+    assert.strictEqual(getCacheRoot(), path.join(home, ".cache", "meethu"));
   });
 
   it("preserves the macOS home-cache default", () => {
@@ -155,7 +156,7 @@ describe("modelDirUtils cache policy (#1279, #1399)", () => {
 
     const { getCacheRoot } = loadFresh(home);
 
-    assert.strictEqual(getCacheRoot(), path.join(home, ".cache", "openwhispr"));
+    assert.strictEqual(getCacheRoot(), path.join(home, ".cache", "meethu"));
   });
 
   it("honors OPENWHISPR_CACHE_ROOT on macOS", () => {
@@ -178,7 +179,7 @@ describe("modelDirUtils cache policy (#1279, #1399)", () => {
 
     const { getCacheRoot } = loadFresh(home);
 
-    assert.strictEqual(getCacheRoot(), path.join(programData, "OpenWhispr", "cache"));
+    assert.strictEqual(getCacheRoot(), path.join(programData, "Meethu", "cache"));
   });
 
   it("skips an unsafe ProgramData fallback", () => {
@@ -191,7 +192,7 @@ describe("modelDirUtils cache policy (#1279, #1399)", () => {
 
     const { getCacheRoot } = loadFresh(home);
 
-    assert.strictEqual(getCacheRoot(), path.join(systemDrive, "OpenWhispr", "cache"));
+    assert.strictEqual(getCacheRoot(), path.join(systemDrive, "Meethu", "cache"));
   });
 
   it("keeps all model consumers on the selected cache root", () => {
@@ -221,7 +222,7 @@ describe("modelDirUtils cache policy (#1279, #1399)", () => {
       path.join(tempRoot, "使用者", "詩涵")
     );
     const root = getCacheRoot();
-    assert.strictEqual(root, path.join(programData, "OpenWhispr", "cache"));
+    assert.strictEqual(root, path.join(programData, "Meethu", "cache"));
     assert.ok(fs.existsSync(root));
     assert.strictEqual(getModelsDirForService("whisper"), path.join(root, "whisper-models"));
   });
@@ -230,7 +231,7 @@ describe("modelDirUtils cache policy (#1279, #1399)", () => {
     setPlatform("win32");
     const home = path.join(tempRoot, "Users", "stan");
     const { getCacheRoot } = loadFresh(home);
-    assert.strictEqual(getCacheRoot(), path.join(home, ".cache", "openwhispr"));
+    assert.strictEqual(getCacheRoot(), path.join(home, ".cache", "meethu"));
   });
 
   it("migrates legacy model dirs into the safe root and leaves home-based dirs alone", () => {
@@ -239,7 +240,7 @@ describe("modelDirUtils cache policy (#1279, #1399)", () => {
     process.env.ProgramData = programData;
 
     const home = path.join(tempRoot, "使用者", "詩涵");
-    const legacyRoot = path.join(home, ".cache", "openwhispr");
+    const legacyRoot = path.join(home, ".cache", "meethu");
     fs.mkdirSync(path.join(legacyRoot, "whisper-models"), { recursive: true });
     fs.writeFileSync(path.join(legacyRoot, "whisper-models", "ggml-base.bin"), "model");
     fs.mkdirSync(path.join(legacyRoot, "models"), { recursive: true });
@@ -250,7 +251,7 @@ describe("modelDirUtils cache policy (#1279, #1399)", () => {
     const { getCacheRoot } = loadFresh(home);
     const root = getCacheRoot();
 
-    assert.strictEqual(root, path.join(programData, "OpenWhispr", "cache"));
+    assert.strictEqual(root, path.join(programData, "Meethu", "cache"));
     assert.strictEqual(
       fs.readFileSync(path.join(root, "whisper-models", "ggml-base.bin"), "utf8"),
       "model"
@@ -422,11 +423,11 @@ describe("modelDirUtils cache policy (#1279, #1399)", () => {
     process.env.ProgramData = programData;
 
     const home = path.join(tempRoot, "使用者", "詩涵");
-    const legacyDir = path.join(home, ".cache", "openwhispr", "whisper-models");
+    const legacyDir = path.join(home, ".cache", "meethu", "whisper-models");
     fs.mkdirSync(legacyDir, { recursive: true });
     fs.writeFileSync(path.join(legacyDir, "ggml-base.bin"), "old");
 
-    const newDir = path.join(programData, "OpenWhispr", "cache", "whisper-models");
+    const newDir = path.join(programData, "Meethu", "cache", "whisper-models");
     fs.mkdirSync(newDir, { recursive: true });
     fs.writeFileSync(path.join(newDir, "ggml-base.bin"), "new");
 

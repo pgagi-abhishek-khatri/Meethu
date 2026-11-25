@@ -12,8 +12,14 @@ export function useCopilotSettings() {
   const [settings, setSettings] = useState<CopilotSettings | null>(sync.get());
   useEffect(() => {
     const off = sync.subscribe(setSettings);
+    const offRemote = window.copilot?.onSettingsUpdated?.(() => {
+      void sync.load();
+    });
     void sync.load();
-    return off;
+    return () => {
+      off();
+      offRemote?.();
+    };
   }, []);
   const update = useCallback((patch: SettingsPatch) => void sync.update(patch), []);
   return { settings, update };

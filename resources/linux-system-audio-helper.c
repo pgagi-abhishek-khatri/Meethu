@@ -767,7 +767,7 @@ static gboolean run_pipewire_capture(Helper *app)
 
     app->pw_stream = pw_stream_new_simple(
         pw_thread_loop_get_loop(app->pw_loop),
-        "openwhispr-system-audio",
+        "meethu-system-audio",
         props,
         &pw_stream_events,
         app);

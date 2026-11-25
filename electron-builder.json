@@ -1,10 +1,10 @@
 {
-  "appId": "com.gizmolabs.openwhispr",
+  "appId": "com.pgagi.meethu",
   "afterPack": "scripts/afterPack.js",
   "extraMetadata": {
     "windowsTrayIdentity": true
   },
-  "productName": "OpenWhispr",
+  "productName": "Meethu",
   "protocols": {
     "name": "OpenWhispr Protocol",
     "schemes": ["openwhispr"]
@@ -169,12 +169,12 @@
     ],
     "extendInfo": {
       "LSUIElement": false,
-      "CFBundleIconName": "openwhispr",
-      "NSMicrophoneUsageDescription": "OpenWhispr uses the microphone to capture your voice for transcription.",
-      "NSAudioCaptureUsageDescription": "OpenWhispr uses system audio to capture other participants' audio from calls and meetings.",
-      "NSAccessibilityUsageDescription": "OpenWhispr needs accessibility permissions to paste transcribed text into other applications.",
-      "NSCalendarsUsageDescription": "OpenWhispr reads your calendar to detect upcoming meetings and link meeting notes to events.",
-      "NSCalendarsFullAccessUsageDescription": "OpenWhispr reads your calendar to detect upcoming meetings and link meeting notes to events."
+      "CFBundleIconName": "meethu",
+      "NSMicrophoneUsageDescription": "Meethu uses the microphone to capture your voice for transcription.",
+      "NSAudioCaptureUsageDescription": "Meethu uses system audio to capture other participants' audio from calls and meetings.",
+      "NSAccessibilityUsageDescription": "Meethu needs accessibility permissions to paste transcribed text into other applications.",
+      "NSCalendarsUsageDescription": "Meethu reads your calendar to detect upcoming meetings and link meeting notes to events.",
+      "NSCalendarsFullAccessUsageDescription": "Meethu reads your calendar to detect upcoming meetings and link meeting notes to events."
     }
   },
   "win": {
@@ -268,7 +268,7 @@
     "include": "resources/nsis/installer.nsh"
   },
   "dmg": {
-    "title": "OpenWhispr",
+    "title": "Meethu",
     "icon": "src/assets/icon.icns",
     "window": {
       "width": 540,
@@ -277,8 +277,8 @@
   },
   "publish": {
     "provider": "github",
-    "owner": "OpenWhispr",
-    "repo": "openwhispr",
+    "owner": "pgagi-abhishek-khatri",
+    "repo": "Meethu",
     "private": false,
     "releaseType": "draft"
   }

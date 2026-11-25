@@ -58,6 +58,7 @@ function createCopilot({
   onStartMeeting = null, // optional host callback: start a meeting note (the app's manual meeting)
   onStopMeeting = null, // optional host callback: end the live meeting note
   onOpenReference = null, // optional host callback: ({ fileId, projectId, name, page, snippet }) => void
+  onOpenSettings = null, // optional host callback: (section?: string) => void
   engineOptions = {}, // tests
   Database,
   logError = defaultLogError,
@@ -71,6 +72,14 @@ function createCopilot({
   store.closeOpenSessions();
   store.prune(settings.view().retentionDays);
 
+  const broadcast = (channel, payload) => {
+    for (const w of BrowserWindow.getAllWindows?.() ?? []) {
+      if (!w.isDestroyed?.() && !w.webContents?.isDestroyed?.()) {
+        w.webContents.send(channel, payload);
+      }
+    }
+  };
+
   const win = createCopilotWindow({
     BrowserWindow,
     screen,
@@ -78,6 +87,7 @@ function createCopilot({
     setupAlwaysOnTop,
     getWindowState: () => settings.view().window,
     saveWindowState: (window) => settings.update({ window }),
+    onVisibilityChange: (open) => broadcast("copilot:window-state", open),
   });
 
   let sessionId = null;
@@ -603,6 +613,7 @@ function createCopilot({
     }
     const view = withError(settings.update(patch));
     push({ type: "settings", settings: view });
+    broadcast("copilot:settings-updated", view);
     return view;
   }
   handle("projects-list", () => store.projects.list());
@@ -844,16 +855,24 @@ function createCopilot({
   handle("start-meeting", () => {
     if (typeof onStartMeeting === "function") void onStartMeeting();
   });
+  handle("open-settings", (section) => {
+    if (typeof onOpenSettings === "function") {
+      void onOpenSettings(typeof section === "string" && section ? section : "copilot");
+    }
+  });
   handle("stop-meeting", () => {
     if (typeof onStopMeeting === "function") onStopMeeting();
   });
+  handle("window-is-open", () => win.isOpen());
   handle("window", (action, value) => {
     if (action === "expand") win.expand(!!value);
     else if (action === "mode") win.setMode(String(value));
     else if (action === "opacity") win.setOpacity(value);
     else if (action === "hide") win.hide();
     else if (action === "close") win.close();
-    else if (action === "open") win.open({ focus: true });
+    else if (action === "open") win.open({ focus: true, startMode: "full" });
+    else if (action === "drag-start") win.startDrag();
+    else if (action === "drag-stop") win.stopDrag();
   });
 
   const probe = startMemProbe({

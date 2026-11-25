@@ -18,7 +18,7 @@ const DEFAULT_SAMPLE_RATE = 16000;
 const MIN_SAMPLE_RATE = 8000;
 const MAX_SAMPLE_RATE = 48000;
 const MAX_KEYTERMS = 100;
-const CONNECT_TIMEOUT_MS = 10000;
+const CONNECT_TIMEOUT_MS = 15000;
 const FINISH_TIMEOUT_MS = 5000;
 const KEEPALIVE_INTERVAL_MS = 10000;
 // Meeting mode: Soniox keeps words non-final for about 5 s while someone keeps talking, and a segment
@@ -162,11 +162,12 @@ class SonioxStreaming {
   // once the config is sent. The listeners are permanent and dispatch to the
   // entry's hooks, so whoever currently owns the socket (warm pool or a
   // session) receives its events and nobody else can be affected by them.
-  openSocket(options) {
-    // IPv4 only: an unroutable IPv6 address otherwise stalls the connect into ETIMEDOUT.
-    const ws = new WebSocket(this.urlOverride ?? SONIOX_REGION_URLS[options.region], {
-      family: 4,
-    });
+  openSocket(options, { forceIpv4 = true } = {}) {
+    // Prefer IPv4 first to avoid unroutable IPv6 stalls; fallback uses autoSelectFamily.
+    const wsOptions = forceIpv4
+      ? { family: 4, handshakeTimeout: CONNECT_TIMEOUT_MS }
+      : { autoSelectFamily: true, handshakeTimeout: CONNECT_TIMEOUT_MS };
+    const ws = new WebSocket(this.urlOverride ?? SONIOX_REGION_URLS[options.region], wsOptions);
     const entry = {
       ws,
       sig: this.signature(options),
@@ -282,9 +283,11 @@ class SonioxStreaming {
     this.connectionLossNotified = false;
 
     let entry;
+    let usedWarm = false;
     if (this.hasWarmConnection() && this.warm.sig === this.signature(normalized)) {
       entry = this.warm;
       this.warm = null;
+      usedWarm = true;
       clearInterval(entry.keepAlive);
       clearTimeout(entry.ttl);
       debugLogger.debug("Soniox using warm connection - instant start", {}, "streaming");
@@ -293,18 +296,39 @@ class SonioxStreaming {
       entry = this.openSocket(normalized);
     }
 
-    this.ws = entry.ws;
-    entry.onMessage = (data) => {
-      if (this.ws === entry.ws) this.handleMessage(data);
+    const bindEntry = (target) => {
+      this.ws = target.ws;
+      target.onMessage = (data) => {
+        if (this.ws === target.ws) this.handleMessage(data);
+      };
+      target.onError = (error) => this.handleSocketError(target, error);
+      target.onClose = (code, reason) => this.handleSocketClose(target, code, reason);
     };
-    entry.onError = (error) => this.handleSocketError(entry, error);
-    entry.onClose = (code, reason) => this.handleSocketClose(entry, code, reason);
+
+    bindEntry(entry);
 
     try {
       await entry.opened;
     } catch (error) {
-      if (this.ws === entry.ws) this.cleanup();
-      throw error;
+      const isTimeout = error?.message === "Soniox WebSocket connection timeout";
+      if (!usedWarm && isTimeout && !this.isDisconnecting && this.ws === entry.ws) {
+        debugLogger.warn(
+          "Soniox connection timed out on IPv4; retrying with autoSelectFamily",
+          {},
+          "streaming"
+        );
+        entry = this.openSocket(normalized, { forceIpv4: false });
+        bindEntry(entry);
+        try {
+          await entry.opened;
+        } catch (retryError) {
+          if (this.ws === entry.ws) this.cleanup();
+          throw retryError;
+        }
+      } else {
+        if (this.ws === entry.ws) this.cleanup();
+        throw error;
+      }
     }
     // disconnect() ran while the socket was still opening.
     if (this.ws !== entry.ws) throw new Error("Soniox connection cancelled");

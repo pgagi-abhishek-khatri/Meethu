@@ -105,6 +105,18 @@ contextBridge.exposeInMainWorld("copilot", {
     remove: (id) => copilotCall("sessions-remove", id),
   },
   openWindow: () => copilotCall("window", "open"),
+  closeWindow: () => copilotCall("window", "hide"),
+  isWindowOpen: () => copilotCall("window-is-open"),
+  onWindowState: (callback) => {
+    const listener = (_event, open) => callback(!!open);
+    ipcRenderer.on("copilot:window-state", listener);
+    return () => ipcRenderer.removeListener("copilot:window-state", listener);
+  },
+  onSettingsUpdated: (callback) => {
+    const listener = (_event, settings) => callback(settings);
+    ipcRenderer.on("copilot:settings-updated", listener);
+    return () => ipcRenderer.removeListener("copilot:settings-updated", listener);
+  },
   openReference: (ref) => copilotCall("open-reference", ref),
   onOpenReference: (callback) => {
     const listener = (_event, ref) => callback(ref);

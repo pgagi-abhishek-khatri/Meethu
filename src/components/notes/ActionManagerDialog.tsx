@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Sparkles, Trash2, Loader2, Plus, Zap, ChevronUp, ChevronDown, X } from "../icons";
-import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
+import { Dialog, DialogContent, DialogTitle, ConfirmDialog } from "../ui/dialog";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
@@ -56,6 +56,7 @@ export default function ActionManagerDialog({
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ActionItem | null>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const isTemplate = kind === "template";
 
@@ -293,7 +294,7 @@ export default function ActionManagerDialog({
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleDelete(action.id);
+                              setDeleteTarget(action);
                             }}
                             aria-label={t("notes.context.delete")}
                             className={cn(
@@ -548,6 +549,32 @@ export default function ActionManagerDialog({
           </div>
         </div>
       </DialogContent>
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) setDeleteTarget(null);
+        }}
+        title={t("notes.actions.deleteConfirmTitle", {
+          defaultValue: isTemplate ? "Delete template?" : "Delete action?",
+        })}
+        description={
+          deleteTarget
+            ? t("notes.actions.deleteConfirmDescription", {
+                name: getActionName(deleteTarget, t),
+                defaultValue: `"${getActionName(deleteTarget, t)}" will be permanently deleted.`,
+              })
+            : ""
+        }
+        confirmText={t("notes.context.delete")}
+        cancelText={t("common.cancel")}
+        variant="destructive"
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          void handleDelete(deleteTarget.id);
+          setDeleteTarget(null);
+        }}
+      />
     </Dialog>
   );
 }

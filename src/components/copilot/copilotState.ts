@@ -142,6 +142,7 @@ export function reduce(state: CopilotState, e: CopilotEvent): CopilotState {
       if (e.state === "start") {
         return {
           ...initialState(),
+          mode: state.mode,
           sessionId: e.sessionId ?? null,
           phase: "live",
           active: e.active !== false,

@@ -5,12 +5,11 @@ import {
   BarChart3,
   MessageSquare,
   NotebookPen,
-  BookOpen,
-  Upload,
+  // BookOpen,
+  Folder,
   Blocks,
-  Sparkles,
 } from "./icons";
-import { isAgentAllowed, isPolicyActionAllowed } from "../stores/policyRules";
+import { isAgentAllowed } from "../stores/policyRules";
 import { usePolicyStore } from "../stores/policyStore";
 
 export type ControlPanelView =
@@ -18,10 +17,9 @@ export type ControlPanelView =
   | "insights"
   | "chat"
   | "personal-notes"
-  | "dictionary"
-  | "upload"
-  | "integrations"
-  | "copilot";
+  | "projects"
+  // | "dictionary"
+  | "integrations";
 
 export interface ControlPanelNavItem {
   id: ControlPanelView;
@@ -37,7 +35,6 @@ export interface ControlPanelNavItem {
 export function useControlPanelNavItems(): ControlPanelNavItem[] {
   const { t } = useTranslation();
   const agentAllowed = usePolicyStore(isAgentAllowed);
-  const policyActionsAllowed = usePolicyStore((state) => isPolicyActionAllowed(state));
 
   return [
     { id: "home", label: t("sidebar.home"), icon: Home },
@@ -46,11 +43,8 @@ export function useControlPanelNavItems(): ControlPanelNavItem[] {
       ? [{ id: "chat" as const, label: t("sidebar.chat"), icon: MessageSquare }]
       : []),
     { id: "personal-notes", label: t("sidebar.notes"), icon: NotebookPen },
-    ...(policyActionsAllowed
-      ? [{ id: "upload" as const, label: t("sidebar.upload"), icon: Upload }]
-      : []),
-    { id: "dictionary", label: t("sidebar.dictionary"), icon: BookOpen },
+    { id: "projects", label: "Projects", icon: Folder },
+    // { id: "dictionary", label: t("sidebar.dictionary"), icon: BookOpen },
     { id: "integrations", label: t("sidebar.integrations"), icon: Blocks },
-    { id: "copilot", label: "Copilot", icon: Sparkles },
   ];
 }

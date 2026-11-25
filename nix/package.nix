@@ -5,11 +5,11 @@
 }:
 
 let
-  pname = "openwhispr";
+  pname = "meethu";
   version = "1.7.4";
 
   src = fetchurl {
-    url = "https://github.com/OpenWhispr/openwhispr/releases/download/v${version}/OpenWhispr-${version}-linux-x86_64.AppImage";
+    url = "https://github.com/pgagi-abhishek-khatri/Meethu/releases/download/v${version}/Meethu-${version}-linux-x86_64.AppImage";
     hash = "sha256-hp7FVUi5/K+QiQam8YAOrRsemFkC8MnupT+hhroP+6Y=";
   };
 
@@ -40,7 +40,7 @@ appimageTools.wrapType2 {
   ];
 
   extraInstallCommands = ''
-    install -Dm444 ${appimageContents}/open-whispr.desktop \
+    install -Dm444 ${appimageContents}/meethu.desktop \
       $out/share/applications/${pname}.desktop
 
     substituteInPlace $out/share/applications/${pname}.desktop \
@@ -52,7 +52,7 @@ appimageTools.wrapType2 {
   meta = {
     description = "Privacy-first desktop voice dictation, meeting transcription & notes";
     homepage = "https://openwhispr.com/";
-    changelog = "https://github.com/OpenWhispr/openwhispr/releases/tag/v${version}";
+    changelog = "https://github.com/pgagi-abhishek-khatri/Meethu/releases/tag/v${version}";
     license = lib.licenses.mit;
     sourceProvenance = with lib.sourceTypes; [ binaryNativeCode ];
     platforms = [ "x86_64-linux" ];
