@@ -130,8 +130,23 @@ function createCopilotWindow({
     const later = () => (clearTimeout(t), (t = setTimeout(saveBounds, 400)));
     w.on("resize", later);
     w.on("move", later);
+    // Chromium swallows mouse events over -webkit-app-region:drag (the header), so mouseenter never
+    // fires there; poll the cursor against the window bounds instead.
+    let wasOver = null; // null = renderer not told yet
+    const hoverTimer = setInterval(() => {
+      if (w.isDestroyed() || !w.isVisible()) return;
+      const c = screen.getCursorScreenPoint();
+      const b = w.getBounds();
+      const over = c.x >= b.x && c.x < b.x + b.width && c.y >= b.y && c.y < b.y + b.height;
+      if (over !== wasOver) {
+        wasOver = over;
+        send("copilot:hover", over);
+      }
+    }, 100);
+    w.webContents.on("did-finish-load", () => (wasOver = null)); // a reloaded page must be told again
     w.on("closed", () => {
       clearTimeout(t);
+      clearInterval(hoverTimer);
       if (win === w) win = null;
     });
     loadRenderer(w, "copilot").catch(() => {});

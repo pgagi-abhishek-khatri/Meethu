@@ -55,6 +55,8 @@ function createCopilot({
   getActiveEvents = () => [], // calendar events happening now (the app's database), to pick the project
   ffmpegPath = null, // bundled ffmpeg, for audio/video project files
   transcribeAudio = null, // optional host STT callback: (buffer, mimeType) => Promise<{ ok, text, error }>
+  onStartMeeting = null, // optional host callback: start a meeting note (the app's manual meeting)
+  onStopMeeting = null, // optional host callback: end the live meeting note
   onOpenReference = null, // optional host callback: ({ fileId, projectId, name, page, snippet }) => void
   engineOptions = {}, // tests
   Database,
@@ -236,7 +238,10 @@ function createCopilot({
   let temporalRouter = null;
   let deltaIngest = null;
   try {
-    okfRegistry = createOkfRegistry({ okfDir: path.resolve(__dirname, "../../../OKF"), log: ragLog });
+    okfRegistry = createOkfRegistry({
+      okfDir: path.resolve(__dirname, "../../../OKF"),
+      log: ragLog,
+    });
     okfRouter = createOkfRouter();
     const featReg = okfRegistry?.featureRegistry;
     if (featReg && featReg.hasRegistry() && store.rag?.temporal) {
@@ -494,7 +499,11 @@ function createCopilot({
     let tmpDir = null;
     try {
       let payloadBuf = buffer;
-      let format = mime.includes("wav") ? "wav" : mime.includes("mpeg") || mime.includes("mp3") ? "mp3" : null;
+      let format = mime.includes("wav")
+        ? "wav"
+        : mime.includes("mpeg") || mime.includes("mp3")
+          ? "mp3"
+          : null;
       if (!format) {
         if (!voiceMedia.available()) {
           return {
@@ -801,13 +810,16 @@ function createCopilot({
   handle("open-reference", (ref = {}) => {
     const requestedId = ref?.fileId != null ? Number(ref.fileId) : null;
     const requestedName = str(ref?.name, 260);
-    let file = requestedId != null && Number.isFinite(requestedId) ? store.rag.file(requestedId) : null;
+    let file =
+      requestedId != null && Number.isFinite(requestedId) ? store.rag.file(requestedId) : null;
     if (!file && requestedName) {
       const candidates = store.projects
         .list()
         .flatMap((p) => p.files.map((f) => ({ ...f, project_id: p.id })));
       file =
-        candidates.find((f) => projectId != null && f.project_id === projectId && f.name === requestedName) ||
+        candidates.find(
+          (f) => projectId != null && f.project_id === projectId && f.name === requestedName
+        ) ||
         candidates.find((f) => f.name === requestedName) ||
         null;
     }
@@ -829,6 +841,12 @@ function createCopilot({
   handle("sessions-count", () => store.countSessions());
   handle("sessions-get", (id) => store.getSession(str(id, 80)));
   handle("sessions-remove", (id) => store.deleteSession(str(id, 80)));
+  handle("start-meeting", () => {
+    if (typeof onStartMeeting === "function") void onStartMeeting();
+  });
+  handle("stop-meeting", () => {
+    if (typeof onStopMeeting === "function") onStopMeeting();
+  });
   handle("window", (action, value) => {
     if (action === "expand") win.expand(!!value);
     else if (action === "mode") win.setMode(String(value));

@@ -125,6 +125,9 @@ export interface ProjectFilePreview {
 
 export interface CopilotBridge {
   onEvent(cb: (e: CopilotEvent) => void): () => void;
+  startMeeting?(): Promise<void>;
+  stopMeeting?(): Promise<void>;
+  onHover?(cb: (over: boolean) => void): () => void;
   ask(q: {
     text: string;
     web?: boolean;

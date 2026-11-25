@@ -50,7 +50,7 @@ function createAnswerRunner({ model, emit = () => {}, now = Date.now }) {
         ...base,
         focus: job.focus,
         attachmentName: job.attachmentName,
-        files: files.length ? files : (job.attachmentName ? [job.attachmentName] : []),
+        files: files.length ? files : job.attachmentName ? [job.attachmentName] : [],
         ...(fileRefs.length ? { fileRefs } : {}),
       });
     };

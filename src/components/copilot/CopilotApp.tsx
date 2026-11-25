@@ -26,24 +26,6 @@ function useWidth() {
   return w;
 }
 
-function findScrollableAncestor(target: EventTarget | null, deltaY: number): HTMLElement | null {
-  let el = target && target instanceof Element ? (target as HTMLElement) : null;
-  while (el && el !== document.body && el !== document.documentElement) {
-    if (el.getAttribute("data-copilot-root")) break;
-    const style = window.getComputedStyle(el);
-    const overflowY = style.overflowY;
-    if (overflowY === "auto" || overflowY === "scroll") {
-      const canScrollUp = deltaY < 0 && el.scrollTop > 1;
-      const canScrollDown = deltaY > 0 && el.scrollTop + el.clientHeight < el.scrollHeight - 1;
-      if (canScrollUp || canScrollDown) {
-        return el;
-      }
-    }
-    el = el.parentElement;
-  }
-  return null;
-}
-
 function ThreadChips({
   threads,
   current,
@@ -146,7 +128,9 @@ export default function CopilotApp() {
 
   // ---- window modes: orb (small), peek (newest card beside it), full (the panel) ----
   const mode = state.mode;
-  const [hovered, setHovered] = useState(false);
+  const [mouseIn, setMouseIn] = useState(false); // DOM enter/leave: misses the drag header
+  const [cursorOver, setCursorOver] = useState(false); // main's cursor poll: sees the header too
+  const hovered = mouseIn || cursorOver;
   const [localOpacity, setLocalOpacity] = useState<number | null>(null);
   const currentOpacityRef = useRef(settings?.opacity ?? 0.5);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -187,33 +171,21 @@ export default function CopilotApp() {
     [updateSettings]
   );
 
+  // The drag header swallows mouse events, so main reports whether the cursor is over the window.
+  useEffect(() => window.copilot?.onHover?.(setCursorOver), []);
+
   useEffect(() => {
     if (mode !== "full") return;
 
+    // Opacity by wheel only while Alt is held; a plain scroll or touchpad swipe must never change it.
     const handleWheel = (e: WheelEvent) => {
-      // Horizontal swipe or tilt wheel adjustments:
-      if (Math.abs(e.deltaX) > Math.abs(e.deltaY) && Math.abs(e.deltaX) >= 5) {
-        wheelAccumulator.current += e.deltaX;
-        if (Math.abs(wheelAccumulator.current) >= 30) {
-          const step = wheelAccumulator.current > 0 ? 0.05 : -0.05;
-          wheelAccumulator.current = 0;
-          applyOpacityChange(step);
-        }
-        return;
-      }
-
-      const scrollable = findScrollableAncestor(e.target, e.deltaY);
-      if (!scrollable || e.altKey || e.ctrlKey || e.shiftKey || e.metaKey) {
-        if (Math.abs(e.deltaY) < 3) return;
-        wheelAccumulator.current += e.deltaY;
-        if (Math.abs(wheelAccumulator.current) >= 30) {
-          const step = wheelAccumulator.current < 0 ? 0.05 : -0.05;
-          wheelAccumulator.current = 0;
-          applyOpacityChange(step);
-        }
-        if (!scrollable) {
-          e.preventDefault();
-        }
+      if (!e.altKey) return;
+      e.preventDefault();
+      wheelAccumulator.current += e.deltaY || e.deltaX;
+      if (Math.abs(wheelAccumulator.current) >= 30) {
+        const step = wheelAccumulator.current < 0 ? 0.05 : -0.05;
+        wheelAccumulator.current = 0;
+        applyOpacityChange(step);
       }
     };
 
@@ -471,20 +443,15 @@ export default function CopilotApp() {
   const currentOpacity = localOpacity ?? settings?.opacity ?? 0.5;
   const isFadeWhenIdle = !!settings?.fadeWhenIdle;
 
-  const effectiveOpacity =
-    tab === "settings"
-      ? currentOpacity
-      : isFadeWhenIdle
-        ? (hovered || ended ? 1 : currentOpacity)
-        : currentOpacity;
+  const effectiveOpacity = isFadeWhenIdle && (hovered || ended) ? 1 : currentOpacity;
 
   return (
     <div
       data-copilot-root="true"
       className="dark flex h-screen min-h-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-[#12141a] text-slate-200 transition-opacity duration-200 ease-out [color-scheme:dark]"
       style={{ opacity: effectiveOpacity }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onMouseEnter={() => setMouseIn(true)}
+      onMouseLeave={() => setMouseIn(false)}
     >
       {style}
       <header
@@ -499,7 +466,7 @@ export default function CopilotApp() {
             title={status.text}
             className={`me-1 inline-block h-2 w-2 rounded-full ${status.dot}`}
           />
-          {state.phase !== "live" && (
+          {state.phase !== "live" && tab === "copilot" && (
             <button
               type="button"
               title="New thread"
@@ -527,26 +494,11 @@ export default function CopilotApp() {
           </button>
           <button
             type="button"
-            title={expanded ? "Collapse" : "Expand"}
-            onClick={() => void window.copilot?.window("expand", !expanded)}
+            title="Close"
+            onClick={() => void window.copilot?.window("hide")}
             className="flex h-7 w-7 items-center justify-center rounded-lg hover:bg-white/10 hover:text-slate-200"
           >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              {expanded ? (
-                <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
-              ) : (
-                <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
-              )}
-            </svg>
+            <X size={14} />
           </button>
         </div>
       </header>
@@ -555,8 +507,21 @@ export default function CopilotApp() {
       <LiveStrip
         state={state}
         onTogglePause={togglePause}
-        onNewThread={() => void newThread()}
+        onNewThread={tab === "copilot" ? () => void newThread() : undefined}
+        onEnd={() => void window.copilot?.stopMeeting?.()}
       />
+      {state.phase !== "live" && tab === "copilot" && settings?.hasKey && (
+        <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-1.5 text-[11px] text-slate-400">
+          <span>{state.phase === "ended" ? "Meeting ended" : "No meeting note running"}</span>
+          <button
+            type="button"
+            onClick={() => void window.copilot?.startMeeting?.()}
+            className="rounded border border-emerald-400/40 bg-emerald-500/20 px-2 py-0.5 text-[10px] font-medium text-emerald-200 hover:bg-emerald-500/30"
+          >
+            Start meeting notes
+          </button>
+        </div>
+      )}
       {state.phase === "live" && (projects.length > 0 || state.project.name) && (
         <div className="flex items-center gap-2 border-b border-white/10 px-3 py-1 text-[11px] text-slate-400">
           <span className="shrink-0">Project</span>

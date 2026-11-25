@@ -300,11 +300,18 @@ export default function CopilotMeetings({
               }
               className="h-8 rounded-md border border-border/70 bg-input px-2 text-xs text-foreground [color-scheme:light] dark:border-white/10 dark:bg-[#1a1d26] dark:text-slate-200 dark:[color-scheme:dark]"
             >
-              <option value="all" className="bg-background text-foreground dark:bg-[#1a1d26] dark:text-slate-200">
+              <option
+                value="all"
+                className="bg-background text-foreground dark:bg-[#1a1d26] dark:text-slate-200"
+              >
                 All projects
               </option>
               {projects.map((p) => (
-                <option key={p.id} value={p.id} className="bg-background text-foreground dark:bg-[#1a1d26] dark:text-slate-200">
+                <option
+                  key={p.id}
+                  value={p.id}
+                  className="bg-background text-foreground dark:bg-[#1a1d26] dark:text-slate-200"
+                >
                   {p.name}
                 </option>
               ))}

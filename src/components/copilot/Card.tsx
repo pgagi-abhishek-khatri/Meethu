@@ -211,11 +211,7 @@ export default function Card({
           <div className="flex items-center justify-between text-[11px] text-slate-500">
             <span>Suggested follow-ups</span>
             {onSkipFollowups && (
-              <button
-                type="button"
-                onClick={onSkipFollowups}
-                className="hover:text-slate-300"
-              >
+              <button type="button" onClick={onSkipFollowups} className="hover:text-slate-300">
                 Skip for now
               </button>
             )}
@@ -237,11 +233,7 @@ export default function Card({
           <div className="flex items-center justify-between text-[11px] text-slate-500">
             <span>Ask them</span>
             {onSkipGaps && (
-              <button
-                type="button"
-                onClick={onSkipGaps}
-                className="hover:text-slate-300"
-              >
+              <button type="button" onClick={onSkipGaps} className="hover:text-slate-300">
                 Skip for now
               </button>
             )}

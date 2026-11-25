@@ -23,7 +23,13 @@ import { BlurField, useCopilotSettings } from "./CopilotFields";
 import { PaneHeader, Block } from "./CopilotPane";
 import { WORKING, runThenReload } from "./copilotFormat";
 import { useToast } from "../ui/useToast";
-import type { FileReferenceTarget, Project, ProjectFile, ProjectFilePreview, RuleKind } from "./copilotApi";
+import type {
+  FileReferenceTarget,
+  Project,
+  ProjectFile,
+  ProjectFilePreview,
+  RuleKind,
+} from "./copilotApi";
 
 const RULE_LABELS: Record<RuleKind, string> = {
   title: "Title contains",
@@ -270,9 +276,7 @@ function FileRow({
           </span>
           <StatusChip f={f} />
         </div>
-        {meta && (
-          <p className="mt-0.5 text-[11px] text-muted-foreground/80">{meta}</p>
-        )}
+        {meta && <p className="mt-0.5 text-[11px] text-muted-foreground/80">{meta}</p>}
         {detail && (
           <p
             className={cn(
@@ -567,7 +571,11 @@ function Rules({ p, run }: { p: Project; run: (x: Promise<unknown>) => void }) {
           className="h-8 rounded-md border border-border/70 bg-input px-2 text-xs text-foreground [color-scheme:light] dark:border-white/10 dark:bg-[#1a1d26] dark:text-slate-200 dark:[color-scheme:dark]"
         >
           {Object.entries(RULE_LABELS).map(([k, l]) => (
-            <option key={k} value={k} className="bg-background text-foreground dark:bg-[#1a1d26] dark:text-slate-200">
+            <option
+              key={k}
+              value={k}
+              className="bg-background text-foreground dark:bg-[#1a1d26] dark:text-slate-200"
+            >
               {l}
             </option>
           ))}

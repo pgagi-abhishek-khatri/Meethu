@@ -11,6 +11,11 @@ contextBridge.exposeInMainWorld("copilot", {
     ipcRenderer.send("copilot:ready"); // main replays the current meeting
     return () => ipcRenderer.removeListener("copilot:event", listener);
   },
+  onHover(cb) {
+    const listener = (_e, over) => cb(!!over);
+    ipcRenderer.on("copilot:hover", listener);
+    return () => ipcRenderer.removeListener("copilot:hover", listener);
+  },
   ask: (q) => call("ask", q),
   transcribeAudio: (audioData, mimeType) => call("transcribe-audio", audioData, mimeType),
   pause: () => call("pause", true),
@@ -51,5 +56,7 @@ contextBridge.exposeInMainWorld("copilot", {
   },
   openWindow: undefined,
   openReference: (ref) => call("open-reference", ref),
+  stopMeeting: () => call("stop-meeting"),
+  startMeeting: () => call("start-meeting"),
   window: (action, value) => call("window", action, value), // expand | mode (orb|peek|full) | opacity | hide | close
 });

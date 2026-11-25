@@ -41,10 +41,12 @@ export function LiveStrip({
   state,
   onTogglePause,
   onNewThread,
+  onEnd,
 }: {
   state: CopilotState;
   onTogglePause?: () => void;
   onNewThread?: () => void;
+  onEnd?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   if (state.phase !== "live") return null;
@@ -65,13 +67,13 @@ export function LiveStrip({
           ) : (
             <span
               className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                state.busy
-                  ? "animate-pulse bg-sky-400"
-                  : "bg-emerald-400"
+                state.busy ? "animate-pulse bg-sky-400" : "bg-emerald-400"
               }`}
             />
           )}
-          <span className={`shrink-0 ${isPaused ? "font-medium text-amber-300" : "text-slate-300"}`}>
+          <span
+            className={`shrink-0 ${isPaused ? "font-medium text-amber-300" : "text-slate-300"}`}
+          >
             {isPaused ? "Paused" : state.busy ? "Thinking" : "Listening"}
           </span>
           <span className="min-w-0 flex-1 truncate italic text-slate-500">
@@ -104,6 +106,16 @@ export function LiveStrip({
                   <span>Pause</span>
                 </>
               )}
+            </button>
+          )}
+          {onEnd && (
+            <button
+              type="button"
+              onClick={onEnd}
+              title="End the meeting note"
+              className="flex h-6 shrink-0 items-center rounded border border-rose-400/40 bg-rose-500/20 px-2 text-[10px] font-medium text-rose-200 transition-colors hover:bg-rose-500/30"
+            >
+              End meeting
             </button>
           )}
           {onNewThread && (

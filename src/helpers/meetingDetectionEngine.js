@@ -140,6 +140,12 @@ class MeetingDetectionEngine {
     });
   }
 
+  // The user asked to end the live meeting (copilot window): same stop the auto-end uses.
+  stopMeeting() {
+    const session = this._recordingSession;
+    if (session) this._requestRecordingStop(session.sessionId, "manual");
+  }
+
   _requestRecordingStop(sessionId, reason) {
     const session = this._recordingSession;
     if (!session || session.sessionId !== sessionId) return;

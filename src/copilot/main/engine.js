@@ -1292,7 +1292,9 @@ function createEngine({
       if (source === "mic") s.userSpeaking = false;
       else s.systemPartial = null;
       const verdict =
-        active && !s.paused ? s.scheduler.noteFinal(seg) : { trigger: false, reason: s.paused ? "paused" : "no_key" };
+        active && !s.paused
+          ? s.scheduler.noteFinal(seg)
+          : { trigger: false, reason: s.paused ? "paused" : "no_key" };
       seg.noise = !verdict.trigger; // filler and fragments stay in the transcript but not in what D1 judges
       if (verdict.trigger) s.lastTriggerAt = now();
       trace({
@@ -1349,7 +1351,15 @@ function createEngine({
     },
     // The user typed a question: straight to the main model, no decision (brief section 3).
     // `quote` = meeting lines the user picked in the transcript to talk about.
-    ask({ text, web = false, threadId = MAIN, quote = "", skippedId = "", validate = true, attachment = null }) {
+    ask({
+      text,
+      web = false,
+      threadId = MAIN,
+      quote = "",
+      skippedId = "",
+      validate = true,
+      attachment = null,
+    }) {
       const clean = String(text ?? "").trim();
       if (!clean) return false;
       const s = session ?? startSession();

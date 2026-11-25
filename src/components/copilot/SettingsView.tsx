@@ -84,14 +84,7 @@ function OpacitySlider({
   };
 
   return (
-    <label
-      className="block"
-      onWheel={(e) => {
-        e.preventDefault();
-        const step = e.deltaY < 0 ? 0.05 : -0.05;
-        update(val + step);
-      }}
-    >
+    <label className="block">
       <span className="mb-0.5 block text-[12px] text-slate-400">
         Opacity: {Math.round(val * 100)}%
       </span>
@@ -230,7 +223,7 @@ export default function SettingsView({ settings: s, state, onSettings }: Props) 
         <Toggle
           label="Solid only on hover or when a card arrives"
           checked={s.fadeWhenIdle}
-          onChange={(fadeWhenIdle) => onSettings({ fadeWhenIdle })}
+          onChange={(fadeWhenIdle) => onSettings({ fadeWhenIdle, opacity: fadeWhenIdle ? 0.5 : 1 })}
         />
       </Section>
 

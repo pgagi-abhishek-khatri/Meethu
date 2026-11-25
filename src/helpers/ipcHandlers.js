@@ -702,10 +702,15 @@ class IPCHandlers {
             if (!whisperReady && !parakeetReady) return { ok: false };
             const res = parakeetReady
               ? await this.parakeetManager.transcribeLocalParakeet(buffer, {})
-              : await this.whisperManager.transcribeLocalWhisper(buffer, this._resolveWhisperVadOptions("noteRecording"));
+              : await this.whisperManager.transcribeLocalWhisper(
+                  buffer,
+                  this._resolveWhisperVadOptions("noteRecording")
+                );
             const text = typeof res?.text === "string" ? res.text.trim() : "";
             return res?.success && text ? { ok: true, text } : { ok: false };
           },
+          onStopMeeting: () => this.windowManager?.meetingDetectionEngine?.stopMeeting?.(),
+          onStartMeeting: () => this.windowManager?.startManualMeeting?.({ activate: false }),
           onOpenReference: (ref) => {
             this.windowManager?.showControlPanel?.();
             const win = this.windowManager?.controlPanelWindow;
