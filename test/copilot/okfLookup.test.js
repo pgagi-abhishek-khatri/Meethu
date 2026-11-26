@@ -7,6 +7,10 @@ const { compareSemVer, resolvePrecedence, parseSemVer } = require("../../src/cop
 const { createOkfRouter } = require("../../src/copilot/core/okf/router");
 
 const okfDir = path.resolve(__dirname, "../../OKF");
+// The shipped version of OKF-0002, read from the manifest so a revision does not break these tests.
+const OKF_0002_VERSION = require("js-yaml")
+  .load(require("fs").readFileSync(path.join(okfDir, "manifest.yaml"), "utf8"))
+  .documents.find((d) => d.id === "OKF-0002").version;
 
 test("T01: Exact document ID lookup", () => {
   const reg = createOkfRegistry({ okfDir });
@@ -15,7 +19,7 @@ test("T01: Exact document ID lookup", () => {
   const res = als.lookupById("OKF-0002");
   assert.equal(res.status, "resolved");
   assert.equal(res.resolvedRecord.id, "OKF-0002");
-  assert.equal(res.resolvedRecord.version, "1.0.0");
+  assert.equal(res.resolvedRecord.version, OKF_0002_VERSION);
   assert.equal(res.resolvedRecord.status, "approved");
 });
 
@@ -228,7 +232,7 @@ test("T18: OKF route integration with ALS", async () => {
   assert.equal(ctx.route, "okf");
   assert.ok(ctx.provenance != null);
   assert.equal(ctx.provenance.document_id, "OKF-0002");
-  assert.equal(ctx.provenance.version, "1.0.0");
+  assert.equal(ctx.provenance.version, OKF_0002_VERSION);
   assert.ok(ctx.passages.includes("CANONICAL SPECIFICATION"));
 });
 

@@ -3,30 +3,32 @@
 // file's kind, date and phase come from its name and the summary written when it was indexed, so nothing has to
 // be tagged by hand. Pure, Electron-free.
 
+const { KIND_RANK } = require("../core/okf/precedence");
+
 // Most trusted kind first. A file matching none of them (a pricing sheet, meeting notes) is "other" and is never
 // ranked against the rest: it neither overrides nor is overridden.
 const KINDS = [
   {
     kind: "built",
-    rank: 3,
+    rank: KIND_RANK.built,
     label: "what was built",
     re: /\b(as[- ]?built|completion|completed|hand-?over|delivery report|release notes|implementation report)\b/i,
   },
   {
     kind: "change",
-    rank: 2,
+    rank: KIND_RANK.change,
     label: "agreed change",
     re: /\b(change request|change order|addendum|amendment|revised|revision)\b/i,
   },
   {
     kind: "requirement",
-    rank: 1,
+    rank: KIND_RANK.requirement,
     label: "requirements",
     re: /\b(requirements?|specification|statement of work|sow|prd|brd)\b/i,
   },
   {
     kind: "proposal",
-    rank: 0,
+    rank: KIND_RANK.proposal,
     label: "original plan",
     re: /\b(proposal|quotation|quote|pitch|estimate|rfp)\b/i,
   },
@@ -153,4 +155,4 @@ function precedenceNote(standings) {
   );
 }
 
-module.exports = { docStanding, precedenceOrder, standingMap, precedenceNote, passageTag, findDate };
+module.exports = { KINDS, docStanding, precedenceOrder, standingMap, precedenceNote, passageTag, findDate };

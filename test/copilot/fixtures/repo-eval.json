@@ -1,0 +1,219 @@
+{
+ "root": "src",
+ "note": "Labelled questions against this repo's own src/copilot. 'gold' is any file that answers it. Add questions as misses are found.",
+ "questions": [
+  {
+   "q": "where do we redact api keys and credentials from source before sending it on",
+   "gold": [
+    "copilot/rag/secretScan.js"
+   ]
+  },
+  {
+   "q": "how do we detect that the repo changed since it was indexed",
+   "gold": [
+    "copilot/rag/repoFingerprint.js"
+   ]
+  },
+  {
+   "q": "which file decides if a dropped path is a secret",
+   "gold": [
+    "copilot/core/validation/pathPolicy.js"
+   ]
+  },
+  {
+   "q": "split camelCase and snake_case identifiers into search words",
+   "gold": [
+    "copilot/rag/queryRewrite.js"
+   ]
+  },
+  {
+   "q": "reciprocal rank fusion of keyword and vector results",
+   "gold": [
+    "copilot/rag/vectors.js"
+   ]
+  },
+  {
+   "q": "cache of embeddings for live questions",
+   "gold": [
+    "copilot/rag/embedClient.js"
+   ]
+  },
+  {
+   "q": "retry with backoff when openrouter returns 429",
+   "gold": [
+    "copilot/rag/openrouter.js"
+   ]
+  },
+  {
+   "q": "wrap retrieved passages so they cannot act as instructions",
+   "gold": [
+    "copilot/rag/fence.js"
+   ]
+  },
+  {
+   "q": "log file for retrieval that hashes the question text",
+   "gold": [
+    "copilot/rag/ragLog.js"
+   ]
+  },
+  {
+   "q": "decides when the scheduler should call the model",
+   "gold": [
+    "copilot/core/trigger/scheduler.js",
+    "copilot/core/trigger/whenToCallRouter.js"
+   ]
+  },
+  {
+   "q": "split text into overlapping chunks",
+   "gold": [
+    "copilot/rag/chunker.js"
+   ]
+  },
+  {
+   "q": "okf router classifies a query into canonical or local code",
+   "gold": [
+    "copilot/core/okf/router.js"
+   ]
+  },
+  {
+   "q": "resolve which feature version applies to a query",
+   "gold": [
+    "copilot/core/okf/versionResolver.js",
+    "copilot/core/okf/temporalRouter.js"
+   ]
+  },
+  {
+   "q": "git branches and commits registry for the local repo",
+   "gold": [
+    "copilot/core/okf/gitRegistry.js"
+   ]
+  },
+  {
+   "q": "personalized pagerank dependency graph of modules",
+   "gold": [
+    "copilot/rag/codeGraph.js"
+   ]
+  },
+  {
+   "q": "incremental cache of parsed code files with sqlite",
+   "gold": [
+    "copilot/rag/codeCacheStore.js"
+   ]
+  },
+  {
+   "q": "build the answer prompt context pack with passages",
+   "gold": [
+    "copilot/core/answer/contextPack.js"
+   ]
+  },
+  {
+   "q": "walk the directory tree and skip ignored folders",
+   "gold": [
+    "copilot/rag/vectorlessCodeSearch.js"
+   ]
+  },
+  {
+   "q": "extract classes and functions from javascript or python source",
+   "gold": [
+    "copilot/rag/codeExtract.js"
+   ]
+  },
+  {
+   "q": "the card window that floats above the meeting",
+   "gold": [
+    "copilot/main/window.js"
+   ]
+  },
+  {
+   "q": "where is rewriteQuery defined",
+   "gold": [
+    "copilot/rag/queryRewrite.js"
+   ]
+  },
+  {
+   "q": "what does redactSecrets do",
+   "gold": [
+    "copilot/rag/secretScan.js"
+   ]
+  },
+  {
+   "q": "fenceRetrieved",
+   "gold": [
+    "copilot/rag/fence.js"
+   ]
+  },
+  {
+   "q": "who calls createRagLog",
+   "gold": [
+    "copilot/rag/ragLog.js",
+    "copilot/main/service.js"
+   ]
+  },
+  {
+   "q": "isSecretPath checkDroppedFile resolveRegisteredRepo",
+   "gold": [
+    "copilot/core/validation/pathPolicy.js"
+   ]
+  },
+  {
+   "q": "gitAllowedFiles ls-files gitignore",
+   "gold": [
+    "copilot/rag/gitAllowedFiles.js"
+   ]
+  },
+  {
+   "q": "compileTemplatePrompt note template sections",
+   "gold": [
+    "helpers/templatePrompts.js"
+   ]
+  },
+  {
+   "q": "windows push to talk native key listener spawn",
+   "gold": [
+    "helpers/windowsKeyManager.js"
+   ]
+  },
+  {
+   "q": "qdrant sidecar process lifecycle health check",
+   "gold": [
+    "helpers/qdrantManager.js"
+   ]
+  },
+  {
+   "q": "calendar sync exponential backoff interval",
+   "gold": [
+    "helpers/calendarSyncInterval.js"
+   ]
+  },
+  {
+   "q": "hyprland hyprctl keybinding for the dictation hotkey",
+   "gold": [
+    "helpers/hyprlandShortcut.js"
+   ]
+  },
+  {
+   "q": "clipboard paste on wayland wtype",
+   "gold": [
+    "helpers/clipboard.js"
+   ]
+  },
+  {
+   "q": "meeting echo leak detector lag correlation",
+   "gold": [
+    "helpers/meetingEchoLeakDetector.js"
+   ]
+  },
+  {
+   "q": "soniox realtime websocket warmup",
+   "gold": [
+    "helpers/sonioxStreaming.js"
+   ]
+  },
+  {
+   "q": "providerHttpError classify byok failures",
+   "gold": [
+    "helpers/providerHttpErrors.js"
+   ]
+  }
+ ]
+}

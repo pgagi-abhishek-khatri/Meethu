@@ -728,8 +728,10 @@ describe("Phase 5: Temporal OKF Router Gate", () => {
       const { featureRegistry } = setupTestEnvironment();
       const router = createOkfRouter();
 
+      // `spec.project` says the project has files; without it the when-to-call router answers directly
       const res = router.classifyQuery({
         query: "What changed in the ingestion pipeline?",
+        spec: { project: true },
         registry: featureRegistry,
       });
 

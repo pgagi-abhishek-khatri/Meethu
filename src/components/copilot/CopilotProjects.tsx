@@ -21,6 +21,7 @@ import { ConfirmDialog } from "../ui/dialog";
 import { cn } from "../lib/utils";
 import { BlurField, useCopilotSettings } from "./CopilotFields";
 import { PaneHeader, Block } from "./CopilotPane";
+import CopilotCodePanel from "./CopilotCodePanel";
 import { WORKING, runThenReload } from "./copilotFormat";
 import { useToast } from "../ui/useToast";
 import type {
@@ -524,7 +525,7 @@ function Files({
           {over ? "Drop to add" : "Drop files here or browse"}
           {!p.files.length && (
             <span className="text-muted-foreground/60">
-              · PDF, Office, text, images, audio, video
+              · PDF, Office, code (.ts, .js, .py…), text, images, audio, video
             </span>
           )}
         </button>
@@ -695,6 +696,8 @@ function ProjectDetail({
       </div>
 
       <Files p={p} run={run} pendingRef={pendingRef} onClearPendingRef={onClearPendingRef} />
+
+      <CopilotCodePanel embedded />
 
       <Block
         title="Context"

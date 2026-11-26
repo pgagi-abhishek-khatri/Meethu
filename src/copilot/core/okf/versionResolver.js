@@ -13,6 +13,11 @@ const SOURCE_PRECEDENCE_TIERS = {
     name: "Canonical OKF Specification",
     description: "Approved foundational system specification in OKF/documents/",
   },
+  GIT_HEAD_GROUND_TRUTH: {
+    score: 95,
+    name: "Local Git HEAD / Source Code Ground Truth",
+    description: "Current active local branch codebase and verified git history",
+  },
   AUTHORITATIVE_REQUIREMENT: {
     score: 80,
     name: "Authoritative Client Requirement",
@@ -81,6 +86,17 @@ function compareSemVer(v1, v2) {
   if (p1.major !== p2.major) return p1.major - p2.major;
   if (p1.minor !== p2.minor) return p1.minor - p2.minor;
   return p1.patch - p2.patch;
+}
+
+// Orders versions for ranking: a malformed version sorts below every valid one and two malformed ones tie, so one bad
+// value in the data can never throw out of an answer. compareSemVer stays strict for callers that want the error.
+function compareSemVerLenient(v1, v2) {
+  const p1 = typeof v1 === "string" ? parseSemVer(v1) : v1;
+  const p2 = typeof v2 === "string" ? parseSemVer(v2) : v2;
+  if (!p1 && !p2) return 0;
+  if (!p1) return -1;
+  if (!p2) return 1;
+  return compareSemVer(p1, p2);
 }
 
 // ---------------------------------------------------------------------------
@@ -517,7 +533,7 @@ function resolveLegacyPrecedence(
   // 2. Default Resolution (No Version Specified)
   const allSuperseded = candidates.every((c) => c.status === "superseded");
   if (allSuperseded) {
-    const newestSuperseded = [...candidates].sort((a, b) => compareSemVer(b.version, a.version))[0];
+    const newestSuperseded = [...candidates].sort((a, b) => compareSemVerLenient(b.version, a.version))[0];
     return {
       status: "superseded",
       resolvedRecord: newestSuperseded,
@@ -528,8 +544,8 @@ function resolveLegacyPrecedence(
 
   const approved = candidates.filter((c) => c.status === "approved");
   if (approved.length > 0) {
-    const sorted = [...approved].sort((a, b) => compareSemVer(b.version, a.version));
-    if (sorted.length > 1 && compareSemVer(sorted[0].version, sorted[1].version) === 0) {
+    const sorted = [...approved].sort((a, b) => compareSemVerLenient(b.version, a.version));
+    if (sorted.length > 1 && compareSemVerLenient(sorted[0].version, sorted[1].version) === 0) {
       return {
         status: "ambiguous",
         resolvedRecord: null,
@@ -547,7 +563,7 @@ function resolveLegacyPrecedence(
   if (allowDraft) {
     const drafts = candidates.filter((c) => c.status === "draft");
     if (drafts.length > 0) {
-      const sorted = [...drafts].sort((a, b) => compareSemVer(b.version, a.version));
+      const sorted = [...drafts].sort((a, b) => compareSemVerLenient(b.version, a.version));
       return {
         status: "resolved",
         resolvedRecord: sorted[0],
@@ -559,7 +575,7 @@ function resolveLegacyPrecedence(
   if (allowDeprecated) {
     const deprecated = candidates.filter((c) => c.status === "deprecated");
     if (deprecated.length > 0) {
-      const sorted = [...deprecated].sort((a, b) => compareSemVer(b.version, a.version));
+      const sorted = [...deprecated].sort((a, b) => compareSemVerLenient(b.version, a.version));
       return {
         status: "resolved",
         resolvedRecord: sorted[0],
@@ -677,7 +693,7 @@ function resolveEvidence(candidates = [], options = {}) {
     // Sort chronologically ascending
     const sorted = [...deduplicated].sort(
       (a, b) => (a.temporal.valid_from ?? 0) - (b.temporal.valid_from ?? 0) ||
-                (a.version && b.version ? compareSemVer(a.version, b.version) : 0)
+                (a.version && b.version ? compareSemVerLenient(a.version, b.version) : 0)
     );
 
     let evolutionItems = [];
@@ -1154,6 +1170,7 @@ function formatEvidenceForContext(resolution, budget = 2800) {
 module.exports = {
   parseSemVer,
   compareSemVer,
+  compareSemVerLenient,
   normalizeEvidence,
   detectConflicts,
   resolvePrecedence,

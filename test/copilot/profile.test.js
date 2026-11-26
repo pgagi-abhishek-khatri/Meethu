@@ -314,3 +314,41 @@ test("one failing file is logged and the rest continue in backfillProfiles", asy
   assert.equal(failedEvents[0].file_id, 1);
   assert.equal(failedEvents[0].error, "LLM failure");
 });
+
+// Phase 6: stored profiles are read back from the database, so a missing list must not take the prompt down.
+const { test: t6 } = require("node:test");
+const assert6 = require("node:assert/strict");
+const prof6 = require("../../src/copilot/rag/profile");
+
+t6("renderers tolerate a profile that lacks topics, facts, terms or abstract", () => {
+  for (const render of [prof6.renderForDecider, prof6.renderForAnswer, prof6.renderForWriter]) {
+    const out = render("a.pdf", { brief: "A short brief." }, 500);
+    assert6.match(out, /a\.pdf/);
+    assert6.match(out, /A short brief\./);
+  }
+});
+
+t6("renderers tolerate a profile with the wrong types (older version, hand-edited row)", () => {
+  const bad = { brief: 7, abstract: null, topics: "none", facts: { x: 1 }, terms: 5 };
+  for (const render of [prof6.renderForDecider, prof6.renderForAnswer, prof6.renderForWriter]) {
+    assert6.doesNotThrow(() => render("a.pdf", bad, 500));
+  }
+  assert6.doesNotThrow(() => prof6.renderForAnswer("a.pdf", null, 500));
+  assert6.doesNotThrow(() => prof6.renderForAnswer("a.pdf", {}, 500));
+});
+
+t6("a complete profile renders exactly as before", () => {
+  const p = {
+    brief: "Plans and refunds.",
+    abstract: "Prices and the refund rule.",
+    topics: [{ name: "Refunds", pages: "3", covers: "14-day refunds" }],
+    facts: [{ text: "Refunds within 14 days", page: 3 }],
+    terms: ["Oyaara"],
+  };
+  const out = prof6.renderForAnswer("plans.md", p, 1000);
+  assert6.equal(
+    out,
+    "- plans.md: Plans and refunds.\n  Prices and the refund rule.\n  Key facts:\n   - Refunds within 14 days (p.3)\n  Topics:\n   - Refunds (p.3): 14-day refunds"
+  );
+  assert6.match(prof6.renderForWriter("plans.md", p, 1000), /words: Refunds, Oyaara/);
+});

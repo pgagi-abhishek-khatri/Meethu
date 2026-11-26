@@ -246,7 +246,13 @@ export function OpenRouterKeySection() {
             <span
               className={cn("h-1.5 w-1.5 rounded-full", s.hasKey ? "bg-success" : "bg-destructive")}
             />
-            {s.keyFromEnv ? "From .env" : s.hasKey ? "Saved" : "Missing"}
+            {s.keyFromEnv
+              ? "From .env"
+              : s.hasKey
+                ? s.keyStorage === "plaintext"
+                  ? "Saved (not encrypted)"
+                  : "Saved"
+                : "Missing"}
           </span>
           <Input
             type="password"

@@ -23,7 +23,6 @@ const ALLOWLIST = {
   "main/service.js#1": "promise queue chain: settings error was returned to the caller; queue chain must stay resolved",
   "main/store.js#1": "WAL journal mode may be unsupported on in-memory or read-only test databases",
   "main/window.js#1": "window may be closed before the copilot renderer finishes loading",
-  "rag/ragLog.js#1": "the logger cannot log its own write failure; logging must never break a search",
   "rag/retrieve.js#1": "background embedding prefetch failure is non-fatal and search will fall back to sync embed",
 };
 

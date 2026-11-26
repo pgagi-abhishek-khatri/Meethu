@@ -64,3 +64,25 @@ test("opacity defaults to 50% and clamps within limits", () => {
   assert.equal(s.update({ opacity: 1.5 }).opacity, 1.0, "clamped to maximum 1.0");
   assert.equal(s.update({ opacity: "invalid" }).opacity, 0.5, "falls back to default 0.5");
 });
+
+test("the page is told where the saved key lives, so a plain-text fallback can be flagged", () => {
+  const key = "sk-or-v1-abc";
+  const plain = createSettings({ dir: tmp(), env: {} });
+  assert.equal(plain.view().keyStorage, "none");
+  assert.equal(plain.update({ apiKey: key }).keyStorage, "plaintext");
+
+  const store = {
+    isEncryptionAvailable: () => true,
+    encryptString: (s) => Buffer.from(`enc:${s}`),
+    decryptString: (b) => b.toString().replace(/^enc:/, ""),
+  };
+  const keychain = createSettings({ dir: tmp(), env: {}, safeStorage: store });
+  assert.equal(keychain.update({ apiKey: key }).keyStorage, "keychain");
+  assert.equal(keychain.engine().apiKey, key);
+});
+
+test("the plain-text key file is private to the user", { skip: process.platform === "win32" }, () => {
+  const dir = tmp();
+  createSettings({ dir, env: {} }).update({ apiKey: "sk-or-v1-abc" });
+  assert.equal(fs.statSync(path.join(dir, "copilot-key.bin")).mode & 0o077, 0);
+});

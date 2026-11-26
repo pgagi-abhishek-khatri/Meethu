@@ -95,6 +95,11 @@
           "sha256": {
             "type": "string",
             "pattern": "^[a-f0-9]{64}$"
+          },
+          "superseded_by": {
+            "type": ["string", "null"],
+            "pattern": "^OKF-[0-9]{4}$",
+            "description": "The document that replaces this one; must match its frontmatter."
           }
         },
         "additionalProperties": false

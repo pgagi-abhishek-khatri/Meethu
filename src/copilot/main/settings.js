@@ -122,6 +122,8 @@ function createSettings({ dir, safeStorage = null, env = process.env }) {
       ...values,
       hasKey: !!(savedKey() || envKey()),
       keyFromEnv: !savedKey() && !!envKey(),
+      // Where the saved key lives; "plaintext" means the OS keychain was unavailable and the page should say so.
+      keyStorage: !apiKey ? "none" : safeStorage?.isEncryptionAvailable?.() ? "keychain" : "plaintext",
       // A key saved before this check that is not an OpenRouter key: it is ignored, and the page says so.
       keyWarning: apiKey && !isOpenRouterKey(apiKey) ? WRONG_KEY : "",
       keyError,

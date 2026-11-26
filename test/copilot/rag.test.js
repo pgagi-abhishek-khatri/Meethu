@@ -89,7 +89,8 @@ test("timed lines: seconds are counted from the whole file, wrapped lines join",
 });
 
 test("keyword query: words quoted, punctuation harmless, short words dropped", () => {
-  assert.equal(ftsQuery('What is "Oyaara" pricing?'), '"oyaara" OR "pricing"');
+  // the last term is the two words joined: a passage may spell a name camelCase ("oyaaraPricing")
+  assert.equal(ftsQuery('What is "Oyaara" pricing?'), '"oyaara" OR "pricing" OR "oyaarapricing"');
   assert.equal(ftsQuery("a b"), "");
   assert.equal(
     clean("USER: hi there OTHER-1: what does Oyaara cost"),
@@ -357,7 +358,7 @@ test("retrieve: every card can search with written queries; a slow query model o
   const r = createRetriever({
     rag: fakeRag(chunks),
     clients: fakeClients([1, 0]),
-    cfg: { ...RAG, queryWaitMs: { fast: 30, deep: 30 } },
+    cfg: { ...RAG, fastQueryModel: true, queryWaitMs: { fast: 30, deep: 30 } },
     log: (x) => logs.push(x),
   });
   const quick = await r.retrieve({
@@ -376,7 +377,11 @@ test("retrieve: every card can search with written queries; a slow query model o
   assert.equal(logs[1].expandError, "slow");
   assert.equal(slow.used.length, 1);
   // with no cap (the default) the search waits for the written queries, however long they take
-  const waiting = createRetriever({ rag: fakeRag(chunks), clients: fakeClients([1, 0]) });
+  const waiting = createRetriever({
+    rag: fakeRag(chunks),
+    clients: fakeClients([1, 0]),
+    cfg: { ...RAG, fastQueryModel: true, queryWaitMs: { fast: null, deep: null } },
+  });
   const late = await waiting.retrieve({
     query: "what do we use for the cache",
     projectIds: [1],
@@ -450,7 +455,11 @@ test("retrieve: an unasked look with nothing close never waits for the query mod
   const chunks = { 1: { file: "a.md", text: "office plants", vec: [0, 1] } };
   let signal = null;
   let calls = 0;
-  const r = createRetriever({ rag: fakeRag(chunks), clients: fakeClients([1, 0]) });
+  const r = createRetriever({
+    rag: fakeRag(chunks),
+    clients: fakeClients([1, 0]),
+    cfg: { ...RAG, fastQueryModel: true },
+  });
   const t0 = Date.now();
   const out = await r.retrieve({
     query: "what is the bid limit",
@@ -473,6 +482,7 @@ test("retrieve: an unasked look with a close match still uses the written querie
   const out = await createRetriever({
     rag: fakeRag(chunks),
     clients: fakeClients([1, 0]),
+    cfg: { ...RAG, fastQueryModel: true },
   }).retrieve({
     query: "what cache do we use",
     projectIds: [1],

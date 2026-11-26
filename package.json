@@ -76,6 +76,7 @@
     "format:check": "eslint . && cd src && eslint . && prettier --check \"**/*.{js,jsx,ts,tsx,json,css,md}\"",
     "lint": "eslint . && cd src && eslint .",
     "test": "node --import tsx --test \"test/**/*.test.js\"",
+    "test:copilot": "node scripts/test-copilot.js",
     "test:e2e": "node scripts/test-e2e.js",
     "validate:okf": "node scripts/validate-okf.js",
     "typecheck": "cd src && tsc --noEmit",

@@ -188,12 +188,28 @@ function fill(label, pieces, chars, sep) {
   return out;
 }
 
+// A profile comes back from the database as JSON, so older or damaged rows may lack a list or hold the wrong type.
+// Readers go through this so one such row cannot throw out of the prompt build.
+const list = (v) => (Array.isArray(v) ? v : []);
+const text = (v) => (typeof v === "string" ? v : "");
+function safe(p) {
+  const o = p && typeof p === "object" ? p : {};
+  return {
+    brief: text(o.brief),
+    abstract: text(o.abstract),
+    topics: list(o.topics).filter((t) => t && typeof t === "object"),
+    facts: list(o.facts).filter((f) => f && typeof f === "object"),
+    terms: list(o.terms).filter((t) => typeof t === "string"),
+  };
+}
+
 const topicLine = (t, withCovers) =>
   `${t.name}${t.pages ? ` (p.${t.pages})` : ""}${withCovers && t.covers ? `: ${t.covers}` : ""}`;
 const factLine = (f) => `${f.text}${f.page ? ` (p.${f.page})` : ""}`;
 
 // For D1: what the file is and what it covers (topic names first, then the facts that fit).
-function renderForDecider(name, p, chars) {
+function renderForDecider(name, raw, chars) {
+  const p = safe(raw);
   let out = clip(`${name}: ${p.brief}`, chars);
   out += fill(
     "\n covers: ",
@@ -206,7 +222,8 @@ function renderForDecider(name, p, chars) {
 }
 
 // For the answer model: brief, abstract, key facts with pages, topics with what they cover.
-function renderForAnswer(name, p, chars) {
+function renderForAnswer(name, raw, chars) {
+  const p = safe(raw);
   let out = clip(`- ${name}: ${p.brief}`, chars);
   if (p.abstract && out.length + p.abstract.length + 3 <= chars) out += `\n  ${p.abstract}`;
   out += fill("\n  Key facts:\n   - ", p.facts.map(factLine), chars - out.length, "\n   - ");
@@ -220,7 +237,8 @@ function renderForAnswer(name, p, chars) {
 }
 
 // For the query writer: the document's own vocabulary (topic names and terms).
-function renderForWriter(name, p, chars) {
+function renderForWriter(name, raw, chars) {
+  const p = safe(raw);
   const out = clip(`${name}: ${p.brief}`, chars);
   const words = [...p.topics.map((t) => t.name), ...p.terms];
   return out + fill("\n words: ", words, chars - out.length, ", ");

@@ -50,9 +50,20 @@ function setup({ events = [], env = { OPENROUTER_API_KEY: "k", COPILOT_QUERY_WRI
       }
       constructor() {
         windowCalls.push("create");
-        this.webContents = { send: (c, p) => sent.push([c, p]), isDestroyed: () => false };
+        this.webContents = { send: (c, p) => sent.push([c, p]), isDestroyed: () => false, on() {} };
       }
       setMenuBarVisibility() {}
+      // the methods window.js calls on the real BrowserWindow
+      setResizable() {}
+      setMinimumSize() {}
+      setBounds() {}
+      setOpacity() {}
+      setPosition() {}
+      getPosition() {
+        return [0, 0];
+      }
+      focus() {}
+      close() {}
       once() {}
       on() {}
       isDestroyed() {
@@ -74,6 +85,7 @@ function setup({ events = [], env = { OPENROUTER_API_KEY: "k", COPILOT_QUERY_WRI
       }
     },
     screen: {
+      getCursorScreenPoint: () => ({ x: 10, y: 10 }),
       getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
       getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
     },

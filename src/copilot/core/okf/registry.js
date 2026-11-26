@@ -2,6 +2,7 @@
 // In-memory registry and loader for OKF (Official Knowledge Framework) canonical documents.
 // Pure, Electron-free. Caches manifest and canonical document contents for sub-millisecond lookup.
 
+const crypto = require("crypto");
 const defaultFs = require("fs");
 const defaultPath = require("path");
 const defaultYaml = require("js-yaml");
@@ -27,9 +28,15 @@ function createOkfRegistry({
   let als = null;
   let featureRegistry = null;
   let loaded = false;
+  let loadError = null; // why the manifest could not be used, when it exists but is unreadable
+  const integrityFailures = new Map(); // id -> issue: documents whose bytes no longer match the manifest's sha256
+
+  const sha256 = (text) => crypto.createHash("sha256").update(text, "utf8").digest("hex");
 
   function load() {
     loaded = true;
+    loadError = null;
+    integrityFailures.clear();
 
     // Initialize/reload feature registry
     featureRegistry = createFeatureRegistry({
@@ -60,8 +67,14 @@ function createOkfRegistry({
     try {
       const raw = fs.readFileSync(manifestPath, "utf8");
       manifest = yaml.load(raw);
-    } catch {
+    } catch (error) {
+      // Distinct from "no bundle": the manifest is there but cannot be read, so nothing canonical is served.
       manifest = null;
+      loadError = error?.message || String(error);
+      log({ event: "okf_manifest_parse_failed", error: loadError });
+      docsById.clear();
+      docsByTag.clear();
+      contentCache.clear();
       return false;
     }
 
@@ -96,6 +109,7 @@ function createOkfRegistry({
     ensureLoaded();
     const docEntry = docsById.get(id);
     if (!docEntry) return null;
+    if (integrityFailures.has(id)) return null; // already judged: do not re-read a refused file on every call
 
     if (contentCache.has(id)) {
       return contentCache.get(id);
@@ -106,6 +120,17 @@ function createOkfRegistry({
 
     try {
       const raw = fs.readFileSync(fullPath, "utf8");
+      // The manifest is the contract: bytes that differ from its hash are not canonical, whatever the file says.
+      let integrity = "unverified";
+      if (docEntry.sha256) {
+        if (sha256(raw) !== docEntry.sha256) {
+          const issue = { id: docEntry.id, path: docEntry.path, expected: docEntry.sha256, actual: sha256(raw) };
+          integrityFailures.set(docEntry.id, issue);
+          log({ event: "okf_integrity_failed", ...issue });
+          return null;
+        }
+        integrity = "ok";
+      }
       const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
       let metadata = {};
       let body = raw;
@@ -114,7 +139,7 @@ function createOkfRegistry({
           metadata = yaml.load(match[1]) || {};
           body = match[2].trim();
         } catch (error) {
-          log({ event: "front_matter_parse_failed", file, error: error.message });
+          log({ event: "front_matter_parse_failed", id: docEntry.id, path: docEntry.path, error: error.message });
         }
       }
 
@@ -124,13 +149,15 @@ function createOkfRegistry({
         version: docEntry.version,
         status: docEntry.status,
         title: docEntry.title,
+        integrity,
         metadata,
         body,
         raw,
       };
       contentCache.set(id, result);
       return result;
-    } catch {
+    } catch (error) {
+      log({ event: "okf_document_read_failed", id, error: error?.message });
       return null;
     }
   }
@@ -197,6 +224,22 @@ function createOkfRegistry({
       return docsById.get(id) || null;
     },
     getDocument,
+    // What an operator needs to know about the bundle: is there a manifest, did it parse, which documents failed
+    // their hash. Only documents already read are listed, so call getDocument for each first (see verifyAll).
+    getLoadStatus: () => {
+      ensureLoaded();
+      return {
+        manifestPresent: !!manifest || !!loadError || fs.existsSync(manifestPath),
+        error: loadError,
+        integrityIssues: [...integrityFailures.values()],
+      };
+    },
+    // Reads every document once so every failure is listed.
+    verifyAll: () => {
+      ensureLoaded();
+      for (const id of docsById.keys()) getDocument(id);
+      return [...integrityFailures.values()];
+    },
     lookup,
     get als() {
       ensureLoaded();

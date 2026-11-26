@@ -52,17 +52,30 @@ const STOP = new Set(
 );
 
 // FTS5 query from free text: each word quoted (so punctuation cannot break the syntax), joined by OR; short words dropped.
+// A word that is an identifier also contributes its parts ("retrieveChunks" -> retrieve, chunks), and neighbouring
+// plain words contribute their joined form ("load config" -> loadconfig): the passage may spell the name the other way,
+// and the index keeps "loadConfig" as the single token "loadconfig".
+const MAX_FTS_TERMS = 32;
 function ftsQuery(text) {
-  const words = [
-    ...new Set(
-      String(text)
-        .toLowerCase()
-        .match(/[\p{L}\p{N}][\p{L}\p{N}'-]*/gu) ?? []
-    ),
-  ]
-    .filter((w) => w.length > 2 && !STOP.has(w))
-    .slice(0, 24);
-  return words.map((w) => `"${w.replace(/"/g, "")}"`).join(" OR ");
+  const words = String(text).match(/[\p{L}\p{N}][\p{L}\p{N}'-]*/gu) ?? [];
+  const keep = (w) => w.length > 2 && !STOP.has(w);
+  const out = new Set();
+  const add = (w) => {
+    if (out.size < MAX_FTS_TERMS && keep(w)) out.add(w);
+  };
+  const lower = words.map((w) => w.toLowerCase());
+  lower.slice(0, 24).forEach(add);
+  words.slice(0, 24).forEach((w) => {
+    const parts = w
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+      .split(/\s+/)
+      .map((p) => p.toLowerCase());
+    if (parts.length > 1) parts.forEach(add);
+  });
+  const plain = lower.filter((w) => keep(w) && w.length >= 4).slice(0, 5);
+  for (let i = 0; i + 1 < plain.length; i++) add(plain[i] + plain[i + 1]); // at most four joins
+  return [...out].map((w) => `"${w.replace(/"/g, "")}"`).join(" OR ");
 }
 
 function createRagStore(db, { addColumn, now = Date.now } = {}) {
@@ -273,11 +286,21 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
       const data = new Float32Array(rows.length * dims);
       rows.forEach((r, i) => data.set(fromBuffer(r.vec), i * dims));
       const m = { ids: rows.map((r) => r.id), data };
-      if (!includeInactive) m.expiresAt = q.nextActiveBoundary.get(projectId, at, projectId, at).t ?? null;
+      if (!includeInactive)
+        m.expiresAt = q.nextActiveBoundary.get(projectId, at, projectId, at).t ?? null;
       matrices.set(key, m);
       return m;
     },
-    keyword(projectId, text, k = 12, { includeInactive = false, asOfStart = null, asOfEnd = null } = {}) {
+    // Builds the active matrix if it is missing or expired, so the next search finds it ready.
+    warm(projectId, dims) {
+      this.matrix(projectId, dims);
+    },
+    keyword(
+      projectId,
+      text,
+      k = 12,
+      { includeInactive = false, asOfStart = null, asOfEnd = null } = {}
+    ) {
       const query = ftsQuery(text);
       if (!query) return [];
       try {
@@ -338,20 +361,17 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
 
     // Phase 2: Temporal Store Engine Integration
     temporal,
-    insertTemporalChunk: (chunkData, metadata) =>
-      temporal.insertTemporalChunk(chunkData, metadata),
+    insertTemporalChunk: (chunkData, metadata) => temporal.insertTemporalChunk(chunkData, metadata),
     getActiveFeatureChunks: (projectId, featureId) =>
       temporal.getActiveFeatureChunks(projectId, featureId),
     getFeatureAt: (projectId, featureId, targetTime) =>
       temporal.getFeatureAt(projectId, featureId, targetTime),
     getFeatureInRange: (projectId, featureId, rangeStart, rangeEnd) =>
       temporal.getFeatureInRange(projectId, featureId, rangeStart, rangeEnd),
-    getFeatureLineage: (projectId, featureId) =>
-      temporal.getFeatureLineage(projectId, featureId),
+    getFeatureLineage: (projectId, featureId) => temporal.getFeatureLineage(projectId, featureId),
     supersedeChunk: (predecessorId, successorId, effectiveTime) =>
       temporal.supersedeChunk(predecessorId, successorId, effectiveTime),
-    deprecateChunk: (chunkId, effectiveTime) =>
-      temporal.deprecateChunk(chunkId, effectiveTime),
+    deprecateChunk: (chunkId, effectiveTime) => temporal.deprecateChunk(chunkId, effectiveTime),
     activateSuccessorVersion: (params) => temporal.activateSuccessorVersion(params),
     validateTemporalIntegrity: (projectId, featureId) =>
       temporal.validateTemporalIntegrity(projectId, featureId),

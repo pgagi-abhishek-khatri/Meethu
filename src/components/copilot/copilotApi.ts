@@ -31,6 +31,7 @@ export interface CopilotSettings {
   mediaEmbedMinutes: number; // minutes of each audio/video file embedded as sound/picture
   hasKey: boolean;
   keyFromEnv: boolean;
+  keyStorage?: "none" | "keychain" | "plaintext"; // plaintext: the OS keychain was unavailable
   keyWarning?: string; // a saved key that is not an OpenRouter key (ignored; the .env key is used)
   keyError?: string; // the key just pasted was refused
 }
@@ -123,6 +124,118 @@ export interface ProjectFilePreview {
   error?: string;
 }
 
+export interface LocalCodeRepoStats {
+  filesScanned: number;
+  codeModules: number;
+  indexedDocuments: number;
+  indexMs: number;
+  vectorCalls: number;
+  embeddingTokens: number;
+  truncated?: boolean; // the file cap was reached: part of the repo is not indexed
+  skippedLarge?: number; // files over the size limit, left out
+  secretsRedacted?: number; // credentials replaced in place before indexing
+}
+
+export interface LocalCodeRepo {
+  id: number;
+  path: string;
+  name: string;
+  activeBranch: string | null;
+  lastIndexedAt: number | null;
+  stats: LocalCodeRepoStats | null;
+}
+
+export interface CodeHit {
+  id: string;
+  type: "module_md" | "ast_chunk" | "markdown_doc";
+  relPath: string;
+  heading: string;
+  lineStart: number;
+  score: number;
+  matchedTerms: string[];
+  text: string;
+}
+
+export interface CommitMatch {
+  sha: string;
+  fullSha: string;
+  author: string;
+  date: string;
+  message: string;
+  files: string[];
+  score: number;
+}
+
+export interface LocalBranchInfo {
+  name: string;
+  sha: string;
+  upstream: string | null;
+  lastCommitSubject: string;
+  isCurrent: boolean;
+}
+
+export interface LocalBranchDiffResult {
+  ok: boolean;
+  diff?: string;
+  diffStat?: string;
+  truncated?: boolean;
+  stats?: { filesChanged: number; keptFiles: number; droppedFiles: string[] };
+  error?: string;
+}
+
+export interface CodeModuleSummary {
+  relPath: string;
+  language: string;
+  totalLines: number;
+  classes: string[];
+  functions: string[];
+  markdown: string;
+}
+
+export interface SingleCodeContextResult {
+  ok: boolean;
+  fileName?: string;
+  activeBranch?: string;
+  summary?: string;
+  markdown?: string;
+  metrics?: {
+    repoName: string;
+    totalModules: number;
+    includedModules: number;
+    rawCodeChars: number;
+    markdownChars: number;
+    estRawTokens: number;
+    estMarkdownTokens: number;
+    compressionPct: number;
+    vectorCalls: number;
+    githubApiCalls: number;
+  };
+  error?: string;
+}
+
+export interface CodeAnalysisResult {
+  ok: boolean;
+  query?: string;
+  route?: string;
+  intent?: { route: string; tier: string; latencyMs: number; rationale: string };
+  markdown?: string;
+  evidence?: {
+    gitFacts: { type: string; id: string; data: Record<string, unknown>; authority: number }[];
+    branchComparison: LocalBranchDiffResult | null;
+    commitMatches: CommitMatch[];
+    codeHits: CodeHit[];
+  };
+  telemetry?: {
+    totalMs: number;
+    indexMs: number;
+    searchMs: number;
+    vectorCalls: number;
+    embeddingTokens: number;
+    githubApiCalls: number;
+  };
+  error?: string;
+}
+
 export interface CopilotBridge {
   onEvent(cb: (e: CopilotEvent) => void): () => void;
   startMeeting?(): Promise<void>;
@@ -188,6 +301,20 @@ export interface CopilotBridge {
     count?(): Promise<number>; // control panel only: how many are saved in all
     get(id: string): Promise<PastSessionDetail | null>;
     remove(id: string): Promise<void>;
+  };
+  code?: {
+    listRepos(): Promise<LocalCodeRepo[]>;
+    pickRepo(): Promise<{ ok: boolean; canceled?: boolean; repo?: LocalCodeRepo | null; error?: string }>;
+    refreshRepo(repoDir: string): Promise<{ ok: boolean; repo?: LocalCodeRepo | null; error?: string }>;
+    removeRepo(id: number): Promise<boolean>;
+    analyze(repoDir: string, query: string, topK?: number): Promise<CodeAnalysisResult>;
+    branches(repoDir: string): Promise<{ ok: boolean; current?: string; branches: LocalBranchInfo[] }>;
+    diff(repoDir: string, base: string, head: string): Promise<LocalBranchDiffResult>;
+    modules(repoDir: string): Promise<{ ok: boolean; stats?: LocalCodeRepoStats; modules: CodeModuleSummary[] }>;
+    getContextFile(repoDir: string): Promise<SingleCodeContextResult>;
+    downloadContextFile(
+      repoDir: string
+    ): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>;
   };
   openWindow?(): Promise<void>; // control panel only: show the live window
   closeWindow?(): Promise<void>; // control panel only: hide the live window

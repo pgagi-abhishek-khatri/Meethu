@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS copilot_project_rules (
 CREATE TABLE IF NOT EXISTS copilot_project_files (
   id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, path TEXT NOT NULL, name TEXT NOT NULL, added_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS copilot_code_repos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL UNIQUE, name TEXT NOT NULL, last_indexed_at INTEGER, stats_json TEXT
+);
 `;
 
 const { createRagStore } = require("../rag/ragStore");
@@ -130,6 +133,11 @@ function openStore({ dbPath, Database = require("better-sqlite3"), now = Date.no
       `SELECT f.id, f.project_id, f.path, f.name, f.status FROM copilot_project_files f JOIN copilot_projects p ON p.id = f.project_id
        WHERE p.active = 1 ORDER BY f.id`
     ),
+    codeRepos: db.prepare("SELECT id, path, name, last_indexed_at, stats_json FROM copilot_code_repos ORDER BY id DESC"),
+    addCodeRepo: db.prepare(
+      "INSERT OR REPLACE INTO copilot_code_repos (path, name, last_indexed_at, stats_json) VALUES (?, ?, ?, ?)"
+    ),
+    removeCodeRepo: db.prepare("DELETE FROM copilot_code_repos WHERE id = ?"),
   };
 
   const parse = (json, fallback) => {
@@ -310,6 +318,25 @@ function openStore({ dbPath, Database = require("better-sqlite3"), now = Date.no
         return { id, project_id: projectId, path: filePath, name };
       },
     },
+    codeRepos: {
+      list: () =>
+        q.codeRepos.all().map((r) => ({
+          id: r.id,
+          path: r.path,
+          name: r.name,
+          lastIndexedAt: r.last_indexed_at ?? null,
+          stats: parse(r.stats_json, null),
+        })),
+      upsert(repoPath, name, stats = null) {
+        const cleanPath = String(repoPath || "").trim();
+        const cleanName = String(name || "").trim() || "Repository";
+        if (!cleanPath) return null;
+        q.addCodeRepo.run(cleanPath, cleanName, now(), stats ? JSON.stringify(stats) : null);
+        return this.list().find((r) => r.path === cleanPath) || null;
+      },
+      remove: (id) => q.removeCodeRepo.run(Number(id)),
+    },
+    db,
     rag,
     close: () => db.close(),
   };

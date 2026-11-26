@@ -8,23 +8,7 @@ const defaultPath = require("path");
 const defaultYaml = require("js-yaml");
 const { validateFeatureRegistry } = require("./featureRegistryValidator");
 
-// Normalizes strings for exact canonical name and alias matching
-function normalizeTitle(s) {
-  if (typeof s !== "string") return "";
-  return s
-    .trim()
-    .toLowerCase()
-    .replace(/[\u2014\u2013]/g, "-") // em-dash, en-dash to hyphen
-    .replace(/["'“”‘’]/g, "") // strip quotes
-    .replace(/[.:;,-]+$/g, "") // strip trailing punctuation
-    .replace(/\s+/g, " "); // collapse whitespace
-}
-
-// Tokenizes keyword for exact keyword indexing
-function normalizeKeyword(k) {
-  if (typeof k !== "string") return "";
-  return k.trim().toLowerCase().replace(/[^a-z0-9-]+/g, "");
-}
+const { normalizeTitle, normalizeKeyword } = require("./normalize");
 
 function escapeRegex(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

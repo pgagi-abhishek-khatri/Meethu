@@ -18,6 +18,11 @@ Headless checks:
   node --test test/copilot/                       (engine, decision, answer, UI state; no database)
   node --import tsx --test test/copilot/copilotState.test.js
   ELECTRON_RUN_AS_NODE=1 npx electron --test test/copilot/store.test.js test/copilot/service.test.js   (needs the Electron-built better-sqlite3)
+  npm run test:copilot            the whole copilot suite under Electron's runtime (sqlite suites included; `npm test` skips them)
+  npm run test:copilot -- test/copilot/retrieve.test.js   just these files
+  npm run validate:okf            the OKF bundle (hashes, front matter, feature registry, provenance)
+  node scripts/copilot/retrieve-bench.js    retrieval latency on simulated network delays
+  node scripts/copilot/code-search-eval.js --misses   recall@k / MRR of the code search on a labelled set
   node scripts/copilot/decision-eval.mjs --repeat 2 ; node scripts/copilot/dev-simulate.mjs --speed 1.5
   node scripts/copilot/answer-eval.mjs            (live main-model check, costs a few cents)
 End-to-end replay of saved meetings (real D1 + main model, virtual clock, costs tokens): node scripts/copilot/replay-e2e.mjs <out.json> seg1.jsonl seg2.jsonl

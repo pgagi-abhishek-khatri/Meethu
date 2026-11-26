@@ -15,15 +15,35 @@ function createEmbedClient({
   fetchImpl,
   sleep,
   cacheSize = RAG.queryCache,
+  queryTimeoutMs = RAG.queryEmbedTimeoutMs,
+  queryRetries = 1,
+  queryBackoffMs = 200,
 } = {}) {
   const slots = pool(concurrency);
   const qslots = pool(2); // live questions never queue behind a file's batches
   const http = { apiKey, baseUrl, fetchImpl, sleep };
-  const queries = new Map(); // text -> Promise<Float32Array>, newest last
+  const queries = new Map(); // normalised text -> Promise<Float32Array>, least recently used first
+  // Case, spacing and end punctuation never change what is being asked, so they share one cached embedding.
+  const norm = (t) =>
+    String(t)
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .replace(/[\s.?!,;:]+$/g, "")
+      .trim();
+  const touch = (key) => {
+    const hit = queries.get(key);
+    queries.delete(key);
+    queries.set(key, hit);
+    return hit;
+  };
 
-  const call = (input, lane = slots) =>
+  const call = (input, lane = slots, limits = {}) =>
     lane.run(async () => {
-      const res = await postJson("/embeddings", { model, input, dimensions: dims }, http);
+      const res = await postJson(
+        "/embeddings",
+        { model, input, dimensions: dims },
+        { ...http, ...limits }
+      );
       const data = (res.data ?? []).slice().sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
       if (data.length !== input.length)
         throw Object.assign(new Error("embedding count mismatch"), { code: "bad_response" });
@@ -53,28 +73,44 @@ function createEmbedClient({
     },
     // questions: [text] -> same shape. The cache makes the speculative prefetch and the real search one call.
     async embedQueries(texts) {
-      const miss = [...new Set(texts.filter((t) => !queries.has(t)))];
+      const keys = texts.map(norm);
+      // Hits are taken before this call adds (and so may evict) anything.
+      const hits = new Map();
+      for (const k of keys) if (queries.has(k)) hits.set(k, touch(k));
+      const missIdx = [];
+      const seen = new Set();
+      keys.forEach((k, i) => {
+        if (!queries.has(k) && !seen.has(k)) {
+          seen.add(k);
+          missIdx.push(i);
+        }
+      });
       let tokens = 0;
       let cost = 0;
-      if (miss.length) {
+      const fresh = new Map(); // read straight from this call's result, so eviction can never lose a vector
+      if (missIdx.length) {
         const p = call(
-          miss.map((t) => `task: search result | query: ${t}`),
-          qslots
+          missIdx.map((i) => `task: search result | query: ${texts[i]}`),
+          qslots,
+          { timeoutMs: queryTimeoutMs, retries: queryRetries, backoffMs: queryBackoffMs }
         );
-        miss.forEach((t, i) =>
+        missIdx.forEach((i, n) =>
           queries.set(
-            t,
-            p.then((r) => r.vectors[i])
+            keys[i],
+            p.then((r) => r.vectors[n])
           )
         );
-        p.catch(() => miss.forEach((t) => queries.delete(t)));
+        p.catch(() => missIdx.forEach((i) => queries.delete(keys[i])));
         while (queries.size > cacheSize) queries.delete(queries.keys().next().value);
         const r = await p;
         tokens = r.tokens;
         cost = r.cost;
+        missIdx.forEach((i, n) => fresh.set(keys[i], r.vectors[n]));
       }
-      const vectors = await Promise.all(texts.map((t) => queries.get(t)));
-      return { vectors, tokens, cost, cached: texts.length - miss.length };
+      const vectors = await Promise.all(
+        keys.map((k) => (fresh.has(k) ? fresh.get(k) : hits.get(k)))
+      );
+      return { vectors, tokens, cost, cached: texts.length - missIdx.length };
     },
     // One media input per request (the payload is big): parts is an OpenRouter content array.
     // e.g. [{type:"input_audio", input_audio:{data:"data:audio/mpeg;base64,...", format:"mp3"}}]

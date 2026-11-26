@@ -5,24 +5,9 @@
 const defaultPath = require("path");
 const { compareSemVer, resolvePrecedence } = require("./versionResolver");
 const { createFeatureRegistry } = require("./featureRegistry");
+const { getGitRegistry } = require("./gitRegistry");
 
-// Normalizes title strings for exact matching
-function normalizeTitle(s) {
-  if (typeof s !== "string") return "";
-  return s
-    .trim()
-    .toLowerCase()
-    .replace(/[\u2014\u2013]/g, "-") // em-dash, en-dash to hyphen
-    .replace(/["'“”‘’]/g, "") // strip quotes
-    .replace(/[.:;,-]+$/g, "") // strip trailing punctuation
-    .replace(/\s+/g, " "); // collapse whitespace
-}
-
-// Tokenizes keyword for exact keyword indexing
-function normalizeKeyword(k) {
-  if (typeof k !== "string") return "";
-  return k.trim().toLowerCase().replace(/[^a-z0-9-]+/g, "");
-}
+const { normalizeTitle, normalizeKeyword } = require("./normalize");
 
 function createAuthoritativeLookupService({
   manifest = null,
@@ -306,6 +291,31 @@ function createAuthoritativeLookupService({
 
     let outcome = null;
 
+    if (type === "git" || type === "branch" || type === "commit") {
+      const gitReg = getGitRegistry(request.cwd);
+      const gitRes = gitReg.lookup(value || request.query || type);
+      if (gitRes.matched) {
+        return {
+          status: "resolved",
+          matched: true,
+          type: "git_entity",
+          gitEntity: gitRes,
+          provenance: {
+            source: "gitRegistry",
+            authority: gitRes.authority,
+            timestamp: Date.now(),
+          },
+          latency_ms: Date.now() - t0,
+        };
+      }
+      return {
+        status: "not_found",
+        matched: false,
+        error: `Git entity '${value}' not found in Git registry`,
+        latency_ms: Date.now() - t0,
+      };
+    }
+
     if (type === "feature") {
       if (!featReg) {
         return {
@@ -488,6 +498,7 @@ function createAuthoritativeLookupService({
     lookupByKeyword,
     lookupByTag,
     resolve,
+    lookupCanonical: resolve,
     // Feature Registry Integration
     get featureRegistry() {
       return featReg;

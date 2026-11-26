@@ -20,6 +20,7 @@ async function postJson(
     fetchImpl = fetch,
     sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
     retries = 3,
+    backoffMs = 600,
     timeoutMs = 120000,
     signal,
   } = {}
@@ -58,7 +59,7 @@ async function postJson(
       if (signal?.aborted) throw Object.assign(new Error("cancelled"), { code: "cancelled" });
       const retryable = e.retryable || e.name === "TimeoutError" || e.name === "TypeError"; // TypeError = network down
       if (!retryable || attempt === retries) break;
-      await sleep(e.retryAfterMs || 600 * 2 ** attempt + Math.floor(Math.random() * 250));
+      await sleep(e.retryAfterMs || backoffMs * 2 ** attempt + Math.floor(Math.random() * 250));
     }
   }
   if (last && !last.code) last.code = last.name === "TimeoutError" ? "timeout" : "network";

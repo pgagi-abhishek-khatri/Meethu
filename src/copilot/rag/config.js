@@ -9,8 +9,14 @@ const RAG = {
   // Fast cards wait at most 700 ms for the written queries (measured: the writer takes p50 ~620 ms, p90 ~950 ms), then
   // search with the moment's own vector and keywords; deep ones always wait (null). Lower it once the writer starts
   // alongside D1 (docs/copilot/LATENCY_1S_PLAN.md, Phase 2).
-  queryWaitMs: { fast: 700, deep: null },
+  // The fast path no longer calls the model when queryRewrite.js produced enough terms; this wait only applies when it
+  // did not. Deep waits at most this long (it used to wait up to queryTimeoutMs).
+  queryWaitMs: { fast: 700, deep: 1500 },
+  fastQueryModel: false, // true: the fast path waits for the query model again and skips the deterministic rewrite
   queryTimeoutMs: 10000, // the query model's own network timeout: a hung call fails, the card searches without it
+  // A live question's embedding: a hung connection is cut off at this long and retried once, quickly, so the vector
+  // search still lands inside the search's own wait (embedWaitMs). Files keep the patient defaults.
+  queryEmbedTimeoutMs: 1500,
   dims: 768, // Matryoshka cut of the 3072 default: 4x smaller, same quality for this size of corpus
   embedBatch: 100, // API maximum per request
   embedConcurrency: 4,
@@ -48,9 +54,9 @@ const RAG = {
   summaryMinWords: 60,
   summaryMaxWords: 350,
   summaryMaxChars: 2500,
-  // "summary": one short line per file (before file profiles). "profile": each reader gets its slice of the
-  // file profiles (profile.js), the characters split over the files by size. COPILOT_CATALOG overrides it.
-  catalogMode: "summary",
+  // "summary": one short line per file (legacy mode). "profile": each reader gets its slice of the
+  // file profiles (profile.js), dynamically scaled by document size. COPILOT_CATALOG overrides it.
+  catalogMode: "profile",
   profileBudget: { decider: 4000, answer: 6000, writer: 1600, floor: 300 },
   queryCache: 64,
 };
@@ -58,6 +64,7 @@ const RAG = {
 // kind -> limits. `maxChars` caps what gets indexed from text; `maxSeconds` caps media length.
 const LIMITS = {
   text: { maxBytes: 5 * MB, maxChars: 1_200_000 },
+  code: { maxBytes: 10 * MB, maxChars: 2_000_000 },
   office: { maxBytes: 25 * MB, maxChars: 1_200_000 },
   pdf: { maxBytes: 25 * MB },
   image: { maxBytes: 10 * MB },
@@ -83,6 +90,24 @@ const EXT = {
     ".rtf",
   ],
   office: [".docx", ".pptx", ".xlsx"],
+  code: [
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".ts",
+    ".tsx",
+    ".py",
+    ".rs",
+    ".go",
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".sh",
+    ".bash",
+    ".sql",
+  ],
   pdf: [".pdf"],
   image: [".png", ".jpg", ".jpeg", ".webp", ".gif"],
   audio: [".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac", ".opus"],

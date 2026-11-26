@@ -70,6 +70,11 @@ const ManifestDocumentEntrySchema = z.object({
   status: z.enum(["draft", "approved", "deprecated", "superseded"]),
   title: z.string().min(5),
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  superseded_by: z
+    .string()
+    .regex(/^OKF-[0-9]{4}$/)
+    .nullable()
+    .optional(),
 });
 
 const BundleManifestSchema = z.object({
@@ -225,6 +230,12 @@ function validateOkfRegistry({ okfDir, fix = false } = {}) {
       );
     }
 
+    if ((manifestEntry.superseded_by ?? null) !== (metadata.superseded_by ?? null)) {
+      errors.push(
+        `[${relPath}] superseded_by mismatch for ${metadata.id}: manifest has '${manifestEntry.superseded_by ?? ""}', frontmatter has '${metadata.superseded_by ?? ""}'`
+      );
+    }
+
     if (manifestEntry.sha256 !== currentSha256) {
       if (fix) {
         manifestEntry.sha256 = currentSha256;
@@ -277,7 +288,7 @@ function validateOkfRegistry({ okfDir, fix = false } = {}) {
       try {
         const featRaw = fs.readFileSync(regPath, "utf8");
         const featData = yaml.load(featRaw);
-        const featRes = validateFeatureRegistry(featData);
+        const featRes = validateFeatureRegistry(featData, { manifestIds: manifest?.documents?.map((d) => d.id) });
         if (!featRes.valid) {
           for (const err of featRes.errors) {
             errors.push(`[${regFile}] ${err}`);

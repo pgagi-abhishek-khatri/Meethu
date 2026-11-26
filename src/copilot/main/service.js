@@ -23,7 +23,11 @@ const { createOpenRouterLlm, DEFAULT_SUMMARY_MODEL } = require("../core/summary/
 const { createOkfRegistry } = require("../core/okf/registry");
 const { createOkfRouter } = require("../core/okf/router");
 const { createTemporalRouter } = require("../core/okf/temporalRouter");
+const { createScientistSynthesizerAsync } = require("../core/answer/scientistSynthesizer");
+const gitLocalAdapter = require("../../helpers/connectors/gitLocalAdapter");
 const { backfillProfiles } = require("../rag/profileBackfill");
+const { repoFingerprint } = require("../rag/repoFingerprint");
+const { resolveRegisteredRepo, checkDroppedFile } = require("../core/validation/pathPolicy");
 
 const NOT_REPLAYED = new Set([
   "partial",
@@ -253,6 +257,10 @@ function createCopilot({
       log: ragLog,
     });
     okfRouter = createOkfRouter();
+    // Check every document against the manifest now, so a tampered or stale bundle shows up in the log at launch
+    // (each failing document is also refused at lookup, see registry.getDocument).
+    okfRegistry.verifyAll();
+    ragLog({ event: "okf_status", ...okfRegistry.getLoadStatus(), documents: okfRegistry.getDocuments().length });
     const featReg = okfRegistry?.featureRegistry;
     if (featReg && featReg.hasRegistry() && store.rag?.temporal) {
       store.rag.temporal.configure({ featureRegistry: featReg, log: ragLog });
@@ -397,6 +405,46 @@ function createCopilot({
     },
   });
 
+  // ---- Local Vectorless Code Intelligence (100% offline, 0 vectors, 0 GitHub API) ----
+  const MAX_CODE_SYNTHS = 8;
+  const codeSynths = new Map(); // absRepoPath -> ScientistSynthesizer (insertion order = least recently built first)
+  const codeFingerprints = new Map(); // absRepoPath -> fingerprint the cached index was built from
+  const codeBuilds = new Map(); // absRepoPath -> in-flight freshSynth promise, so concurrent questions share one check
+  const cachedSynth = (repoDir) => codeSynths.get(path.resolve(String(repoDir || ""))) || null;
+  const remember = (abs, synth) => {
+    codeSynths.delete(abs);
+    codeSynths.set(abs, synth);
+    while (codeSynths.size > MAX_CODE_SYNTHS) {
+      const oldest = codeSynths.keys().next().value;
+      codeSynths.delete(oldest);
+      codeFingerprints.delete(oldest);
+    }
+  };
+  // The index follows the repo: compare a cheap fingerprint first and rebuild (in time slices) only when it moved.
+  const freshSynth = (repoDir, { force = false } = {}) => {
+    const abs = path.resolve(String(repoDir || ""));
+    if (!abs || !fs.existsSync(abs)) return Promise.resolve(null);
+    if (codeBuilds.has(abs)) return codeBuilds.get(abs);
+    const job = (async () => {
+      const fp = await repoFingerprint(abs);
+      const stale = force || !codeSynths.has(abs) || (fp !== null && codeFingerprints.get(abs) !== fp);
+      if (!stale) return codeSynths.get(abs);
+      const synth = await createScientistSynthesizerAsync({ repoDir: abs, maxFiles: 1500, db: store.db || null, log: ragLog });
+      remember(abs, synth);
+      codeFingerprints.set(abs, fp);
+      return synth;
+    })().finally(() => codeBuilds.delete(abs));
+    codeBuilds.set(abs, job);
+    return job;
+  };
+  // Renderer-supplied repo paths are honoured only for repos the user added through the folder picker.
+  const registeredRepoDir = (repoDir) => resolveRegisteredRepo(repoDir, store.codeRepos.list());
+  const enrichRepo = (r) => {
+    const abs = path.resolve(r.path);
+    const activeBranch = fs.existsSync(abs) ? gitLocalAdapter.getCurrentBranch({ cwd: abs }) : null;
+    return { ...r, activeBranch };
+  };
+
   const engine = createEngine({
     env,
     logDir,
@@ -417,6 +465,57 @@ function createCopilot({
       prefetch: (query) => retriever.prefetch(query, projectIds()),
       retrieve: (o) => retriever.retrieve({ ...o, projectIds: projectIds() }),
       log: (record) => ragLog(record), // the engine's sufficiency verdict joins the search's own records
+    },
+    localCode: {
+      hasRepos: () => store.codeRepos.list().length > 0,
+      catalog: () => {
+        const repos = store.codeRepos.list();
+        if (!repos.length) return "";
+        const sections = [
+          "Connected local code repositories (vectorless Code-to-MD + PageRank RepoMap + local git):",
+        ];
+        let remainingChars = 4800;
+        for (const r of repos) {
+          const exists = fs.existsSync(r.path);
+          const branch = exists ? gitLocalAdapter.getCurrentBranch({ cwd: r.path }) : "unknown";
+          const header = `- ${r.name} (${r.path}, branch: ${branch}, ${r.stats?.codeModules ?? 0} modules)`;
+          sections.push(header);
+          remainingChars -= header.length + 1;
+          if (exists && remainingChars > 300) {
+            // The catalog is built synchronously from the cached index; refresh in the background for the next one.
+            freshSynth(r.path).catch((error) => logError("Background repo refresh failed", error));
+            const synth = cachedSynth(r.path);
+            if (synth?.codeIndex) {
+              const mapMd = synth.codeIndex.generateRepoMapMarkdown({ maxModules: 25 });
+              const trimmed =
+                mapMd.length > remainingChars
+                  ? mapMd.slice(0, remainingChars).trimEnd() + "\n..."
+                  : mapMd;
+              sections.push(trimmed);
+              remainingChars -= trimmed.length + 1;
+            }
+          }
+        }
+        return sections.join("\n");
+      },
+      search: async (query) => {
+        const repos = store.codeRepos.list();
+        if (!repos.length) return null;
+        const sections = [];
+        const files = [];
+        for (const r of repos) {
+          const synth = await freshSynth(r.path);
+          if (!synth) continue;
+          const res = synth.analyze(query, { topK: 6 });
+          if (res?.markdown) {
+            sections.push(res.markdown);
+            for (const hit of res.evidence?.codeHits || []) {
+              if (hit.relPath && !files.includes(hit.relPath)) files.push(hit.relPath);
+            }
+          }
+        }
+        return sections.length ? { passages: sections.join("\n\n---\n\n").slice(0, 12000), files } : null;
+      },
     },
     okf:
       okfRegistry && okfRouter
@@ -565,8 +664,8 @@ function createCopilot({
       if (tmpDir) {
         try {
           fs.rmSync(tmpDir, { recursive: true, force: true });
-        } catch {
-          // Best-effort temp cleanup
+        } catch (error) {
+          logError("Could not remove the temporary voice folder", error); // best effort, but not silent
         }
       }
     }
@@ -652,8 +751,8 @@ function createCopilot({
     if (!isManagedFile(p)) return;
     try {
       fs.rmSync(p, { force: true });
-    } catch {
-      // Best-effort cleanup
+    } catch (error) {
+      logError("Could not remove a project file copy", error); // best effort, but not silent
     }
   };
   handle("project-remove", (id) => {
@@ -661,8 +760,8 @@ function createCopilot({
     for (const f of store.projects.files(pid)) deleteManagedFile(f.path);
     try {
       fs.rmSync(path.join(filesRoot, String(pid)), { recursive: true, force: true });
-    } catch {
-      // Best-effort cleanup
+    } catch (error) {
+      logError("Could not remove a project's file folder", error); // best effort, but not silent
     }
     return store.projects.remove(pid);
   });
@@ -778,35 +877,35 @@ function createCopilot({
   // Files dropped on the Copilot page: only existing regular files are taken and copied into local managed storage.
   const addPaths = (id, paths) => {
     const pid = Number(id);
-    const files = (Array.isArray(paths) ? paths : [])
-      .filter((p) => typeof p === "string" && path.isAbsolute(p))
-      .filter((p) => {
-        try {
-          return fs.statSync(p).isFile();
-        } catch {
-          return false;
-        }
-      })
-      .slice(0, 50);
+    const files = [];
+    for (const p of Array.isArray(paths) ? paths : []) {
+      if (files.length >= 50) break;
+      const check = checkDroppedFile(p);
+      if (check.ok) files.push(check.path);
+      else logError(`Skipped dropped file (${check.reason})`, new Error(path.basename(String(p))));
+    }
     const projectDir = path.join(filesRoot, String(pid));
     if (files.length) fs.mkdirSync(projectDir, { recursive: true });
+    let added = 0;
     for (const p of files) {
       const base = path.basename(p);
       const safeName = base.replace(/[^a-zA-Z0-9._-]/g, "_");
       const localPath = path.join(projectDir, `${crypto.randomUUID().slice(0, 8)}-${safeName}`);
-      let targetPath = p;
       try {
         fs.copyFileSync(p, localPath);
-        targetPath = localPath;
       } catch (error) {
-        logError("Failed to copy project file to local storage; using original path", error);
+        // Never index the original location: it is outside managed storage and was not vetted beyond the drop.
+        logError("Failed to copy project file to local storage; skipping it", error);
+        continue;
       }
+      const targetPath = localPath;
       const f = store.projects.addFileRow(pid, targetPath, base);
+      added += 1;
       ingestor.ingest(f).catch((error) => {
         ragLog({ event: "background_ingest_failed", file_id: f.id, error: error?.message });
       }); // reads, splits, embeds and summarises in the background; the page shows its progress
     }
-    return files.length;
+    return added;
   };
   handle("project-add-paths", addPaths);
   // Try a failed (or changed) file again.
@@ -852,6 +951,122 @@ function createCopilot({
   handle("sessions-count", () => store.countSessions());
   handle("sessions-get", (id) => store.getSession(str(id, 80)));
   handle("sessions-remove", (id) => store.deleteSession(str(id, 80)));
+
+  handle("code-repos-list", () => store.codeRepos.list().map(enrichRepo));
+  handle("code-repo-pick", async () => {
+    const r = await dialog.showOpenDialog(
+      win.webContents() ? BrowserWindow.fromWebContents(win.webContents()) : null,
+      { properties: ["openDirectory"] }
+    );
+    if (r.canceled || !r.filePaths?.length) return { ok: false, canceled: true };
+    const repoPath = r.filePaths[0];
+    const synth = await freshSynth(repoPath, { force: true });
+    if (!synth) return { ok: false, error: "Could not read selected folder." };
+    const saved = store.codeRepos.upsert(repoPath, path.basename(repoPath), synth.codeIndex.stats);
+    return { ok: true, repo: saved ? enrichRepo(saved) : null };
+  });
+  handle("code-repo-refresh", async (repoDir) => {
+    const root = registeredRepoDir(repoDir);
+    const synth = root ? await freshSynth(root, { force: true }) : null;
+    if (!synth) return { ok: false, error: "Repository folder not found." };
+    const saved = store.codeRepos.upsert(synth.repoDir, path.basename(synth.repoDir), synth.codeIndex.stats);
+    return { ok: true, repo: saved ? enrichRepo(saved) : null };
+  });
+  handle("code-repo-remove", (id) => {
+    const target = store.codeRepos.list().find((r) => String(r.id) === String(id));
+    if (!target) return false;
+    codeSynths.delete(path.resolve(target.path));
+    store.codeRepos.remove(target.id);
+    return true;
+  });
+  handle("code-analyze", async (repoDir, query, topK = 6) => {
+    const root = registeredRepoDir(repoDir);
+    const synth = root ? await freshSynth(root) : null;
+    if (!synth) return { ok: false, error: "Repository folder not found." };
+    const res = synth.analyze(str(query, 1000), { topK: Math.min(Number(topK) || 6, 15) });
+    return { ok: true, ...res };
+  });
+  handle("code-branches", (repoDir) => {
+    const abs = registeredRepoDir(repoDir);
+    if (!abs || !fs.existsSync(abs)) return { ok: false, branches: [] };
+    return {
+      ok: true,
+      current: gitLocalAdapter.getCurrentBranch({ cwd: abs }),
+      branches: gitLocalAdapter.listLocalBranches({ cwd: abs }),
+    };
+  });
+  handle("code-diff", (repoDir, base, head) => {
+    const abs = registeredRepoDir(repoDir);
+    if (!abs || !fs.existsSync(abs)) return { ok: false, error: "Repository folder not found." };
+    return {
+      ok: true,
+      ...gitLocalAdapter.getLocalDiff(str(base, 120) || "main", str(head, 120) || "HEAD", {
+        cwd: abs,
+        maxChars: 30000,
+      }),
+    };
+  });
+  handle("code-modules", async (repoDir) => {
+    const root = registeredRepoDir(repoDir);
+    const synth = root ? await freshSynth(root) : null;
+    if (!synth) return { ok: false, modules: [] };
+    return {
+      ok: true,
+      stats: synth.codeIndex.stats,
+      modules: synth.codeIndex.modules.map((m) => ({
+        relPath: m.relPath,
+        language: m.language,
+        totalLines: m.structure.totalLines,
+        classes: m.structure.classes.map((c) => c.name),
+        functions: m.structure.functions.map((f) => f.name),
+        markdown: m.markdown,
+      })),
+    };
+  });
+  handle("code-context", async (repoDir) => {
+    try {
+      const root = registeredRepoDir(repoDir);
+      const synth = root ? await freshSynth(root) : null;
+      if (!synth) return { ok: false, error: "Repository folder not found." };
+      const compiled = synth.compileContextFile({ maxModules: 500, maxChars: 240000 });
+      const repoName = path.basename(synth.repoDir) || "repository";
+      const fileName = `${repoName}-context.md`;
+      const activeBranch = synth.gitRegistry.activeBranch;
+      const summary = `Unified offline Code-to-MD context for ${repoName} (${activeBranch}) covering ${compiled.metrics.includedModules} modules (${compiled.metrics.compressionPct}% compressed).`;
+      return {
+        ok: true,
+        fileName,
+        activeBranch,
+        summary,
+        markdown: compiled.markdown,
+        metrics: compiled.metrics,
+      };
+    } catch (error) {
+      logError("Failed to compile single repository context file", error);
+      return { ok: false, error: error?.message || "Failed to compile context file." };
+    }
+  });
+  handle("code-context-download", async (repoDir) => {
+    try {
+      const root = registeredRepoDir(repoDir);
+      const synth = root ? await freshSynth(root) : null;
+      if (!synth) return { ok: false, error: "Repository folder not found." };
+      const compiled = synth.compileContextFile({ maxModules: 500, maxChars: 240000 });
+      const repoName = path.basename(synth.repoDir) || "repository";
+      const defaultName = `${repoName}-context.md`;
+      const targetWin = win.webContents() ? BrowserWindow.fromWebContents(win.webContents()) : null;
+      const r = await dialog.showSaveDialog(targetWin, {
+        defaultPath: defaultName,
+        filters: [{ name: "Markdown", extensions: ["md"] }],
+      });
+      if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+      fs.writeFileSync(r.filePath, compiled.markdown, "utf8");
+      return { ok: true, path: r.filePath };
+    } catch (error) {
+      logError("Failed to download repository context file", error);
+      return { ok: false, error: error?.message || "Could not save file." };
+    }
+  });
   handle("start-meeting", () => {
     if (typeof onStartMeeting === "function") void onStartMeeting();
   });

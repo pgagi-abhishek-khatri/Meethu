@@ -7,6 +7,7 @@ const crypto = require("crypto");
 const { RAG, LIMITS, MIME, classify, checkSize, extOf } = require("./config");
 const { chunkText, planWindows, mmss } = require("./chunker");
 const { readText, readOffice, splitPdf } = require("./extract");
+const { convertCodeToMarkdown, chunkCodeAst } = require("./codeExtract");
 const { mediaPart } = require("./embedClient");
 const { pool } = require("./openrouter");
 const { buildProfile } = require("./profileBuilder");
@@ -74,9 +75,9 @@ function createIngestor({
     const bill = (r) => ((tokens += r?.tokens ?? 0), (cost += r?.cost ?? 0));
     let workDir = null;
     try {
-      const cl = clients();
-      if (!cl) throw Object.assign(new Error("no key"), { code: "no_key" });
       const kind = classify(file.name);
+      const cl = clients();
+      if (!cl && kind !== "code") throw Object.assign(new Error("no key"), { code: "no_key" });
       let stat;
       try {
         stat = fs.statSync(file.path);
@@ -101,7 +102,16 @@ function createIngestor({
       let chunks = [];
       let note = null;
       let extractedRawText = null;
-      if (kind === "text" || kind === "office") {
+      if (kind === "code") {
+        set({ status: "analysing", stage: "Analyzing code structure" });
+        const rawCode = fs.readFileSync(file.path, "utf8");
+        const structMd = convertCodeToMarkdown(rawCode, file.name);
+        extractedRawText = structMd;
+        chunks = chunkCodeAst(rawCode, file.name, {
+          targetChars: cfg.chunkChars,
+          minChars: cfg.minChunkChars,
+        }).filter(worthIndexing);
+      } else if (kind === "text" || kind === "office") {
         const r = kind === "text" ? readText(file.path) : await readOffice(file.path);
         extractedRawText = r.text;
         if (r.partial) note = "Only the first part of this file was indexed (it is very long).";
@@ -234,22 +244,30 @@ function createIngestor({
         cost,
       });
 
-      // ---- embed and summarise at the same time
-      set({ status: "embedding", stage: `Embedding ${chunks.length} pieces`, note });
-      const dims = cl.embed.dims;
+      // ---- embed and summarise at the same time (100% vectorless for kind === "code")
+      const isVectorlessCode = kind === "code";
+      set({
+        status: isVectorlessCode ? "indexing" : "embedding",
+        stage: isVectorlessCode ? `Indexing ${chunks.length} code blocks (vectorless)` : `Embedding ${chunks.length} pieces`,
+        note,
+      });
+      const dims = cl?.embed?.dims ?? null;
       const docText = chunks.map((c) => c.text).join("\n\n");
-      const summaryP = cl.analyze
-        .summarize({ name: file.name, kind, text: docText })
-        .then((r) => (bill(r), r.summary))
-        .catch(
-          (e) => (
-            rec("summary_failed", { error: e.message }),
-            docText.slice(0, 500).replace(/\s+/g, " ")
-          )
-        );
+      const summaryP = isVectorlessCode
+        ? Promise.resolve(extractedRawText.slice(0, 1200))
+        : cl.analyze
+            .summarize({ name: file.name, kind, text: docText })
+            .then((r) => (bill(r), r.summary))
+            .catch(
+              (e) => (
+                rec("summary_failed", { error: e.message }),
+                docText.slice(0, 500).replace(/\s+/g, " ")
+              )
+            );
 
-      // Skip slow LLM JSON profiling when OKF delta ingestion is active (unless catalogMode === "profile").
+      // Skip slow LLM JSON profiling when OKF delta ingestion is active or for vectorless code files.
       const wantsProfile =
+        !isVectorlessCode &&
         (!deltaIngest || cfg.catalogMode === "profile") &&
         !cfg.skipProfile &&
         typeof cl.analyze?.ask === "function";
@@ -273,6 +291,41 @@ function createIngestor({
         .join(", ");
       const titleOf = (c) =>
         `${file.name}${standingTag ? ` [${standingTag}]` : ""}${c.meta.heading ? ` · ${c.meta.heading}` : ""}`;
+      // Vectorless FTS5 + cAST fast-path for code files: 0 vector embeddings, 0 embedding API cost.
+      if (isVectorlessCode) {
+        const [summary, profile] = await settleAll([summaryP, profileP]);
+        if (!rag.file(file.id)) return rec("removed");
+        rag.replaceChunks(
+          file.id,
+          file.project_id,
+          chunks.map((c) => ({
+            text: c.text,
+            meta: c.meta,
+            embed: "lexical",
+            hash: sha1(`lexical|${titleOf(c)}|${c.text}`),
+            vec: null,
+          })),
+          null
+        );
+        rec("embedded", { mode: "vectorless_lexical", texts: 0, cached: 0, native: 0, tokens: 0, cost: 0 });
+        set({
+          status: "ready",
+          stage: null,
+          summary,
+          profile: profile ? JSON.stringify(profile) : null,
+          profile_v: profile ? PROFILE_VERSION : null,
+          hash,
+          chunk_count: chunks.length,
+          tokens,
+          cost,
+          indexed_at: now(),
+          note,
+          error: null,
+        });
+        rec("done", { chunks: chunks.length, tokens, cost, summary: summary.slice(0, 120) });
+        return;
+      }
+
       // When bi-temporal deltaIngest is wired for text/office/pdf documents, run batched delta ingestion
       // so unchanged sections reuse cached vectors, modified features supersede predecessors atomically,
       // and unmatched sections remain searchable with contextual headers.

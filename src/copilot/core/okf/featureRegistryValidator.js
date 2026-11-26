@@ -14,9 +14,12 @@ const FEATURE_ID_REGEX = /^feat:[a-z0-9_:-]+$/;
  * Validates a loaded Feature Registry data structure.
  *
  * @param {Object} data - Parsed feature registry object from YAML/JSON
+ * @param {{ manifestIds?: string[] }} [options] - ids in the OKF manifest; when given, a cited `OKF-####` document
+ *   must be one of them (other ids name project documents and can only be flagged, not verified)
  * @returns {{ valid: boolean, errors: string[], warnings: string[] }}
  */
-function validateFeatureRegistry(data) {
+function validateFeatureRegistry(data, { manifestIds = null } = {}) {
+  const knownDocs = Array.isArray(manifestIds) ? new Set(manifestIds) : null;
   const errors = [];
   const warnings = [];
 
@@ -124,6 +127,27 @@ function validateFeatureRegistry(data) {
         `${loc} (${feat.feature_id}): Invalid 'implementation_status' '${feat.implementation_status}'. Allowed: ${Array.from(VALID_IMPLEMENTATION_STATUSES).join(", ")}`
       );
     }
+
+    // 7a. Provenance: a cited OKF document must exist in the manifest
+    const OKF_ID = /^OKF-[0-9]{4}$/;
+    const checkProvenance = (sources, label) => {
+      if (!knownDocs || !Array.isArray(sources)) return;
+      sources.forEach((src, sIdx) => {
+        const id = src && typeof src === "object" ? src.document_id : null;
+        if (typeof id !== "string" || !id) return;
+        if (OKF_ID.test(id)) {
+          if (!knownDocs.has(id))
+            errors.push(`${label}[${sIdx}]: ${feat.feature_id} cites ${id}, which is not in the OKF manifest`);
+        } else {
+          warnings.push(
+            `${label}[${sIdx}]: ${feat.feature_id} cites '${id}', not an OKF document; its provenance cannot be verified here`
+          );
+        }
+      });
+    };
+    checkProvenance(feat.sources, `${loc}.sources`);
+    if (Array.isArray(feat.versions))
+      feat.versions.forEach((v, vi) => checkProvenance(v?.sources, `${loc}.versions[${vi}].sources`));
 
     // 7. Sources provenance validation helper
     const validateSources = (sources, pathLabel) => {

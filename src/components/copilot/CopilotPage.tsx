@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { AudioLines, Brain, Folder, MessageSquareText, Settings2 } from "../icons";
+import { AudioLines, Brain, Code2, Folder, MessageSquareText, Settings2 } from "../icons";
 import { Button } from "../ui/button";
 import { Toggle } from "../ui/toggle";
 import { SettingsGroup, SettingsRow, SettingsSection } from "../ui/SettingsSection";
@@ -8,16 +8,18 @@ import { cn } from "../lib/utils";
 import { BlurField, useCopilotSettings } from "./CopilotFields";
 import CopilotSettingsTab, { DenoiseRow, OpenRouterKeySection } from "./CopilotSettingsTab";
 import CopilotProjects from "./CopilotProjects";
+import CopilotCodePanel from "./CopilotCodePanel";
 import { WORKING } from "./copilotFormat";
 import CopilotMeetings from "./CopilotMeetings";
 import { Block, PaneHeader } from "./CopilotPane";
 import { useMeetingAudio } from "./CopilotOverview";
 import type { FileReferenceTarget, PastSession, Project } from "./copilotApi";
 
-export type CopilotSection = "projects" | "meetings" | "behaviour" | "audio" | "settings";
+export type CopilotSection = "projects" | "code" | "meetings" | "behaviour" | "audio" | "settings";
 type Section = CopilotSection;
 const SECTIONS: { id: Section; label: string; icon: typeof Folder }[] = [
   { id: "projects", label: "Projects", icon: Folder },
+  { id: "code", label: "Code", icon: Code2 },
   { id: "meetings", label: "Meetings", icon: MessageSquareText },
   { id: "behaviour", label: "Behaviour", icon: Brain },
   { id: "audio", label: "Audio & keys", icon: AudioLines },
@@ -236,6 +238,7 @@ export default function CopilotPage({
         onClearPendingRef={onClearPendingRef}
       />
     ),
+    code: <CopilotCodePanel />,
     meetings: (
       <CopilotMeetings
         list={meetings}

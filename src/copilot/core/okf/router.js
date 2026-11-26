@@ -7,6 +7,7 @@ const {
   classifyTemporalIntent,
   extractTemporalParameters,
 } = require("./temporalRouter");
+const { classifyIntent: classifyWhenToCall, ROUTES } = require("../trigger/whenToCallRouter");
 const {
   resolveEvidence,
   normalizeEvidence,
@@ -15,6 +16,8 @@ const {
   formatEvidenceForContext,
   resolvePrecedence,
 } = require("./versionResolver");
+
+const { rankDocuments, resolveSuperseded } = require("./precedence");
 
 const CANONICAL_INTENT =
   /\b(official|approved|contract|standard|policy|formula|rule|architecture|invariant|spec|specification|canonical|okf-[0-9]{4}|feat:[a-z0-9_:-]+)\b/i;
@@ -46,12 +49,59 @@ function createOkfRouter({ defaultBudget = 2800 } = {}) {
     const isCanonical = CANONICAL_INTENT.test(q);
     const isExploratory = EXPLORATORY_INTENT.test(q);
 
+    // Dynamic When-to-Call Router check (Tier 1 & Tier 2)
+    const whenToCall = classifyWhenToCall(q, {
+      hasIndex: Boolean(spec.project || spec.projectAuto),
+      localCodeMode: Boolean(spec.localCodeMode),
+    });
+    if (whenToCall.route === ROUTES.DIRECT_ANSWER && !isCanonical) {
+      return attachTemporal({
+        route: "direct",
+        confidence: whenToCall.confidence,
+        reason: whenToCall.rationale,
+        matched_signals: ["intent:direct", ...(whenToCall.signals || [])],
+        matched_doc_ids: [],
+        classifier_version: CLASSIFIER_VERSION,
+        whenToCall,
+      });
+    }
+
+    // Naming a canonical entity outright (feat:… or OKF-####) is a request for the canonical record, even when the
+    // wording also sounds like a code question ("specification", "architecture").
+    const namesCanonicalEntity = /\bfeat:[a-z0-9_:-]+\b/i.test(q) || /\bokf-[0-9]{4}\b/i.test(q);
+    if (whenToCall.route === ROUTES.LOCAL_CODE_VECTORLESS && !namesCanonicalEntity) {
+      return attachTemporal({
+        route: "local_vectorless",
+        confidence: whenToCall.confidence,
+        reason: whenToCall.rationale,
+        matched_signals: ["intent:local_code_vectorless", ...(whenToCall.signals || [])],
+        matched_doc_ids: [],
+        classifier_version: CLASSIFIER_VERSION,
+        whenToCall,
+      });
+    }
+
+    if (whenToCall.route === ROUTES.OKF_CANONICAL) {
+      signals.push("intent:git_canonical");
+    }
+
     if (isCanonical) signals.push("intent:canonical");
     if (isExploratory) signals.push("intent:exploratory");
 
     // Match entities against registry
     const matches = registry && typeof registry.lookup === "function" ? registry.lookup(q) : [];
-    const approvedMatches = matches.filter((m) => m.status === "approved");
+    // A superseded document leads to the one that replaced it; anything not approved (and with no approved
+    // successor) is not canonical. Several matches are ordered by the manifest's precedence rules.
+    const getById = (id) =>
+      typeof registry?.getDocumentById === "function" ? registry.getDocumentById(id) : null;
+    const resolved = new Map();
+    for (const m of matches) {
+      const r = resolveSuperseded(m, getById);
+      if (!r.doc || resolved.has(r.doc.id)) continue;
+      resolved.set(r.doc.id, r.doc);
+      if (r.redirected) signals.push(`redirect:${m.id}->${r.doc.id}`);
+    }
+    const approvedMatches = rankDocuments([...resolved.values()]);
     const matchedDocIds = approvedMatches.map((m) => m.id);
 
     for (const id of matchedDocIds) {

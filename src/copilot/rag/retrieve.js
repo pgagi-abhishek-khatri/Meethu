@@ -3,6 +3,8 @@
 // when the moment needs the project's own documents (the decider's `needs_project`, a typed question, a high-effort
 // rerun). `prefetch` lets the question's embedding start while the decider is still thinking.
 const { RAG } = require("./config");
+const { fenceRetrieved } = require("./fence");
+const { rewriteQuery } = require("./queryRewrite");
 const { mmss } = require("./chunker");
 const { allocate, renderForDecider, renderForAnswer, renderForWriter } = require("./profile");
 const { standingMap, precedenceNote, passageTag } = require("./docPrecedence");
@@ -93,12 +95,29 @@ function createRetriever({
     prefetch(query, projectIds) {
       const q = clean(query);
       const cl = clients();
-      if (!q || !cl || !indexed(projectIds).length) return;
+      const ids = indexed(projectIds);
+      if (!q || !cl || !ids.length) return;
+      // The matrix may have been invalidated by a new file: rebuild it now, while the decider is still thinking.
+      try {
+        for (const id of ids) rag.warm?.(id, cfg.dims);
+      } catch (error) {
+        log({ event: "matrix_warm_failed", error: error?.message }); // the search itself would hit the same error and report it
+      }
       cl.embed.embedQueries([q]).catch(() => {});
     },
 
     // -> { text, used: [{ file, where, score }], skipped: null | reason, ms }
-    async retrieve({ query, projectIds, deep = false, why = "", expand = null, minScore = 0, asOf = null, version = null }) {
+    async retrieve({
+      query,
+      projectIds,
+      deep = false,
+      why = "",
+      expand = null,
+      minScore = 0,
+      asOf = null,
+      version = null,
+      vectorless = false,
+    }) {
       const t0 = now();
       const q = clean(query);
       const done = (r) => {
@@ -116,24 +135,99 @@ function createRetriever({
       const cl = clients();
       const lim = deep ? cfg.deep : cfg.fast;
 
-      // Phase 5: Temporal OKF Router Gate runs BEFORE vector retrieval
-      let temporalRouting = null;
-      if (temporalRouter && typeof temporalRouter.routeTemporalQuery === "function" && ids.length) {
-        try {
-          const trRes = await temporalRouter.routeTemporalQuery({
-            projectId: ids[0],
-            projectIds: ids,
-            query: q,
-            asOf,
-            version,
-          });
-          if (trRes && trRes.status === "RESOLVED" && (trRes.passages || trRes.evidence?.length)) {
-            temporalRouting = trRes;
-          }
-        } catch (e) {
-          log({ event: "temporal_router_error", error: e.message });
-        }
-      }
+      // queries: the moment itself, plus what the query model wrote (`expand`); the search waits for it unless
+      // `queryWaitMs` caps the wait.
+      // The moment's embedding starts at once (usually cached by the prefetch), so the written queries
+      // only add their own embedding after them, and a slow query model costs nothing but its queries.
+      const queries = [q];
+      // What was said, rewritten without a model: identifiers split, filler dropped. It feeds the keyword search.
+      const rewrite = cfg.fastQueryModel ? { queries: [], needsModel: true } : rewriteQuery(q);
+      // The fast path never waits on the query model when the rewrite has enough to search; a paid-for expander
+      // (`free`) and the deep path still use theirs.
+      const useModel = expand && (expand.free || deep || rewrite.needsModel);
+      for (const rq of rewrite.queries) if (rq && !queries.includes(rq)) queries.push(rq);
+      // Every wait is cleared once it is no longer needed: a pending 2.5 s timer per search adds up.
+      const timers = new Set();
+      const timeout = (ms, value) =>
+        new Promise((r) => {
+          const t = setTimeout(() => (timers.delete(t), r(value)), ms);
+          timers.add(t);
+        });
+      const clearTimers = () => {
+        for (const t of timers) clearTimeout(t);
+        timers.clear();
+      };
+      const embedOf = (texts) =>
+        cl
+          ? cl.embed.embedQueries(texts).then(
+              (r) => ({ r }),
+              (e) => ({ e })
+            )
+          : null;
+      const slow = { e: { code: "slow" } };
+      const rawEmbed = vectorless ? null : embedOf([q]);
+      // The moment's vector is only "slow" once the search has nothing else to wait for: while the query model
+      // is still writing, waiting for it costs nothing. Its deadline is embedWaitMs from the start, or
+      // `embedGraceMs` after the query model settled when that is later. A vector that misses it still lands in
+      // the embed client's cache for the next search.
+      const vectorWait = () =>
+        rawEmbed
+          ? Promise.race([
+              rawEmbed,
+              timeout(
+                Math.max(embedWaitMs - (now() - t0), written ? (cfg.embedGraceMs ?? 300) : 0),
+                slow
+              ),
+            ])
+          : null;
+      // The query model starts at once, beside the moment's embedding; it is aborted when its answer is no longer wanted.
+      const writing = useModel ? new AbortController() : null;
+      const e0 = now();
+      const written = useModel
+        ? Promise.resolve()
+            .then(() => expand(q, { signal: writing.signal }))
+            .then(
+              (r) => ({ r }),
+              (e) => ({ e })
+            )
+        : null;
+      // The slow things start together: the temporal router, one authoritative lookup per project, the moment's
+      // embedding and the query writer. Waiting for each in turn made the search the sum of them; now it is the
+      // slowest. The results are still used in the same order of preference (temporal, then the first project that
+      // resolves), and the writer is cancelled when a temporal answer makes its queries pointless.
+      const temporalP =
+        temporalRouter && typeof temporalRouter.routeTemporalQuery === "function" && ids.length
+          ? temporalRouter
+              .routeTemporalQuery({ projectId: ids[0], projectIds: ids, query: q, asOf, version })
+              .then(
+                (trRes) =>
+                  trRes && trRes.status === "RESOLVED" && (trRes.passages || trRes.evidence?.length)
+                    ? trRes
+                    : null,
+                (e) => {
+                  log({ event: "temporal_router_error", error: e.message });
+                  return null;
+                }
+              )
+          : Promise.resolve(null);
+      const alsP =
+        als && typeof als.lookup === "function" && ids.length
+          ? Promise.all(
+              ids.map((pid) =>
+                Promise.resolve()
+                  .then(() => als.lookup({ projectId: pid, query: q }))
+                  .catch((e) => {
+                    log({ event: "als_error", error: e.message });
+                    return null;
+                  })
+              )
+            )
+          : Promise.resolve([]);
+      const [temporalRouting, alsResults] = await Promise.all([temporalP, alsP]);
+      // Phase 4: Authoritative Lookup Service (ALS), used only when there is no temporal routing.
+      const authoritativeResult = temporalRouting
+        ? null
+        : (alsResults.find((r) => r && r.status === "RESOLVED" && r.facts?.length) ?? null);
 
       // Fast-path isolation for HISTORICAL_STATE and DIFF_EVOLUTION:
       // Never pollute a point-in-time or version-diff query with unrelated active vector chunks.
@@ -152,7 +246,9 @@ function createRetriever({
           role: ev.role,
           version: ev.version,
         }));
-        const text = `Authoritative temporal passages from the USER's project files:\n\n${temporalRouting.passages}`;
+        const text = `Authoritative temporal passages from the USER's project files:\n\n${fenceRetrieved(temporalRouting.passages)}`;
+        writing?.abort();
+        clearTimers();
         return done({
           log: {
             mode: "temporal",
@@ -181,75 +277,6 @@ function createRetriever({
         });
       }
 
-      // Phase 4: Authoritative Lookup Service (ALS) runs BEFORE vector retrieval (fallback if no temporal routing)
-      let authoritativeResult = null;
-      if (!temporalRouting && als && typeof als.lookup === "function" && ids.length) {
-        try {
-          for (const pid of ids) {
-            const alsRes = await als.lookup({
-              projectId: pid,
-              query: q,
-            });
-            if (alsRes && alsRes.status === "RESOLVED" && alsRes.facts?.length) {
-              authoritativeResult = alsRes;
-              break;
-            }
-          }
-        } catch (e) {
-          log({ event: "als_error", error: e.message });
-        }
-      }
-
-      // queries: the moment itself, plus what the query model wrote (`expand`); the search waits for it unless
-      // `queryWaitMs` caps the wait.
-      // The moment's embedding starts at once (usually cached by the prefetch), so the written queries
-      // only add their own embedding after them, and a slow query model costs nothing but its queries.
-      const queries = [q];
-      // Every wait is cleared once it is no longer needed: a pending 2.5 s timer per search adds up.
-      const timers = new Set();
-      const timeout = (ms, value) =>
-        new Promise((r) => {
-          const t = setTimeout(() => (timers.delete(t), r(value)), ms);
-          timers.add(t);
-        });
-      const clearTimers = () => {
-        for (const t of timers) clearTimeout(t);
-        timers.clear();
-      };
-      const embedOf = (texts) =>
-        cl
-          ? cl.embed.embedQueries(texts).then(
-              (r) => ({ r }),
-              (e) => ({ e })
-            )
-          : null;
-      const slow = { e: { code: "slow" } };
-      const rawEmbed = embedOf([q]);
-      // The moment's vector is only "slow" once the search has nothing else to wait for: while the query model
-      // is still writing, waiting for it costs nothing. Its deadline is embedWaitMs from the start, or
-      // `embedGraceMs` after the query model settled when that is later. A vector that misses it still lands in
-      // the embed client's cache for the next search.
-      const vectorWait = () =>
-        rawEmbed
-          ? Promise.race([
-              rawEmbed,
-              timeout(
-                Math.max(embedWaitMs - (now() - t0), written ? (cfg.embedGraceMs ?? 300) : 0),
-                slow
-              ),
-            ])
-          : null;
-      // The query model starts at once, beside the moment's embedding; it is aborted when its answer is no longer wanted.
-      const writing = expand ? new AbortController() : null;
-      const e0 = now();
-      const written = expand
-        ? Promise.resolve()
-            .then(() => expand(q, { signal: writing.signal }))
-            .then(
-              (r) => ({ r }),
-              (e) => ({ e })
-            )
-        : null;
       const weak = (best, embed) => {
         writing?.abort();
         clearTimers();
@@ -337,11 +364,11 @@ function createRetriever({
       const vectorWeights = [];
       const cos = new Map(); // chunk id -> best cosine over all queries
       const near = new Set(); // chunks within `margin` of the best match of a query that found them
-      let embedMs = null;
+      let embedMs = vectorless ? 0 : null;
       let embedCost = 0;
-      let mode = "keyword";
+      let mode = vectorless ? "vectorless_lexical" : "keyword";
       let embedError = null;
-      if (cl) {
+      if (cl && !vectorless) {
         const e0 = now();
         const [raw, extra] = await Promise.all([
           vectorWait(),
@@ -404,6 +431,7 @@ function createRetriever({
         });
       const kept = fused
         .filter((f) => {
+          if (vectorless) return true;
           const c = cos.get(f.id) ?? -1;
           // close enough in meaning (and not far behind the best match), or it holds the very words asked for
           const exact = (kwRank.get(f.id) ?? 99) < cfg.strongKeyword;
@@ -544,7 +572,7 @@ function createRetriever({
       if (recencyAnchor) parts.push(recencyAnchor);
 
       const text = parts.length
-        ? `Passages from the USER's project files that match this moment (use them when they answer it; say where a fact comes from in plain words, like "from the pricing sheet"; never quote a path):\n\n${note ? `${note}\n\n` : ""}${parts.join("\n\n")}`
+        ? `Passages from the USER's project files that match this moment (use them when they answer it; say where a fact comes from in plain words, like "from the pricing sheet"; never quote a path):\n\n${note ? `${note}\n\n` : ""}${fenceRetrieved(parts.join("\n\n"))}`
         : "";
       return done({
         log: {

@@ -18,6 +18,7 @@ const { speakerLabel, clip, oneLine } = require("../core/decision/buildState");
 const { isDuplicate } = require("../core/decision/duplicateGuard");
 const { judgeSufficiency } = require("../core/answer/sufficiency");
 const { createScheduler, DEFAULT_TRIGGER_CONFIG } = require("../core/trigger/scheduler");
+const { classifyIntent, ROUTES } = require("../core/trigger/whenToCallRouter");
 const { getCopilotAiConfig } = require("../config/aiDefaults");
 const { createMainModel } = require("./mainCall");
 const { createAnswerRunner } = require("./answerRunner");
@@ -84,6 +85,7 @@ function createEngine({
   getReference = () => "", // text of the project files not indexed yet (small text files are inlined as before)
   onSignal = () => {}, // feedback for the behaviour guide: ("down" | "wanted", the moment's words)
   rag = null, // project search: { hasIndex(), catalog(), prefetch(query), retrieve({query, deep, why, expand}) }
+  localCode = null, // offline vectorless local code repos: { hasRepos(), catalog(), search(query) }
   okf = null, // OKF knowledge router: { registry, router }
   decisionCfg = DEFAULT_DECISION_CONFIG,
   triggerCfg = DEFAULT_TRIGGER_CONFIG,
@@ -105,6 +107,13 @@ function createEngine({
   const hasIndex = () => {
     try {
       return !!rag?.hasIndex();
+    } catch {
+      return false;
+    }
+  };
+  const hasLocalCode = () => {
+    try {
+      return !!localCode?.hasRepos?.();
     } catch {
       return false;
     }
@@ -406,7 +415,8 @@ function createEngine({
       deep: false,
       why: "gate",
       minScore: 0,
-      expand: written ? async () => ({ queries }) : null, // already paid for: not counted again
+      vectorless: Boolean(spec.vectorless),
+      expand: written ? Object.assign(async () => ({ queries }), { free: true }) : null, // already paid for: not counted again
     });
     trace({
       type: "context",
@@ -534,6 +544,12 @@ function createEngine({
     const okfNeedsPrepare = preOkfClass
       ? preOkfClass.route === "okf" || preOkfClass.route === "mixed"
       : Boolean(okf?.registry?.hasBundle?.());
+    const codeIntent = hasLocalCode() ? classifyIntent(spec.focus, { localCodeMode: true }) : null;
+    const localCodeNeedsPrepare =
+      hasLocalCode() &&
+      (codeIntent?.route === ROUTES.LOCAL_CODE_VECTORLESS ||
+        codeIntent?.route === ROUTES.OKF_CANONICAL ||
+        Boolean(spec.project));
 
     const handle = s.runner.run({
       id: job.id,
@@ -549,12 +565,14 @@ function createEngine({
         plan: st.plan ?? "",
         reference: getReference() ?? "",
         behavior: st.behavior ?? "",
-        catalog: hasIndex() ? (rag.catalog() ?? "") : "",
+        catalog: [hasIndex() ? rag.catalog() : "", hasLocalCode() ? localCode.catalog?.() : ""]
+          .filter(Boolean)
+          .join("\n\n"),
       },
       // The moment needs project or canonical documents: find and route the matching passages before the model is called.
       // Runs inside the card's own time; the question's embedding was usually warmed while the decider ran.
       prepare:
-        spec.ragGate || ((spec.project || spec.projectAuto) && hasIndex()) || okfNeedsPrepare
+        spec.ragGate || ((spec.project || spec.projectAuto) && hasIndex()) || okfNeedsPrepare || localCodeNeedsPrepare
           ? async () => {
               // Fast-path: if the query unambiguously targets a canonical OKF document (OKF-XXXX / canonical title)
               // and does not require meeting/project RAG, skip Gemma query expansion and vector search completely.
@@ -589,6 +607,20 @@ function createEngine({
                 }
               }
 
+              // Local Vectorless Code Repo Intelligence (0 vectors, 0 GitHub API):
+              // When connected local repos match the query, gather Code-to-MD & local git passages.
+              let localCodeResult = null;
+              if (
+                localCodeNeedsPrepare &&
+                codeIntent?.route !== ROUTES.DIRECT_ANSWER
+              ) {
+                try {
+                  localCodeResult = await localCode.search(spec.focus);
+                } catch {
+                  localCodeResult = null;
+                }
+              }
+
               let ragResult = null;
               let resolvedByTemporal = false;
               let sufficiency = "enough";
@@ -598,6 +630,7 @@ function createEngine({
                 const r = await rag.retrieve({
                   query: spec.focus,
                   deep: !!spec.deep,
+                  vectorless: preOkfClass?.route === "local_vectorless",
                   why: spec.project
                     ? spec.proactive
                       ? "decider"
@@ -644,9 +677,17 @@ function createEngine({
               // so okf.router does not truncate them against a short YAML metadata summary.
               if (resolvedByTemporal && ragResult?.text) {
                 return {
-                  passages: ragResult.text,
-                  files: ragResult.files || [],
+                  passages: [localCodeResult?.passages, ragResult.text].filter(Boolean).join("\n\n"),
+                  files: [...new Set([...(localCodeResult?.files || []), ...(ragResult.files || [])])],
                   fileRefs: ragResult.fileRefs || [],
+                };
+              }
+
+              if (localCodeResult?.passages && !ragResult?.text && (!okf || !okf.router)) {
+                return {
+                  passages: localCodeResult.passages,
+                  files: localCodeResult.files || [],
+                  fileRefs: [],
                 };
               }
 
@@ -672,25 +713,35 @@ function createEngine({
                   provenance: routed.provenance || null,
                 });
                 // a canonical OKF document answered it: the files' own search result no longer decides
-                if (routed.okfDocId) sufficiency = "enough";
+                if (routed.okfDocId || localCodeResult?.passages) sufficiency = "enough";
+                const mergedPassages = [localCodeResult?.passages, routed.passages].filter(Boolean).join("\n\n");
+                const mergedFiles = [...new Set([...(localCodeResult?.files || []), ...(routed.files || [])])];
                 const routedRefs = ragResult?.fileRefs?.length
                   ? ragResult.fileRefs
-                  : (routed.files || []).map((name) => ({ name }));
+                  : mergedFiles.map((name) => ({ name }));
                 return withSufficiency(
-                  { passages: routed.passages, files: routed.files, fileRefs: routedRefs },
+                  { passages: mergedPassages, files: mergedFiles, fileRefs: routedRefs },
                   spec,
                   sufficiency
                 );
               }
 
+              if (localCodeResult?.passages) sufficiency = "enough";
+              const fallbackPassages = [
+                localCodeResult?.passages,
+                ragResult ? ragResult.text || ragResult.passages || "" : "",
+              ]
+                .filter(Boolean)
+                .join("\n\n");
+              const fallbackFiles = [
+                ...new Set([...(localCodeResult?.files || []), ...(ragResult?.files || [])]),
+              ];
               return withSufficiency(
-                ragResult
-                  ? {
-                      passages: ragResult.text || ragResult.passages || "",
-                      files: ragResult.files || [],
-                      fileRefs: ragResult.fileRefs || [],
-                    }
-                  : { passages: "", files: [], fileRefs: [] },
+                {
+                  passages: fallbackPassages,
+                  files: fallbackFiles,
+                  fileRefs: ragResult?.fileRefs || [],
+                },
                 spec,
                 sufficiency
               );

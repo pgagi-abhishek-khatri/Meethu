@@ -28,7 +28,7 @@ const SAY_IT = `Write every point as something the USER can say out loud to the 
 
 const BY_DELIVERABLE = {
   quick_answer:
-    "Give the direct answer as 2 to 4 short bullets, at most 45 words in total (keep it tighter when possible, but never drop required numbers, limits, roles, or caveats from the project files). The first bullet is the direct answer. When project passages include an AUTHORITATIVE or most-trusted document, state its current delivered fact first and never present a superseded proposal as current.",
+    "Give the direct answer as 2 to 4 short bullets, at most 45 words in total (keep it tighter when possible, but never drop required numbers, limits, roles, or caveats from the project files). The first bullet is the direct answer. When project passages include an AUTHORITATIVE or most-trusted document, state its current delivered fact first and never present a superseded proposal as current. When a passage is marked CANONICAL SPECIFICATION and it disagrees with the call or an assumption, say it is the canonical specification (name the document) before the fact.",
   explanation:
     "Explain the term, feature or idea so someone who does not know it understands it: 3 or 4 very short bullets, at most 45 words in total.",
   talking_points:

@@ -331,9 +331,14 @@ function createAuthoritativeLookup({
     const q = String(query || "").trim();
 
     // Cache key construction
-    const cacheKey = `${projectId}:${featureId || ""}:${version || ""}:${asOf || ""}:${asOfStart || ""}:${asOfEnd || ""}:${includeDeprecated}:${includeDrafts}:${q}`;
+    // Spacing and end punctuation never change what is asked; case can (ids match exactly), so it stays in the key.
+    const qKey = q.replace(/\s+/g, " ").replace(/[\s.?!,;:]+$/g, "");
+    const cacheKey = `${projectId}:${featureId || ""}:${version || ""}:${asOf || ""}:${asOfStart || ""}:${asOfEnd || ""}:${includeDeprecated}:${includeDrafts}:${qKey}`;
     if (!bypassCache && cache.has(cacheKey)) {
-      return cache.get(cacheKey);
+      const hit = cache.get(cacheKey);
+      cache.delete(cacheKey); // least recently used goes first
+      cache.set(cacheKey, hit);
+      return hit;
     }
 
     // 1. Match canonical feature deterministically

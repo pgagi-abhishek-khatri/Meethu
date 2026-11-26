@@ -108,7 +108,14 @@ test(
     assert.equal(kw.length, 1);
 
     const r = createRetriever({ rag: store.rag, clients: fakeClients() });
-    assert.match(r.catalog([pid]), /plans\.md: Summary of plans\.md/);
+    // the default catalog mode is "profile": the file's brief, not its one-line summary
+    assert.match(r.catalog([pid]), /- plans\.md: Oyaara plans and refunds\./);
+    const summaryMode = createRetriever({
+      rag: store.rag,
+      clients: fakeClients(),
+      catalogMode: "summary",
+    });
+    assert.match(summaryMode.catalog([pid]), /plans\.md: Summary of plans\.md/);
     const out = await r.retrieve({ query: "what is the refund policy", projectIds: [pid] });
     assert.match(out.text, /\[plans\.md · Refund\]/);
     assert.match(out.text, /14 days/);
