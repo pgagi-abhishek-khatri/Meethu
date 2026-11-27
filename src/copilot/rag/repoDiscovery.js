@@ -717,10 +717,30 @@ function* discoverRepoSteps(
     }
   }
 
+  const compList = [...components.values()];
+  // Prune parent component dirtyFiles that belong to nested child components or excluded/build dirs (§5.1 #13)
+  for (const comp of compList) {
+    if (!comp.dirtyFiles || comp.dirtyFiles.size === 0) continue;
+    const childPrefixes = compList
+      .filter((other) => other.id !== comp.id && other.relDir && other.relDir !== ".")
+      .filter((other) => comp.relDir === "." || other.relDir.startsWith(`${comp.relDir}/`))
+      .map((other) => `${other.relDir}/`);
+    for (const df of [...comp.dirtyFiles]) {
+      const cleanDf = String(df || "").replace(/\\/g, "/").replace(/^\.\//, "");
+      const inChild = childPrefixes.some((pfx) => cleanDf.startsWith(pfx));
+      const inOut = absOutRel && (cleanDf === absOutRel || cleanDf.startsWith(`${absOutRel}/`));
+      const firstSeg = cleanDf.split("/")[0];
+      const inIgnored = firstSeg && excludeDirs.has(firstSeg);
+      if (inChild || inOut || inIgnored) {
+        comp.dirtyFiles.delete(df);
+      }
+    }
+  }
+
   files.sort((a, b) => a.relPath.localeCompare(b.relPath));
   return {
     absRoot,
-    components: [...components.values()],
+    components: compList,
     files,
     coverage,
   };

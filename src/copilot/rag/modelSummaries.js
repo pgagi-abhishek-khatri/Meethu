@@ -84,7 +84,8 @@ async function applyModelFeatureSummaries({
           messages: [
             {
               role: "system",
-              content: "Summarize what this software feature does in one plain, factual sentence (<= 160 chars). Never guess hidden behavior.",
+              content:
+                "Summarize what this software feature does for the user in 1-2 short factual sentences (<= 160 chars). Never guess hidden behavior, never copy marketing copy, and avoid filler verbs like 'handles', 'manages', or 'provides'.",
             },
             { role: "user", content: digest },
           ],

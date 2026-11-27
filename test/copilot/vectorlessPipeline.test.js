@@ -166,7 +166,7 @@ export class BillingAllowanceGuard {
 
     const singleFile = synth.compileContextFile({ maxModules: 25 });
     assert(singleFile.markdown.includes("# Repository Context:"));
-    assert(singleFile.markdown.includes("## Directory & Module Tree"));
+    assert(singleFile.markdown.includes("## Folder Purpose Table"));
     assert(singleFile.markdown.includes("## Module-by-Module Code-to-MD Specifications"));
     assert.strictEqual(singleFile.metrics.vectorCalls, 0);
     assert.strictEqual(singleFile.metrics.githubApiCalls, 0);

@@ -8,6 +8,10 @@ const CONTAINER_DIRS = new Set([
   "schemas", "routes", "api", "controllers", "hooks", "stores", "views",
   "pages", "screens", "modals", "types", "constants", "ui", "internal",
   "pkg", "cmd", "modules", "features", "domains", "packages", "test", "tests", "__tests__", "scripts",
+  // V2 §5.1 #5: exclude styling, static assets, and infra wrappers from becoming standalone features
+  "styles", "style", "css", "scss", "assets", "images", "img", "icons", "fonts",
+  "public", "static", "build", "dist", "config", "configs", "migrations", "alembic",
+  "infra", "deploy", "docker", "vendor", "mocks", "fixtures", "stories", "locales", "i18n",
 ]);
 
 const NOISY_COMMENT_RE = /^(?:eslint|@ts-|Copyright|Licensed|SPDX|TODO|FIXME|HACK|NOTE:|iOS\s+\d+|Android\s+\d+|Workaround|See\s+http|https?:\/\/|Generated file\b|Do not edit\b|Split\s+query|Drop\s+bundled\b|Container:|A\s+span\b|<[a-z]+>)/i;
@@ -148,25 +152,36 @@ function buildFeatureMap({
       const role = mod.structure?.role || "module";
       const isTest = role === "test" || role === "script";
       const fanIn = graph?.inEdges?.get(mod.relPath)?.size || 0;
+      const expSyms = (mod.structure?.functions || []).filter((f) => f.exported !== false).length + (mod.structure?.classes || []).filter((c) => c.exported !== false).length;
+      const routeHits = contracts.filter((c) => c.handlerFile === mod.relPath).length;
       const estTokens = Math.max(1, Math.round((mod.rawCodeChars || (mod.structure?.totalLines || 10) * 36) / 4));
       const syms = [
         ...(mod.structure?.classes || []).slice(0, 3).map((c) => `${c.name} L${c.line}-L${c.endLine || c.line}`),
         ...(mod.structure?.functions || []).filter((f) => f.exported !== false).slice(0, 4).map((f) => `${f.name} L${f.line}-L${f.endLine || f.line}`),
       ];
       const isUiPrimitive = /(?:^|\/)(?:components\/ui|ui\/primitives)\//i.test(mod.relPath);
+      const isEntryOrCore = role === "service/API client" || role === "route/page" || role === "entry point" || role === "model/schema" || role === "state store";
       const rawPurpose = mod.structure?.purpose || mod.purpose || "";
       feat.files.push({
         relPath: mod.relPath,
+        componentId: mod.componentId || "",
         role,
         estTokens,
         purpose: rawPurpose || `${role} (${path.basename(mod.relPath)})`,
         rawPurpose,
         parseStatus: mod.structure?.parseStatus || "full",
         language: mod.language || mod.structure?.language || "",
+        flags: mod.structure?.talksTo?.flags || [],
         todoCount: mod.todos?.length || 0,
         dirty: Boolean(mod.dirty),
         slices: syms,
-        priorityScore: (isTest ? 0 : isUiPrimitive ? 4 : 10) + fanIn * (isUiPrimitive ? 0.5 : 2) + (role === "service/API client" || role === "route/page" || role === "entry point" ? 5 : 0),
+        // V2 §3.3 centrality score: fan-in + exported symbol count + contracts + domain role
+        priorityScore:
+          (isTest ? -5 : isUiPrimitive ? 2 : 8) +
+          fanIn * (isUiPrimitive ? 0.5 : 3) +
+          Math.min(10, expSyms * 1.5) +
+          routeHits * 6 +
+          (isEntryOrCore ? 10 : 0),
         isPrimary: !isTest && role !== "utility" && !isUiPrimitive,
       });
     }
@@ -243,37 +258,48 @@ function buildFeatureMap({
       }
     }
 
+    const featFlags = [...new Set(feat.files.flatMap((f) => f.flags || []))].slice(0, 6);
+    const ownerCompIds = [...new Set(feat.files.map((f) => f.componentId).filter(Boolean))];
+
+    // V2 §6 Evidence-based status: live | flagged | partial | planned | deprecated | unknown
     if (feat.source !== "overridden") {
       const hasTodos = feat.files.reduce((s, f) => s + (f.todoCount || 0), 0);
       const hasDirty = feat.files.some((f) => f.dirty);
       const hasMethodMismatch = feat.mismatches.some((m) => m.type === "method_mismatch");
-      if (hasTodos >= 4 && feat.contracts.length === 0 && primary.length <= 2 && hasDirty) {
-        feat.status = "wip";
-      } else if (hasMethodMismatch) {
+      const allDeprecated = feat.docs.some((d) => /\bdeprecated\b/i.test(d.title || ""));
+      if (allDeprecated) {
+        feat.status = "deprecated";
+      } else if (featFlags.length > 0 && feat.contracts.length === 0) {
+        feat.status = "flagged";
+      } else if ((hasTodos >= 4 && feat.contracts.length === 0 && primary.length <= 2 && hasDirty) || hasMethodMismatch) {
         feat.status = "partial";
       } else if (primary.length === 0 && feat.docs.length > 0) {
-        feat.status = "docs-only";
+        feat.status = "planned";
+      } else if (feat.files.length === 0) {
+        feat.status = "unknown";
       } else {
         feat.status = "live";
       }
     }
 
+    // V2 §5.1 #2 + §3.4: NEVER copy a first code comment as feature description!
+    // Hierarchy: [stated] override -> [stated] matching priority doc summary -> [auto] model summary (filled later) -> grounded synthesis / "purpose unknown"
     if (!feat.description) {
       feat.docs.sort((a, bD) => (a.docTier ?? 2) - (bD.docTier ?? 2) || a.relPath.split("/").length - bD.relPath.split("/").length || a.relPath.localeCompare(bD.relPath));
       const rootDoc = feat.docs.find((d) => !d.excludeFromRules && (d.docTier ?? 2) <= 2 && d.relPath.split("/").length <= 3 && isUsefulDocSentence(d.summary));
       if (rootDoc) {
         feat.description = rootDoc.summary;
+        feat.confidence = "stated";
       } else {
-        const cleanPrimaryLead = primary.find((f) => !f.role.includes("UI") && isUsefulDocSentence(f.rawPurpose) && !f.rawPurpose.includes(".."))?.rawPurpose;
         const routes = feat.contracts.slice(0, 2).map((c) => `${c.method} ${c.path}`);
         const topNames = primary.slice(0, 3).map((f) => path.basename(f.relPath));
         const roles = [...new Set(primary.map((f) => f.role))].slice(0, 3).join(", ") || "modules";
-        if (cleanPrimaryLead && primary.length <= 6) {
-          feat.description = cleanPrimaryLead;
-        } else if (routes.length > 0) {
-          feat.description = `${feat.name} domain (${feat.files.length} files: ${topNames.join(", ")}); exposes ${routes.join(", ")}.`;
+        if (routes.length > 0) {
+          feat.description = `${feat.name}: ${feat.files.length} files (${topNames.join(", ")}); endpoints ${routes.join(", ")}.`;
+        } else if (primary.length > 0) {
+          feat.description = `${feat.name}: ${feat.files.length} files (${roles}; key: ${topNames.join(", ")}).`;
         } else {
-          feat.description = `${feat.name} domain covering ${feat.files.length} files (${roles}${topNames.length ? `; key: ${topNames.join(", ")}` : ""}).`;
+          feat.description = `purpose unknown (${feat.files.length} supporting files, no docs or entry routes).`;
         }
       }
     }
@@ -289,6 +315,8 @@ function buildFeatureMap({
 
     features.push({
       ...feat,
+      flags: featFlags,
+      ownerCompIds,
       primary,
       supporting,
       primaryTokens,

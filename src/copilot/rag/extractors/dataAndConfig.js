@@ -125,17 +125,61 @@ function extractDataAndConfig({ fileSources = [], lockfileVersions = new Map(), 
       } catch {}
     }
 
-    if (base === "makefile" || base === "dockerfile" || base === "docker-compose.yml" || base === "docker-compose.yaml") {
+    if (base === "makefile" || base === "dockerfile" || base.startsWith("dockerfile.") || base === "procfile" || base === "docker-compose.yml" || base === "docker-compose.yaml") {
       deployFiles.push(relPath);
+      const comp = componentId || "root";
+      const isRoot = comp === "root" || path.dirname(relPath) === comp || path.dirname(relPath) === ".";
       if (base === "makefile") {
         const tgtRe = /^([A-Za-z0-9_.-]+)\s*:(?![=])/gm;
         let tm;
         while ((tm = tgtRe.exec(text)) !== null) {
           if (!tm[1].startsWith(".")) {
-            scripts.push({ component: componentId || "root", packageRelPath: relPath, isComponentRoot: true, name: `make ${tm[1]}`, command: `make ${tm[1]}`, file: relPath });
+            scripts.push({ component: comp, packageRelPath: relPath, isComponentRoot: isRoot, name: `make ${tm[1]}`, command: `make ${tm[1]}`, file: relPath });
+          }
+        }
+      } else if (base === "dockerfile" || base.startsWith("dockerfile.")) {
+        const cmdMatch = /^(?:ENTRYPOINT|CMD)\s+(.+)$/im.exec(text);
+        if (cmdMatch) {
+          scripts.push({ component: comp, packageRelPath: relPath, isComponentRoot: isRoot, name: "docker-entry", command: cmdMatch[1].trim(), file: relPath });
+        }
+      } else if (base === "procfile") {
+        for (const pl of text.split("\n")) {
+          const pm = /^([A-Za-z0-9_-]+)\s*:\s*(.+)$/.exec(pl.trim());
+          if (pm) {
+            scripts.push({ component: comp, packageRelPath: relPath, isComponentRoot: isRoot, name: `proc:${pm[1]}`, command: pm[2].trim(), file: relPath });
           }
         }
       }
+    }
+
+    // Python / Rust / Go manifests (entry commands + metadata, §5.1 #12)
+    if (base === "pyproject.toml" && specialKind === "config") {
+      const comp = componentId || "root";
+      const descM = /^\s*description\s*=\s*["']([^"']+)["']/m.exec(text);
+      if (descM && !projectMeta.description && (relPath === "pyproject.toml" || path.dirname(relPath) === comp)) {
+        projectMeta.description = descM[1].trim();
+      }
+      const scriptsSec = /\[(?:project|tool\.poetry)\.scripts\]([\s\S]*?)(?:\n\[|$)/.exec(text);
+      if (scriptsSec) {
+        for (const line of scriptsSec[1].split("\n")) {
+          const sm = /^\s*([A-Za-z0-9_.-]+)\s*=\s*["']([^"']+)["']/.exec(line);
+          if (sm) scripts.push({ component: comp, packageRelPath: relPath, isComponentRoot: true, name: sm[1], command: sm[2], file: relPath });
+        }
+      }
+      if (/\[tool\.pytest/i.test(text)) {
+        scripts.push({ component: comp, packageRelPath: relPath, isComponentRoot: true, name: "pytest", command: "pytest", file: relPath });
+      }
+    } else if (base === "cargo.toml" && specialKind === "config") {
+      const comp = componentId || "root";
+      if (/\[package\]/.test(text)) {
+        scripts.push({ component: comp, packageRelPath: relPath, isComponentRoot: true, name: "cargo test", command: "cargo test", file: relPath });
+        if (/\[\[bin\]\]/.test(text)) {
+          scripts.push({ component: comp, packageRelPath: relPath, isComponentRoot: true, name: "cargo run", command: "cargo run", file: relPath });
+        }
+      }
+    } else if (base === "go.mod" && specialKind === "config") {
+      const comp = componentId || "root";
+      scripts.push({ component: comp, packageRelPath: relPath, isComponentRoot: true, name: "go test", command: "go test ./...", file: relPath });
     }
 
     // GitHub Actions CI workflows

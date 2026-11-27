@@ -35,9 +35,11 @@ const { buildGlossary } = require("./extractors/glossaryBuilder");
 const { extractDataAndConfig } = require("./extractors/dataAndConfig");
 const { compileSummaryBundle, writeSummaryBundleAtomic } = require("./summaryCompiler");
 const { applyModelFeatureSummaries } = require("./modelSummaries");
+const { assignStableFeatureIds } = require("./featureIds");
+const { createSummaryTools } = require("./summaryTools");
 
 // Bump when the extractor or token shape changes: cached entries from an older version are re-parsed.
-const EXTRACTOR_VERSION = 9;
+const EXTRACTOR_VERSION = 10;
 const MAX_FILE_BYTES = 512 * 1024;
 const SLICE_MS = 8;
 
@@ -151,6 +153,7 @@ function* indexSteps(
   let secretsRedacted = 0;
   let skippedLarge = 0;
   const redactionTypes = {};
+  const redactionLocations = [];
   let codeCount = 0;
   let truncated = discovery.coverage.skipped.some((s) => s.reason === "max_files_cap");
   const extraSecretPatterns = sumCfg.secret_patterns_extra || [];
@@ -247,6 +250,9 @@ function* indexSteps(
         for (const [k, v] of Object.entries(modData.redactionTypes || {})) {
           redactionTypes[k] = (redactionTypes[k] || 0) + v;
         }
+        for (const loc of modData.redactionLocations || []) {
+          redactionLocations.push({ type: loc.type, relPath: file.relPath, line: loc.line });
+        }
         const readForMaps = readSafeText(file.absPath, MAX_FILE_BYTES);
         if (readForMaps.ok) {
           const red = redactSecrets(readForMaps.text, { extraPatterns: extraSecretPatterns });
@@ -278,6 +284,9 @@ function* indexSteps(
         for (const [k, v] of Object.entries(redacted.types || {})) {
           redactionTypes[k] = (redactionTypes[k] || 0) + v;
         }
+        for (const loc of redacted.locations || []) {
+          redactionLocations.push({ type: loc.type, relPath: file.relPath, line: loc.line });
+        }
         parsedFiles++;
 
         const genHeader = detectGeneratedHeader(sourceText);
@@ -306,6 +315,7 @@ function* indexSteps(
           contentHash,
           secretsRedacted: redacted.count,
           redactionTypes: redacted.types || {},
+          redactionLocations: redacted.locations || [],
           todos,
           language: structure.language,
           structure,
@@ -363,6 +373,9 @@ function* indexSteps(
       secretsRedacted += redacted.count;
       for (const [k, v] of Object.entries(redacted.types || {})) {
         redactionTypes[k] = (redactionTypes[k] || 0) + v;
+      }
+      for (const loc of redacted.locations || []) {
+        redactionLocations.push({ type: loc.type, relPath: file.relPath, line: loc.line });
       }
 
       if (file.specialKind === "translation") {
@@ -510,11 +523,24 @@ function* indexSteps(
   }
 
   const contractsRes = extractContractsFromFiles(fileSources);
-  const { contracts, mismatches, events } = contractsRes;
+  const { contracts, mismatches, events, unresolvedDynamicCalls = [], selfCheck: contractSelfCheck = null } = contractsRes;
   const dataAndConfig = extractDataAndConfig({ fileSources, lockfileVersions, modules });
   const symbols = buildSymbolIndex(modules, { contracts, flags: dataAndConfig.featureFlags, graph });
-  const features = buildFeatureMap({ modules, docFacts, contracts, mismatches, graph, overrides: featuresOverride });
-  const glossary = buildGlossary({ features, modules, contracts, docFacts, translationFiles, manualAliases: aliasesOverride });
+  const features = assignStableFeatureIds({
+    features: buildFeatureMap({ modules, docFacts, contracts, mismatches, graph, overrides: featuresOverride }),
+    absRoot,
+    cacheDir,
+    persist: true,
+  });
+  const glossary = buildGlossary({
+    features,
+    modules,
+    contracts,
+    docFacts,
+    translationFiles,
+    models: dataAndConfig.models,
+    manualAliases: aliasesOverride,
+  });
   const staleDocRefs = findStaleDocReferences(docFacts, seenRelPaths);
 
   const indexMs = Date.now() - t0;
@@ -784,12 +810,13 @@ function* indexSteps(
   }
 
   let compiledBundleCache = null;
-  function getSummaryBundle({ recentCommits = [], budgets = null } = {}) {
-    if (compiledBundleCache && recentCommits.length === 0 && !budgets) return compiledBundleCache;
+  function getSummaryBundle({ recentCommits = [], budgets = null, failOnCap = true } = {}) {
+    if (compiledBundleCache && recentCommits.length === 0 && !budgets && failOnCap) return compiledBundleCache;
     const repoName = path.basename(absRoot) || "Repository";
     const binaries = [...binaryByDir.values()].map((b) => ({ ...b, exts: [...b.exts].sort() }));
     const bundle = compileSummaryBundle({
       absRoot,
+      cacheDir,
       repoName,
       components: discovery.components,
       modules,
@@ -798,6 +825,8 @@ function* indexSteps(
       contracts,
       mismatches,
       events,
+      unresolvedDynamicCalls,
+      contractSelfCheck,
       symbols,
       features,
       glossary,
@@ -811,11 +840,35 @@ function* indexSteps(
       specialSummaries: { binaries, translationFiles },
       secretsRedacted,
       redactionTypes,
+      redactionLocations,
       budgets: budgets || sumCfg.budgets,
+      failOnCap,
       formatCompactFileEntry,
     });
-    if (recentCommits.length === 0 && !budgets) compiledBundleCache = bundle;
+    if (recentCommits.length === 0 && !budgets && failOnCap) compiledBundleCache = bundle;
     return bundle;
+  }
+
+  let summaryToolsCache = null;
+  function getSummaryTools() {
+    if (summaryToolsCache) return summaryToolsCache;
+    let tier1Cards = [];
+    try {
+      tier1Cards = getSummaryBundle({ failOnCap: false })?.tier1Cards || [];
+    } catch {}
+    summaryToolsCache = createSummaryTools({
+      features,
+      tier1Cards,
+      symbols,
+      contracts,
+      mismatches,
+      events,
+      docFacts,
+      glossary,
+      files: modules,
+      readFileSlices,
+    });
+    return summaryToolsCache;
   }
 
   function generateRepoMapMarkdown({ maxModules = 40 } = {}) {
@@ -862,8 +915,8 @@ function* indexSteps(
     const f = bundle.files;
     let md = bundle.singleMarkdown;
     if (md.length > maxChars) {
-      // Priority-preserving single-file assembly: NEVER amputate 90_coverage.md or Layer A.
-      const mustKeepOrder = ["00_index.md", "90_coverage.md"];
+      // Priority-preserving single-file assembly: NEVER amputate 90_coverage.md or Tier 0 router.
+      const mustKeepOrder = ["00_router.md", "90_coverage.md"];
       const midOrder = ["10_features.md", "20_contracts.md", "50_docs.md", "60_config.md", "70_data.md"];
       const tailOrder = ["30_files.md", "40_symbols.md"];
       const parts = new Map();
@@ -900,7 +953,7 @@ function* indexSteps(
       for (const name of tailOrder) fitSection(name, f[name] || "");
 
       const orderedNames = [
-        "00_index.md",
+        "00_router.md",
         "10_features.md",
         "20_contracts.md",
         "30_files.md",
@@ -977,11 +1030,15 @@ function* indexSteps(
     search,
     readFileSlices,
     getSummaryBundle,
+    get tools() {
+      return getSummaryTools();
+    },
     writeSummaryBundle: (outDir, opts) => writeSummaryBundleAtomic(outDir, getSummaryBundle(opts), opts),
     generateRepoMapMarkdown,
     generateSingleFileContextMarkdown,
     invalidateSummaryCache: () => {
       compiledBundleCache = null;
+      summaryToolsCache = null;
     },
   };
 }

@@ -34,7 +34,13 @@ async function runCli(argv = process.argv) {
     outputDir: outDir,
   });
   const commits = gitLocalAdapter.getGitLog({ count: 15 }, { cwd: opts.repoDir });
-  const bundle = idx.getSummaryBundle({ recentCommits: commits });
+  let bundle;
+  try {
+    bundle = idx.getSummaryBundle({ recentCommits: commits, failOnCap: true });
+  } catch (err) {
+    console.error(`ERROR: ${err?.message || err}`);
+    return 2;
+  }
 
   if (opts.check) {
     const manifestPath = path.join(outDir, "manifest.json");
@@ -66,7 +72,7 @@ async function runCli(argv = process.argv) {
   }
 
   const written = idx.writeSummaryBundle(outDir, { recentCommits: commits });
-  console.log(`Wrote tiered summary bundle to ${written} (Layer A: ${bundle.layerATokens} est tokens, ${bundle.manifest.counts.codeModules} modules, ${bundle.manifest.counts.docs} docs)`);
+  console.log(`Wrote V2 tiered summary bundle to ${written} (Tier 0: ${bundle.routerTokens} ${bundle.tokenizer?.isRealBpe ? "BPE" : "est"} tokens, Tier 1 cards: ${bundle.manifest.counts.tier1Cards}, ${bundle.manifest.counts.codeModules} modules, ${bundle.manifest.counts.docs} docs)`);
   return 0;
 }
 

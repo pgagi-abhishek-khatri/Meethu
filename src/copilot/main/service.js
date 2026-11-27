@@ -492,28 +492,21 @@ function createCopilot({
         const repos = store.codeRepos.list();
         if (!repos.length) return "";
         const sections = [
-          "Connected local code repositories (Layer A Context Index — 0 vectors, 0 GitHub API):",
+          "Connected local code repositories (Tier 0 Router Card — always-loaded fast index; escalate via tools to Tier 1 cards / Tier 2 slices):",
         ];
-        let remainingChars = 6200;
         for (const r of repos) {
           const exists = fs.existsSync(r.path);
           const branch = exists ? gitLocalAdapter.getCurrentBranch({ cwd: r.path }) : "unknown";
           const header = `- ${r.name} (${r.path}, branch: ${branch}, ${r.stats?.codeModules ?? 0} modules)`;
           sections.push(header);
-          remainingChars -= header.length + 1;
-          if (exists && remainingChars > 300) {
+          if (exists) {
             // The catalog is built synchronously from the cached index; refresh in the background for the next one.
             freshSynth(r.path).catch((error) => logError("Background repo refresh failed", error));
             const synth = cachedSynth(r.path);
             if (synth?.codeIndex) {
-              const bundle = typeof synth.compileSummaryBundle === "function" ? synth.compileSummaryBundle() : null;
-              const mapMd = bundle?.layerA || synth.codeIndex.generateRepoMapMarkdown({ maxModules: 25 });
-              const trimmed =
-                mapMd.length > remainingChars
-                  ? mapMd.slice(0, remainingChars).trimEnd() + "\n..."
-                  : mapMd;
-              sections.push(trimmed);
-              remainingChars -= trimmed.length + 1;
+              const bundle = typeof synth.compileSummaryBundle === "function" ? synth.compileSummaryBundle({ failOnCap: false }) : null;
+              const routerMd = bundle?.router || bundle?.layerA || synth.codeIndex.generateRepoMapMarkdown({ maxModules: 25 });
+              sections.push(routerMd);
             }
           }
         }
@@ -1105,18 +1098,36 @@ function createCopilot({
       const root = registeredRepoDir(repoDir);
       const synth = root ? await freshSynth(root) : null;
       if (!synth) return { ok: false, error: "Repository folder not found." };
-      const bundle = synth.compileSummaryBundle();
+      const bundle = synth.compileSummaryBundle({ failOnCap: false });
       return {
         ok: true,
         repoName: bundle.manifest.repoName,
         files: bundle.files,
         manifest: bundle.manifest,
+        router: bundle.router,
+        routerTokens: bundle.routerTokens,
+        tokenizer: bundle.tokenizer,
         layerA: bundle.layerA,
         layerATokens: bundle.layerATokens,
+        capExceeded: Boolean(bundle.manifest?.routerMetrics?.capExceeded),
       };
     } catch (error) {
       logError("Failed to build tiered repository summary bundle", error);
       return { ok: false, error: error?.message || "Failed to build summary bundle." };
+    }
+  });
+  handle("code-tool-query", async (repoDir, toolName, ...args) => {
+    try {
+      const root = registeredRepoDir(repoDir);
+      const synth = root ? await freshSynth(root) : null;
+      const tools = synth?.codeIndex?.tools;
+      if (!tools || typeof tools[toolName] !== "function") {
+        return { ok: false, error: `Unknown summary lookup tool: ${String(toolName || "")}` };
+      }
+      return { ok: true, result: tools[toolName](...args) };
+    } catch (error) {
+      logError("Summary lookup tool failed", error);
+      return { ok: false, error: error?.message || "Lookup failed." };
     }
   });
   handle("code-summary-export", async (repoDir) => {

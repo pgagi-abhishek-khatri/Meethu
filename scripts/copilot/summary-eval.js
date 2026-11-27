@@ -100,7 +100,7 @@ function verifyTruncationParity(bundle) {
   const issues = [];
   const ts = bundle.manifest.truncatedSections || {};
   const mapFiles = {
-    index: "00_index.md",
+    router: "00_router.md",
     features: "10_features.md",
     contracts: "20_contracts.md",
     files: "30_files.md",
@@ -175,22 +175,22 @@ async function evaluateRepo(repoDir, { checkDeterminism = true } = {}) {
 
   // 5. Generic Dynamic Query Probes across all 8 Section 16 groups
   const probes = buildGenericProbes(idx);
-  const layerA = bundle.files["00_index.md"] || "";
+  const layerA = bundle.files["00_router.md"] || bundle.router || "";
   let passed = 0;
   const details = [];
   for (const p of probes) {
     if (p.expectLayerA) {
       const ok =
-        layerA.includes("## System Overview") &&
-        layerA.includes("## Feature Catalogue") &&
-        layerA.includes("Escalate to Deep");
+        layerA.includes("## Components") &&
+        layerA.includes("## Features") &&
+        layerA.includes("## Escalation Rules");
       if (ok) passed += 1;
-      details.push({ group: p.group, q: p.q, ok, top3: ["00_index.md"] });
+      details.push({ group: p.group, q: p.q, ok, top3: ["00_router.md"] });
       continue;
     }
     if (p.group === "deep_escalation") {
       const slices = idx.readFileSlices([{ relPath: p.expectPath, lineStart: p.lineStart, lineEnd: p.lineEnd }], { maxTokens: 1500 });
-      const ok = slices.length === 1 && slices[0].relPath === p.expectPath && slices[0].text.length > 0 && layerA.includes("Escalate to Deep");
+      const ok = slices.length === 1 && slices[0].relPath === p.expectPath && slices[0].text.length > 0 && layerA.includes("## Escalation Rules");
       if (ok) passed += 1;
       details.push({ group: p.group, q: p.q, ok, top3: [`${p.expectPath}:L${p.lineStart}-L${p.lineEnd}`] });
       continue;
@@ -232,8 +232,12 @@ async function evaluateRepo(repoDir, { checkDeterminism = true } = {}) {
     absRootLeaked,
     secretsNotRead: idx.coverage.secretsNotRead.length,
     secretsRedacted: idx.stats.secretsRedacted,
+    routerTokens: layerATokens,
+    tokenizer: bundle.tokenizer || null,
+    tier1CardsCount: bundle.manifest.counts?.tier1Cards || 0,
     layerATokens,
-    layerAWithinCap: layerATokens <= 10500,
+    layerAWithinCap: layerATokens <= 5000,
+    tier1ZeroDropped: (bundle.manifest.counts?.tier1Cards || 0) === (bundle.manifest.counts?.features || 0),
     duplicateAnchors,
     truncationParityIssues,
     deterministic,

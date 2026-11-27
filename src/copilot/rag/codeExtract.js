@@ -294,26 +294,31 @@ function extractLeadingDoc(lines, lang) {
 }
 
 function synthesizeFilePurpose(filename, struct) {
-  const base = path.basename(filename || struct.filename || "module", path.extname(filename || ""));
+  const base = path.basename(filename || struct.filename || "module", path.extname(filename || "")).toLowerCase();
   const role = struct.role || "module";
-  const expClasses = (struct.classes || []).filter((c) => c.exported !== false).slice(0, 2).map((c) => c.name);
-  const expFns = (struct.functions || []).filter((f) => f.exported !== false).slice(0, 3).map((f) => f.name);
-  const expTypes = (struct.types || []).filter((t) => t.exported !== false).slice(0, 2).map((t) => t.name);
-  const syms = [...expClasses, ...expFns, ...expTypes].slice(0, 3);
+  const expClasses = (struct.classes || []).filter((c) => c.exported !== false).map((c) => c.name);
+  const expFns = (struct.functions || []).filter((f) => f.exported !== false).map((f) => f.name);
+  const expTypes = (struct.types || []).filter((t) => t.exported !== false).map((t) => t.name);
+  // Drop tautological symbol names that merely restate the filename stem (V2 §5.1 #10)
+  const distinctSyms = [...expClasses, ...expFns, ...expTypes]
+    .filter((name) => name && name.toLowerCase() !== base)
+    .slice(0, 3);
   const talks = [];
   if (struct.talksTo?.httpCalls?.length) talks.push(`calls ${struct.talksTo.httpCalls.slice(0, 2).join(", ")}`);
   if (struct.talksTo?.events?.length) talks.push(`IPC/events ${struct.talksTo.events.slice(0, 2).join(", ")}`);
   if (struct.talksTo?.tables?.length) talks.push(`tables ${struct.talksTo.tables.slice(0, 2).join(", ")}`);
 
-  if (syms.length > 0 || talks.length > 0) {
-    const symPart = syms.length ? `providing ${syms.join(", ")}` : "";
-    const talkPart = talks.length ? `${symPart ? "; " : ""}${talks.join("; ")}` : "";
-    return `${role[0].toUpperCase()}${role.slice(1)} (${base}) ${symPart}${talkPart}.`.replace(/\s+/g, " ").trim();
+  if (distinctSyms.length > 0 && talks.length > 0) {
+    return `${role}: ${distinctSyms.join(", ")}; ${talks.join("; ")}.`.replace(/\s+/g, " ").trim();
   }
-  if (struct.internalImports?.length) {
-    return `${role[0].toUpperCase()}${role.slice(1)} (${base}) wiring ${struct.internalImports.slice(0, 2).map((p) => path.basename(p)).join(", ")}.`;
+  if (talks.length > 0) {
+    return `${role}: ${talks.join("; ")}.`.replace(/\s+/g, " ").trim();
   }
-  return `${role} in ${path.dirname(filename || ".")}.`;
+  if (distinctSyms.length >= 2) {
+    return `${role}: exports ${distinctSyms.join(", ")}.`;
+  }
+  // Never emit tautological boilerplate ("UI component (X) providing X" or "role in dir")
+  return "";
 }
 
 function computeBraceEndLines(lines) {
@@ -815,12 +820,15 @@ function formatCompactFileEntry(mod, { relPath, revision = null, estTokens = nul
   if (compact) {
     const symSlice = exportedSyms.slice(0, 5).join(" · ");
     const more = exportedSyms.length > 5 ? ` (+${exportedSyms.length - 5})` : "";
-    return `${headerLine}${symSlice ? `\nExports: ${symSlice}${more}` : `\nPurpose: ${s.purpose || mod.purpose || `${s.role || "module"}`}`}`;
+    const compactPurpose = s.purpose || mod.purpose || "";
+    return `${headerLine}${symSlice ? `\nExports: ${symSlice}${more}` : compactPurpose ? `\nPurpose: ${compactPurpose}` : ""}`;
   }
 
   const lines = [headerLine];
   const purpose = s.purpose || mod.purpose || synthesizeFilePurpose(relPath, s);
-  lines.push(`Purpose: ${purpose}`);
+  if (purpose) {
+    lines.push(`Purpose: ${purpose}`);
+  }
 
   if (exportedSyms.length > 0) {
     lines.push(`Exports: ${exportedSyms.slice(0, 14).join(" · ")}${exportedSyms.length > 14 ? ` · (+${exportedSyms.length - 14} more)` : ""}`);

@@ -69,18 +69,62 @@ function collectMountedPrefixes(fileSources, knownPaths) {
   return mountedPrefixByFile;
 }
 
+function collectConstMap(text) {
+  const map = new Map();
+  // const FOO = "/api/v1/..." or FOO = "/api"
+  const flatRe = /\b(?:export\s+)?(?:const|let|var)\s+([A-Z0-9_a-z$]{2,40})\s*=\s*['"]([^'"\n]{2,120})['"]/g;
+  let m;
+  while ((m = flatRe.exec(text)) !== null) {
+    map.set(m[1], m[2]);
+  }
+  // const ROUTES = { login: "/auth/login", ... }
+  const objRe = /\b(?:export\s+)?(?:const|let|var)\s+([A-Z0-9_a-z$]{2,32})\s*=\s*\{([\s\S]{1,800}?)\}/g;
+  while ((m = objRe.exec(text)) !== null) {
+    const objName = m[1];
+    const body = m[2];
+    const kvRe = /([A-Za-z0-9_]+)\s*:\s*['"]([^'"\n]{2,100})['"]/g;
+    let kv;
+    while ((kv = kvRe.exec(body)) !== null) {
+      map.set(`${objName}.${kv[1]}`, kv[2]);
+    }
+  }
+  return map;
+}
+
+function resolveExprPath(rawExpr, constMap) {
+  const clean = String(rawExpr || "").trim();
+  if (!clean) return { resolved: "", dynamic: true };
+  // Direct string literal or template without unknown interpolation
+  if (/^['"`][^'"`]+['"`]$/.test(clean)) {
+    const inner = clean.slice(1, -1);
+    if (!inner.includes("${")) return { resolved: inner, dynamic: false };
+    let replaced = inner.replace(/\$\{([A-Za-z0-9_$.]+)\}/g, (full, sym) => constMap.get(sym) || "{param}");
+    const hasOnlyPrefixOrParam = /^[/a-zA-Z0-9_{}.:-]+$/.test(replaced);
+    return { resolved: hasOnlyPrefixOrParam ? replaced : "", dynamic: !hasOnlyPrefixOrParam };
+  }
+  if (constMap.has(clean)) {
+    return { resolved: constMap.get(clean), dynamic: false };
+  }
+  return { resolved: "", dynamic: true };
+}
+
 function extractContractsFromFiles(fileSources = []) {
   const served = [];
   const called = [];
   const events = [];
+  const unresolvedDynamicCalls = [];
   const knownPaths = new Set(fileSources.map((f) => f.relPath));
   const mountedPrefixes = collectMountedPrefixes(fileSources, knownPaths);
+  const nonTestSources = [];
 
-  for (const { relPath, text, structure } of fileSources) {
+  for (const src of fileSources) {
+    const { relPath, text, structure } = src;
     if (!text) continue;
     if (structure?.role === "test" || /(?:^|\/)(?:tests?|__tests__)\/|\.(?:test|spec)\.[^.]+$/i.test(relPath)) continue;
+    nonTestSources.push(src);
     const base = path.basename(relPath).toLowerCase();
     const lines = text.split("\n");
+    const constMap = collectConstMap(text);
 
     // OpenAPI / Swagger paths
     if (/^(?:openapi|swagger)\.(?:ya?ml|json)$/i.test(base)) {
@@ -153,15 +197,23 @@ function extractContractsFromFiles(fileSources = []) {
     // Detect custom IPC prefix namespace in preload/renderer wrappers if declared cleanly
     const ipcPrefixVar = /\b(?:IPC_PREFIX|CHANNEL_PREFIX)\s*=\s*['"]([a-zA-Z0-9_-]+:)['"]/.exec(text)?.[1] || "";
 
+    // Detect local router variables assigned from Router() / express.Router() / new Hono() / Fastify()
+    const localRouterVars = new Set(["app", "router", "server", "fastify"]);
+    const routerDeclRe = /\b(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:new\s+(?:Hono|Elysia)|(?:express\.)?Router|Fastify)\s*\(/g;
+    let rm;
+    while ((rm = routerDeclRe.exec(text)) !== null) {
+      localRouterVars.add(rm[1]);
+    }
+
     for (let idx = 0; idx < lines.length; idx++) {
       const line = lines[idx];
       const lineNum = idx + 1;
 
-      // 1. Express / Fastify / Hono: router.get("/path", ...), billingRouter.get("/path", ...) or app.post("/path", ...)
-      const jsRoute = /\b(?:app|router|server|fastify|[A-Za-z0-9_$]*(?:Router|Routes))\.(get|post|put|patch|delete|all)\(\s*['"`](\/[^'"`\n]*)['"`]/i.exec(line);
-      if (jsRoute) {
-        const method = jsRoute[1].toUpperCase();
-        const rawSub = jsRoute[2];
+      // 1. Express / Fastify / Hono: router.get("/path", ...), r.post("/path", ...), billingRouter.get("/path", ...)
+      const jsRoute = /\b([A-Za-z0-9_$]+)\.(get|post|put|patch|delete|all)\(\s*['"`](\/[^'"`\n]*)['"`]/i.exec(line);
+      if (jsRoute && (localRouterVars.has(jsRoute[1]) || /(?:Router|Routes)$/i.test(jsRoute[1]))) {
+        const method = jsRoute[2].toUpperCase();
+        const rawSub = jsRoute[3];
         const fullPath = rawSub.startsWith(filePrefix) ? rawSub : `${filePrefix}${rawSub.startsWith("/") ? rawSub : `/${rawSub}`}`;
         const normPath = normalizeEndpointPath(fullPath);
         const isWebhook = /webhook/i.test(fullPath) || /verifyWebhook|stripe-signature|x-hub-signature/i.test(line);
@@ -192,27 +244,37 @@ function extractContractsFromFiles(fileSources = []) {
         served.push({ kind: "ipc", method: "IPC", path: ch, normPath: ch, handlerFile: relPath, handlerLine: lineNum, auth: "registered", schema: "" });
       }
 
-      // 4. Electron IPC client / preload callers: ipcRenderer.invoke("ch") or copilotCall("ch") / call("ch")
-      const ipcCli = /\b(?:ipcRenderer\.(?:invoke|send)|copilotCall|invokeIpc|call)\(\s*['"`]([^'"`\n]+)['"`]/.exec(line);
+      // 4. Electron IPC client / preload callers: ipcRenderer.invoke("ch") or copilotCall("ch") or constant indirection
+      const ipcCli = /\b(?:ipcRenderer\.(?:invoke|send)|copilotCall|invokeIpc|call)\(\s*([^,\)\n]{2,80})/.exec(line);
       if (ipcCli && (relPath.includes("preload") || relPath.includes("components") || relPath.includes("hooks") || relPath.includes("services") || line.includes("ipcRenderer"))) {
-        const raw = ipcCli[1];
-        const ch = !raw.includes(":") && (line.includes("copilotCall") || (relPath.includes("copilot/") && relPath.includes("preload")))
-          ? `copilot:${raw}`
-          : ipcPrefixVar && !raw.includes(":")
-            ? `${ipcPrefixVar}${raw}`
-            : raw;
-        called.push({ kind: "ipc", method: "IPC", path: ch, normPath: ch, callerFile: relPath, callerLine: lineNum });
+        const res = resolveExprPath(ipcCli[1], constMap);
+        if (res.resolved && !res.dynamic) {
+          const raw = res.resolved;
+          const ch = !raw.includes(":") && (line.includes("copilotCall") || (relPath.includes("copilot/") && relPath.includes("preload")))
+            ? `copilot:${raw}`
+            : ipcPrefixVar && !raw.includes(":")
+              ? `${ipcPrefixVar}${raw}`
+              : raw;
+          called.push({ kind: "ipc", method: "IPC", path: ch, normPath: ch, callerFile: relPath, callerLine: lineNum, confidence: "certain" });
+        } else if (res.dynamic) {
+          unresolvedDynamicCalls.push({ kind: "ipc", rawExpr: ipcCli[1].trim(), file: relPath, line: lineNum });
+        }
       }
 
-      // 5. HTTP client calls: fetch("..."), axios.post("..."), api.get("...")
-      const httpCli = /\b(?:fetch|axios\.(?:get|post|put|patch|delete)|api(?:Client)?\.(?:get|post|put|patch|delete))\(\s*['"`]([^'"`\n]+)['"`]/i.exec(line);
+      // 5. HTTP client calls: fetch("..."), axios.post(CONST), api.get(`${BASE}/path`) or dynamic expr
+      const httpCli = /\b(?:fetch|axios\.(?:get|post|put|patch|delete)|api(?:Client)?\.(?:get|post|put|patch|delete))\(\s*([^,\)\n]{2,120})/i.exec(line);
       if (httpCli && !jsRoute) {
         const mMatch = /\.(get|post|put|patch|delete)\(/i.exec(line);
         const methodMatch2 = /method\s*:\s*['"](GET|POST|PUT|PATCH|DELETE)['"]/i.exec(lines.slice(idx, idx + 4).join(" "));
         const method = (mMatch?.[1] || methodMatch2?.[1] || "GET").toUpperCase();
-        const rawP = httpCli[1];
-        if (!/^https?:\/\/(?!localhost)/i.test(rawP)) {
-          called.push({ kind: "http", method, path: rawP, normPath: normalizeEndpointPath(rawP), callerFile: relPath, callerLine: lineNum });
+        const res = resolveExprPath(httpCli[1], constMap);
+        if (res.resolved && !res.dynamic) {
+          const rawP = res.resolved;
+          if (!/^https?:\/\/(?!localhost)/i.test(rawP) && (rawP.startsWith("/") || rawP.startsWith("http"))) {
+            called.push({ kind: "http", method, path: rawP, normPath: normalizeEndpointPath(rawP), callerFile: relPath, callerLine: lineNum, confidence: "certain" });
+          }
+        } else if (res.dynamic && !/^[\s{}$"']+$/.test(httpCli[1])) {
+          unresolvedDynamicCalls.push({ kind: "http", rawExpr: httpCli[1].trim(), file: relPath, line: lineNum });
         }
       }
 
@@ -233,14 +295,20 @@ function extractContractsFromFiles(fileSources = []) {
     }
   }
 
+  // Pass-2 raw client text sweep (V2 §5.1 #1): find likely callers for served endpoints not matched in pass-1
+  const clientCandidateSources = nonTestSources.filter(
+    (s) => s.relPath.includes("components") || s.relPath.includes("hooks") || s.relPath.includes("services") || s.relPath.includes("preload") || s.relPath.includes("renderer") || s.relPath.includes("client") || s.relPath.includes("app/")
+  );
+
   // Correlate served <-> called across HTTP and IPC
   const contracts = [];
-  const mismatches = [];
+  const rawMismatches = [];
   const calledMatched = new Set();
 
   for (const s of served) {
     const callers = [];
     let methodMismatch = null;
+    let confidence = "certain";
     called.forEach((c, idx) => {
       if (c.kind === s.kind && c.normPath === s.normPath) {
         if (c.method === s.method || s.kind === "ipc") {
@@ -253,6 +321,23 @@ function extractContractsFromFiles(fileSources = []) {
       }
     });
 
+    // Pass-2 raw-text sweep when pass-1 found 0 callers for HTTP/IPC
+    if (callers.length === 0 && (s.kind === "http" || s.kind === "ipc") && s.normPath.length >= 4) {
+      const literalStem = s.normPath.replace(/\{param\}.*$/, "").replace(/:.*$/, "").trim();
+      const needle = literalStem.length >= 4 ? literalStem : s.normPath;
+      const bareIpc = s.kind === "ipc" ? s.normPath.replace(/^[^:]+:/, "") : "";
+      for (const cs of clientCandidateSources) {
+        if (cs.relPath === s.handlerFile) continue;
+        if (cs.text.includes(needle) || (bareIpc.length >= 5 && cs.text.includes(bareIpc))) {
+          const idxPos = cs.text.indexOf(needle) !== -1 ? cs.text.indexOf(needle) : cs.text.indexOf(bareIpc);
+          const lNum = cs.text.slice(0, idxPos).split("\n").length;
+          callers.push(`${cs.relPath}:L${lNum} [likely]`);
+          confidence = "likely";
+          if (callers.length >= 3) break;
+        }
+      }
+    }
+
     contracts.push({
       kind: s.kind,
       method: s.method,
@@ -263,17 +348,18 @@ function extractContractsFromFiles(fileSources = []) {
       schema: s.schema,
       auth: s.auth,
       callers: [...new Set(callers)],
+      confidence: callers.length > 0 ? confidence : unresolvedDynamicCalls.length > 0 ? "unresolved" : "certain",
       versioned: /\/v\d+\b/i.test(s.path),
     });
 
     if (methodMismatch) {
-      mismatches.push({
+      rawMismatches.push({
         type: "method_mismatch",
         path: s.normPath,
         detail: `Served as ${methodMismatch.expected} at ${s.handlerFile}:L${s.handlerLine}, called as ${methodMismatch.got} at ${methodMismatch.caller}`,
       });
     } else if (callers.length === 0 && (s.kind === "http" || s.kind === "ipc")) {
-      mismatches.push({
+      rawMismatches.push({
         type: s.kind === "ipc" ? "ipc_served_not_called" : "served_not_called",
         path: `${s.method} ${s.normPath}`,
         detail: `Served at ${s.handlerFile}:L${s.handlerLine}, no client caller found`,
@@ -283,7 +369,7 @@ function extractContractsFromFiles(fileSources = []) {
 
   called.forEach((c, idx) => {
     if (!calledMatched.has(idx) && (c.kind === "http" || c.kind === "ipc")) {
-      mismatches.push({
+      rawMismatches.push({
         type: c.kind === "ipc" ? "ipc_called_not_served" : "called_not_served",
         path: `${c.method} ${c.normPath}`,
         detail: `Called at ${c.callerFile}:L${c.callerLine}, no matching server handler found`,
@@ -291,8 +377,39 @@ function extractContractsFromFiles(fileSources = []) {
     }
   });
 
+  // Deduplicate mismatches by (type, path) (§5.1 #9)
+  const mismatchMap = new Map();
+  for (const m of rawMismatches) {
+    const key = `${m.type}::${m.path}`;
+    if (!mismatchMap.has(key)) {
+      mismatchMap.set(key, { ...m, count: 1 });
+    } else {
+      mismatchMap.get(key).count += 1;
+    }
+  }
+  const mismatches = [...mismatchMap.values()].map((m) =>
+    m.count > 1 ? { ...m, detail: `${m.detail} (+${m.count - 1} duplicate sites)` } : m
+  );
+
+  // V2 §6 Self-check: sample up to 20 "served_not_called" paths against raw text of all non-test files
+  const uncalledSample = mismatches
+    .filter((m) => m.type === "served_not_called" || m.type === "ipc_served_not_called")
+    .slice(0, 20);
+  let falseNegatives = 0;
+  for (const m of uncalledSample) {
+    const rawEndpoint = m.path.split(" ").slice(1).join(" ").replace(/\{param\}/g, "");
+    if (rawEndpoint.length < 4) continue;
+    const hitAnywhere = nonTestSources.some((src) => !m.detail.includes(src.relPath) && src.text.includes(rawEndpoint));
+    if (hitAnywhere) falseNegatives += 1;
+  }
+  const selfCheck = {
+    sampled: uncalledSample.length,
+    falseNegatives,
+    lowConfidence: uncalledSample.length >= 4 && falseNegatives / uncalledSample.length > 0.25,
+  };
+
   contracts.sort((a, b) => a.normPath.localeCompare(b.normPath) || a.method.localeCompare(b.method));
-  return { contracts, mismatches, events };
+  return { contracts, mismatches, events, unresolvedDynamicCalls: unresolvedDynamicCalls.slice(0, 60), selfCheck };
 }
 
 module.exports = {

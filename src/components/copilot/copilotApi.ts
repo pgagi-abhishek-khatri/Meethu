@@ -226,10 +226,16 @@ export interface SummaryBundleResult {
   manifest?: {
     schemaVersion: number;
     repoName: string;
+    routerTokens?: number;
+    routerHardCap?: number;
     counts: Record<string, number>;
     truncated: boolean;
     sections: Record<string, { chars: number; estTokens: number }>;
   };
+  router?: string;
+  routerTokens?: number;
+  tokenizer?: { engine: string; isRealBpe: boolean };
+  capExceeded?: boolean;
   layerA?: string;
   layerATokens?: number;
   error?: string;
@@ -345,6 +351,11 @@ export interface CopilotBridge {
       repoDir: string,
       sliceRequests: { relPath: string; lineStart: number; lineEnd?: number }[]
     ): Promise<{ ok: boolean; slices: { relPath: string; lineStart: number; lineEnd: number; text: string }[] }>;
+    queryTool?(
+      repoDir: string,
+      toolName: "feature" | "find" | "symbol" | "endpoint" | "file" | "doc",
+      ...args: unknown[]
+    ): Promise<{ ok: boolean; result?: unknown; error?: string }>;
   };
   openWindow?(): Promise<void>; // control panel only: show the live window
   closeWindow?(): Promise<void>; // control panel only: hide the live window

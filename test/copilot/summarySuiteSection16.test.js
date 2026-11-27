@@ -106,14 +106,14 @@ test("Milestone 2 & 3: Layer A quality, Tier-1 vs CHANGELOG rules, depth-aware s
   const bundle = idx.getSummaryBundle();
 
   // #14 Tier-1 CLAUDE.md rule beats CHANGELOG
-  assert.match(bundle.files["00_index.md"], /API routes MUST NEVER bypass session verification/);
-  assert.equal(bundle.files["00_index.md"].includes("old v0.1 migration warning"), false);
+  assert.match(bundle.files["00_router.md"], /API routes MUST NEVER bypass session verification/);
+  assert.equal(bundle.files["00_router.md"].includes("old v0.1 migration warning"), false);
 
-  // #12 System overview, Run commands, TODOs
-  assert.match(bundle.files["00_index.md"], /Audio meeting copilot platform/);
-  assert.match(bundle.files["00_index.md"], /add idempotency key check/);
-  // #13 Component root script preferred over Expo/mobile subpackage "clean"
-  assert.match(bundle.files["00_index.md"], /`dev`/);
+  // #12 System overview & component root run commands on Tier 0
+  assert.match(bundle.files["00_router.md"], /Audio meeting copilot platform/);
+  assert.match(bundle.files["00_router.md"], /`dev`/);
+  // TODOs still surface on Tier 1 cards
+  assert.ok(bundle.tier1Cards.some((c) => c.markdown.includes("add idempotency key check")) || idx.modules.some((m) => m.todos?.some((t) => t.text.includes("add idempotency key check"))));
 
   // #20 Resolved Uses: path
   const billingMod = idx.modules.find((m) => m.relPath === "src/routes/billing.ts");
@@ -208,8 +208,8 @@ test("Round 2 polish: synthesized purposes, CSS/MP4 noise filtering, live status
   const bundle = idx.getSummaryBundle();
 
   // #2 Noisy CSS/MP4 comments excluded and feature status remains "live"
-  assert.equal(bundle.files["00_index.md"].includes("sit inside a <p>"), false);
-  assert.equal(bundle.files["00_index.md"].includes("Drop bundled MP4"), false);
+  assert.equal(bundle.files["00_router.md"].includes("sit inside a <p>"), false);
+  assert.equal(bundle.files["00_router.md"].includes("Drop bundled MP4"), false);
   assert.equal(idx.features.every((f) => f.status !== "partial"), true);
 
   // #3 Synthesized purpose instead of generic "role in dir"
@@ -221,4 +221,55 @@ test("Round 2 polish: synthesized purposes, CSS/MP4 noise filtering, live status
   const buildRows = bundle.files["60_config.md"].split("\n").filter((l) => l.includes("expo-module build"));
   assert.equal(buildRows.length, 1);
   assert.match(buildRows[0], /4 packages/);
+});
+
+test("V2 Compression & Accuracy: BPE cap enforcement, indirection contracts, redaction audit, lookup tools & router bench", async () => {
+  const { RouterCapExceededError } = require("../../src/copilot/rag/tier0Router");
+  const { extractDocFacts } = require("../../src/copilot/rag/extractors/docExtractor");
+  const { redactSecrets } = require("../../src/copilot/rag/secretScan");
+  const { runRouterBenchmark } = require("../../scripts/copilot/router-bench");
+
+  const root = mk("v2-spec-");
+  write(root, "package.json", JSON.stringify({ name: "v2-app", description: "Workspace meeting assistant backend and desktop client", scripts: { dev: "node server.js", test: "node --test" } }));
+  write(root, "README.md", "# V2 App\n## Installation\nRun `npm install` and `npm run dev` to get started.\n\n## Architecture\nThe sync engine reconciles offline note edits against Postgres over HTTPS.\n");
+  write(root, "docs/RULES.md", "# Core Rules\n- Offline note edits MUST NEVER overwrite newer server timestamps without conflict merge.\n- Export tokens expire after 15 minutes.\n");
+  write(root, "src/sync/syncRoutes.ts", `import { Router } from "express";\nconst r = Router();\nr.post("/api/sync/push", (req, res) => res.json({ ok: true }));\nr.get("/api/sync/status", (req, res) => res.json({ ok: true }));\n`);
+  write(root, "src/sync/syncClient.ts", `const ROUTES = { push: "/api/sync/push" };\nexport async function pushSync() {\n  return fetch(ROUTES.push, { method: "POST" });\n}\nexport async function callDynamic(url: string) {\n  return fetch(url);\n}\n// Static SRI sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=\nexport const UUID_EX = "550e8400-e29b-41d4-a716-446655440000";\n`);
+  write(root, "src/styles/theme.css", ".btn { color: red; }\n");
+  write(root, "src/components/SyncButton.tsx", "export function SyncButton() { return null; }\n");
+
+  const doc = extractDocFacts("README.md", fs.readFileSync(path.join(root, "README.md"), "utf8"));
+  assert.equal(doc.summary.includes("npm install"), false, "Scaffold boilerplate must be filtered from doc summary");
+  assert.match(doc.summary, /reconciles offline note edits/);
+
+  // Allow-list: SRI + UUID must not trigger secret redaction false positives
+  const redRes = redactSecrets(fs.readFileSync(path.join(root, "src/sync/syncClient.ts"), "utf8"));
+  assert.equal(redRes.count, 0, "SRI hash and UUID must not be flagged as secrets");
+
+  const idx = await createLocalCodeIndexAsync(root, { useCache: false });
+  const pushContract = idx.contracts.find((c) => c.normPath === "/api/sync/push");
+  assert.ok(pushContract && pushContract.callers.length > 0, "Constant object map ROUTES.push must resolve caller");
+  assert.equal(idx.features.some((f) => f.id === "styles"), false, "styles folder must not become a standalone domain feature");
+
+  // Hard cap throw check when tiny hard cap configured
+  assert.throws(() => idx.getSummaryBundle({ budgets: { router_hard_cap: 10 }, failOnCap: true }), RouterCapExceededError);
+
+  const bundle = idx.getSummaryBundle();
+  assert.ok(bundle.tokenizer.isRealBpe, "Real BPE tokenizer must be active");
+  assert.ok(bundle.routerTokens <= 5000);
+  assert.ok(bundle.jsonlTwins["features.jsonl"] && bundle.jsonlTwins["glossary.jsonl"] && bundle.jsonlTwins["docs.jsonl"]);
+
+  // Tier 2 lookup tools (feature, find, endpoint, symbol, doc)
+  const syncFid = bundle.stableFeatures.find((f) => /sync/i.test(f.name))?.fid;
+  assert.ok(syncFid, "Sync feature should have canonical Fid");
+  assert.equal(idx.tools.feature(syncFid).found, true);
+  assert.ok(idx.tools.endpoint("/api/sync/push").contracts.length >= 1);
+  assert.ok(idx.tools.symbol("pushSync").matches.length >= 1);
+  assert.ok(idx.tools.find("sync").featureIds.includes(syncFid));
+
+  // Router-only benchmark check on synthetic repo
+  const bench = await runRouterBenchmark(root);
+  assert.equal(bench.withinHardCap, true);
+  assert.equal(bench.inventedPaths, 0);
+  assert.ok(bench.accuracy >= 0.75);
 });

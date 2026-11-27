@@ -19,8 +19,8 @@ import { PaneHeader, Block } from "./CopilotPane";
 import type { LocalCodeRepo, SingleCodeContextResult, SummaryBundleResult } from "./copilotApi";
 
 const SECTION_TABS: { key: string; label: string }[] = [
-  { key: "00_index.md", label: "Layer A Index" },
-  { key: "10_features.md", label: "Features" },
+  { key: "00_router.md", label: "Router Card (Tier 0)" },
+  { key: "10_features.md", label: "Features (Tier 1)" },
   { key: "20_contracts.md", label: "Contracts" },
   { key: "30_files.md", label: "Files" },
   { key: "40_symbols.md", label: "Symbols" },
@@ -70,11 +70,17 @@ function SingleContextPreviewModal({
   downloading: boolean;
   exporting?: boolean;
 }) {
-  const [activeTab, setActiveTab] = useState<string>("00_index.md");
+  const [activeTab, setActiveTab] = useState<string>("00_router.md");
 
   useEffect(() => {
     if (!contextFile) return;
-    setActiveTab(summaryBundle?.files?.["00_index.md"] ? "00_index.md" : "__full__");
+    setActiveTab(
+      summaryBundle?.files?.["00_router.md"]
+        ? "00_router.md"
+        : summaryBundle?.files?.["00_index.md"]
+          ? "00_index.md"
+          : "__full__"
+    );
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
@@ -116,7 +122,7 @@ function SingleContextPreviewModal({
             )}
             {summaryBundle?.layerATokens != null && (
               <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
-                Layer A: ~{summaryBundle.layerATokens.toLocaleString()} tokens
+                Tier 0: {(summaryBundle.routerTokens ?? summaryBundle.layerATokens).toLocaleString()} tokens ({summaryBundle.tokenizer?.isRealBpe ? "BPE" : "est"})
               </span>
             )}
           </div>

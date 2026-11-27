@@ -4,6 +4,10 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { redactSecrets } = require("./secretScan");
+const { countTokens } = require("./tokenizer");
+const { assignStableFeatureIds } = require("./featureIds");
+const { buildTier0RouterCard } = require("./tier0Router");
+const { buildTier1FeatureCards } = require("./tier1Features");
 
 const PRIORITY_ROLE_ORDER = {
   "model/schema": 4,
@@ -25,7 +29,7 @@ const PRIORITY_ROLE_ORDER = {
   generated: 12,
 };
 
-const estTokens = (text) => Math.ceil(String(text || "").length / 4);
+const estTokens = (text) => countTokens(text);
 
 function safeAnchor(relPath) {
   const raw = String(relPath || "");
@@ -112,12 +116,75 @@ function buildSystemDiagram(components, features) {
   return `\`\`\`text\nUser / Meeting -> ${topFeats.join(" -> ") || "[Core Modules]"}\n\`\`\``;
 }
 
+function buildFolderSummaryLines(modules = []) {
+  const by2Level = new Map();
+  for (const m of modules) {
+    const parts = String(m.relPath || "").split("/");
+    const folder =
+      parts.length <= 1
+        ? "(root)"
+        : parts.length === 2
+          ? parts[0]
+          : `${parts[0]}/${parts[1]}`;
+    if (!by2Level.has(folder)) by2Level.set(folder, { count: 0, roles: new Set(), langs: new Set() });
+    const rec = by2Level.get(folder);
+    rec.count += 1;
+    if (m.structure?.role) rec.roles.add(m.structure.role);
+    if (m.language) rec.langs.add(m.language);
+  }
+  return [...by2Level.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([folder, rec]) => {
+      const roles = [...rec.roles].slice(0, 3).join(", ") || "modules";
+      const langs = [...rec.langs].slice(0, 2).join(", ") || "-";
+      return `| \`${folder}/\` | ${rec.count} | ${roles} (${langs}) |`;
+    });
+}
+
+function buildTestAndScriptFolderSummary(modules = [], scripts = []) {
+  const testMods = modules.filter((m) => m.structure?.role === "test" || /(?:^|\/)(?:tests?|__tests__)\/|\.(?:test|spec)\./i.test(m.relPath));
+  const scriptMods = modules.filter((m) => m.structure?.role === "script" || /^scripts\//i.test(m.relPath));
+  const lines = [];
+  if (testMods.length > 0) {
+    const byFolder = new Map();
+    for (const t of testMods) {
+      const dir = path.posix.dirname(t.relPath);
+      byFolder.set(dir, (byFolder.get(dir) || 0) + 1);
+    }
+    const frameworks = new Set();
+    for (const s of scripts) {
+      if (/^test/i.test(s.name)) frameworks.add(`${s.name}: \`${cutAtWord(s.command, 40)}\``);
+    }
+    lines.push(
+      `## Test Folders (${testMods.length} files across ${byFolder.size} folder(s))`,
+      ...(frameworks.size ? [`- **Runners:** ${[...frameworks].slice(0, 4).join(" · ")}`] : []),
+      ...([...byFolder.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 12).map(([d, n]) => `- \`${d}/\` (${n} test files)`))
+    );
+  }
+  if (scriptMods.length > 0) {
+    const byFolder = new Map();
+    for (const s of scriptMods) {
+      const dir = path.posix.dirname(s.relPath);
+      byFolder.set(dir, (byFolder.get(dir) || 0) + 1);
+    }
+    lines.push(
+      "",
+      `## Scripts & Tooling Folders (${scriptMods.length} files)`,
+      ...([...byFolder.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 10).map(([d, n]) => `- \`${d}/\` (${n} scripts)`))
+    );
+  }
+  return lines.join("\n");
+}
+
 /**
- * Compiles the full tiered bundle (00_index.md .. 90_coverage.md + manifest.json + JSONL twins)
- * and a unified single-file markdown view.
+ * Compiles the full V2 tiered bundle:
+ * - Tier 0: 00_router.md (2-3k ideal, 5k hard cap — throws RouterCapExceededError if exceeded)
+ * - Tier 1: features/Fxx-slug.md (complete, zero dropped features, 400-1500t each)
+ * - Tier 2: 10_features.md .. 90_coverage.md + complete JSONL twins + manifest.json
  */
 function compileSummaryBundle({
   absRoot,
+  cacheDir = null,
   repoName,
   components = [],
   modules = [],
@@ -126,6 +193,8 @@ function compileSummaryBundle({
   contracts = [],
   mismatches = [],
   events = [],
+  unresolvedDynamicCalls = [],
+  contractSelfCheck = null,
   symbols = [],
   features = [],
   glossary = [],
@@ -139,10 +208,15 @@ function compileSummaryBundle({
   specialSummaries = {},
   secretsRedacted = 0,
   redactionTypes = {},
+  redactionLocations = [],
   budgets = {},
+  failOnCap = true,
   formatCompactFileEntry,
 } = {}) {
   const b = {
+    router_target: budgets.router_target || 2800,
+    router_hard_cap: budgets.router_hard_cap || 5000,
+    tier1_max_per_card: budgets.tier1_max_per_card || 1500,
     index: budgets.index || 8000,
     features: budgets.features || 10000,
     contracts: budgets.contracts || 15000,
@@ -153,6 +227,21 @@ function compileSummaryBundle({
     data: budgets.data || 6000,
   };
 
+  // Assign deterministic short component IDs (C1..Cn) and stable F01..Fnn feature IDs
+  const compIdMap = new Map();
+  const compRevMap = new Map();
+  components.forEach((c, idx) => {
+    const shortId = `C${idx + 1}`;
+    compIdMap.set(c.id, shortId);
+    compRevMap.set(c.id, c.revision || "-");
+  });
+  const stableFeatures = assignStableFeatureIds({
+    features,
+    absRoot: absRoot || process.cwd(),
+    cacheDir,
+    persist: Boolean(absRoot),
+  });
+
   const mainComp = components[0] || { id: repoName, name: repoName, branch: null, revision: null, dirtyFiles: new Set() };
   const dirtyCount = components.reduce((s, c) => s + (c.dirtyFiles?.size || 0), 0);
   const fullCount = modules.length;
@@ -162,13 +251,15 @@ function compileSummaryBundle({
   const totalFound = coverage.filesFound ?? totalIndexed + skippedCount + failedCount;
   const truncatedSections = {};
 
-  // ---- 10_features.md ----
-  const featBlocks = features.map((f) => {
+  // ---- 10_features.md (Tier 2 Feature Compatibility Map — zero dropped if budget permits) ----
+  const featBlocks = stableFeatures.map((f) => {
+    const fid = f.fid || f.id;
+    const slugFile = `features/${fid}-${f.slug || f.id}.md`;
     const out = [
-      `## ${f.name} (\`${f.id}\`, source: ${f.source}, status: ${f.status})`,
-      f.description,
+      `## ${fid} · ${f.name} (\`${f.id}\`, source: ${f.source}, status: ${f.status})`,
+      `${f.description} (Card: \`${slugFile}\`)`,
       `- **Primary files** (~${f.primaryTokens} tokens total):`,
-      ...f.primary.map((pf) => `  - \`${pf.relPath}\` (${pf.role}, ~${pf.estTokens}t) — ${pf.purpose}${pf.slices.length ? ` | Slices: ${pf.slices.join(", ")}` : ""}`),
+      ...f.primary.map((pf) => `  - \`${pf.relPath}\` (${pf.role}, ~${pf.estTokens}t)${pf.slices.length ? ` | Slices: ${pf.slices.join(", ")}` : ""}`),
     ];
     if (f.supporting.length > 0) {
       const shownSup = f.supporting.slice(0, 20);
@@ -176,7 +267,7 @@ function compileSummaryBundle({
       out.push(`- **Supporting files (${f.supporting.length}):** ${shownSup.map((sf) => `\`${sf.relPath}\``).join(", ")}${moreSup > 0 ? ` (+${moreSup} more in \`30_files.md\` / \`files.jsonl\`)` : ""}`);
     }
     if (f.closureNeighbors.length > 0) {
-      out.push(`- **Dependency closure (read next if budget allows):** ${f.closureNeighbors.map((d) => `\`${d}\``).join(", ")}`);
+      out.push(`- **Dependency closure:** ${f.closureNeighbors.map((d) => `\`${d}\``).join(", ")}`);
     }
     if (f.docs.length > 0) {
       out.push(`- **Related docs:** ${f.docs.map((d) => `\`${d.relPath}\``).join(", ")}`);
@@ -184,7 +275,7 @@ function compileSummaryBundle({
     out.push(`- **Does not cover:** ${f.notCovered}`);
     return out.join("\n");
   });
-  const featBudgeted = budgetJoin(featBlocks, b.features, "features omitted due to token budget; see 30_files.md");
+  const featBudgeted = budgetJoin(featBlocks, b.features, "features omitted due to Tier 2 markdown cap; complete cards in features/ and features.jsonl");
   truncatedSections.features = {
     total: featBudgeted.total,
     shown: featBudgeted.shown,
@@ -192,7 +283,7 @@ function compileSummaryBundle({
     truncated: featBudgeted.truncated,
   };
   const featuresMd = [
-    `# Feature → Files Map (${featBudgeted.truncated ? `showing ${featBudgeted.shown} of ${featBudgeted.total}` : `${features.length}`} features)`,
+    `# Feature → Files Map (${featBudgeted.truncated ? `showing ${featBudgeted.shown} of ${featBudgeted.total}` : `${stableFeatures.length}`} features; complete Tier 1 cards in \`features/\`)`,
     "",
     featBudgeted.text,
   ].join("\n");
@@ -201,7 +292,8 @@ function compileSummaryBundle({
   const maxContractsChars = Math.max(1200, b.contracts * 4);
   const mismatchRows = mismatches.map((m) => `| \`${m.type}\` | \`${m.path}\` | ${m.detail} |`);
   const contractRows = contracts.map((c) => {
-    const meta = [c.schema, c.auth, c.versioned ? "versioned" : ""].filter(Boolean).join(", ") || "-";
+    const confTag = c.confidence && c.confidence !== "certain" ? `, ${c.confidence}` : "";
+    const meta = [c.schema, c.auth, c.versioned ? "versioned" : "", confTag.replace(/^,\s*/, "")].filter(Boolean).join(", ") || "-";
     const callers = c.callers.length ? c.callers.join(", ") : "-";
     return `| \`${c.method}\` | \`${c.path}\` | \`${c.handlerFile}:L${c.handlerLine}\` | ${meta} | ${callers} |`;
   });
@@ -262,11 +354,24 @@ function compileSummaryBundle({
       contractLines.push(`> TRUNCATED: omitted ${eBudget.omitted} event/route entries due to contracts token budget.`);
     }
   }
+  if (unresolvedDynamicCalls.length > 0) {
+    contractLines.push(
+      "",
+      `## Unresolved Dynamic Calls (${unresolvedDynamicCalls.length})`,
+      ...unresolvedDynamicCalls.slice(0, 30).map((u) => `- ${u.kind.toUpperCase()} \`${u.rawExpr}\` at \`${u.file}:L${u.line}\` [unresolved dynamic call]`)
+    );
+  }
+  if (contractSelfCheck?.lowConfidence) {
+    contractLines.push("", `> NOTE: Raw-text contract self-check flagged lowConfidence (${contractSelfCheck.falseNegatives}/${contractSelfCheck.sampled} sampled uncalled endpoints matched raw client strings).`);
+  }
   const contractsMd = contractLines.join("\n");
 
-  // ---- 30_files.md (all-inclusive token budget counting tree, thin table, anchors, entries, and overflow) ----
-  const thinFiles = modules.filter((m) => m.structure?.isThinPassthrough);
-  const richModules = modules.filter((m) => !m.structure?.isThinPassthrough);
+  // ---- 30_files.md (2-level folder table + test/script folder summaries + prioritized rich modules) ----
+  // Exclude test/script noise from per-file Tier 2 pool; summarize tests/scripts by folder instead (V2 §5.2 #20)
+  const testOrScriptMods = modules.filter((m) => m.structure?.role === "test" || m.structure?.role === "script");
+  const appModules = modules.filter((m) => m.structure?.role !== "test" && m.structure?.role !== "script");
+  const thinFiles = appModules.filter((m) => m.structure?.isThinPassthrough);
+  const richModules = appModules.filter((m) => !m.structure?.isThinPassthrough);
 
   // Sort by Priority Order (§10.2) then PageRank fan-in then path
   const prioritized = [...richModules].sort((a, bMod) => {
@@ -282,23 +387,20 @@ function compileSummaryBundle({
   const maxFilesBudgetTokens = b.files_per_component * Math.max(1, components.length);
   const maxFilesChars = Math.max(1200, maxFilesBudgetTokens * 4);
 
-  // Compact directory tree (folder counts on large repos so entry budget expands from ~130 to ~700+ modules)
-  const allByDir = new Map();
-  for (const mod of [...modules].sort((a, bMod) => a.relPath.localeCompare(bMod.relPath))) {
-    const dir = path.dirname(mod.relPath) === "." ? "(root)" : path.dirname(mod.relPath);
-    if (!allByDir.has(dir)) allByDir.set(dir, []);
-    allByDir.get(dir).push(path.basename(mod.relPath));
-  }
-  const useFolderCountOnlyTree = modules.length > 300;
-  const dirTreeRawRows = [...allByDir.entries()].map(([dir, names]) =>
-    useFolderCountOnlyTree ? `- \`${dir}/\` (${names.length} files)` : `- \`${dir}/\` (${names.length}): ${names.join(", ")}`
-  );
-  const dirTreeBudget = budgetRows(dirTreeRawRows, Math.floor(maxFilesChars * 0.10), 120);
-  const dirTreeLines = [`## Directory & Module Tree (${allByDir.size} folders)`, ...dirTreeBudget.kept];
-  if (dirTreeBudget.truncated) {
-    dirTreeLines.push(`> TRUNCATED: omitted ${dirTreeBudget.omitted} folder tree lines due to files token budget; see \`files.jsonl\`.`);
+  // 2-level Folder Purpose Table replacing duplicate raw directory tree (V2 §5.2 #21)
+  const folderRows = buildFolderSummaryLines(modules);
+  const folderBudget = budgetRows(folderRows, Math.floor(maxFilesChars * 0.14), 120);
+  const dirTreeLines = [
+    `## Folder Purpose Table (Depth <= 2, ${folderRows.length} folders)`,
+    `| Folder | Files | Dominant Roles (Languages) |`,
+    `| :--- | ---: | :--- |`,
+    ...folderBudget.kept,
+  ];
+  if (folderBudget.truncated) {
+    dirTreeLines.push(`> TRUNCATED: omitted ${folderBudget.omitted} folder rows due to files token budget; see \`files.jsonl\`.`);
   }
   const dirTreeText = dirTreeLines.join("\n");
+  const testScriptsSummaryText = buildTestAndScriptFolderSummary(testOrScriptMods, dataAndConfig.scripts || []);
 
   const thinRowsAll = thinFiles.map((tf) => ({
     mod: tf,
@@ -312,7 +414,7 @@ function compileSummaryBundle({
       ? ["## Thin Pass-Through & Re-Export Files", "| File | Re-exports / Target |", "| :--- | :--- |", ...thinBudget.kept].join("\n")
       : "";
 
-  const staticOverheadChars = 360 + dirTreeText.length + thinTableText.length;
+  const staticOverheadChars = 360 + dirTreeText.length + thinTableText.length + testScriptsSummaryText.length;
   const remainingForEntriesAndOverflow = Math.max(400, maxFilesChars - staticOverheadChars);
   const fullTierCapChars = Math.floor(remainingForEntriesAndOverflow * 0.44);
   const totalEntryPoolChars = Math.floor(remainingForEntriesAndOverflow * 0.78);
@@ -369,13 +471,13 @@ function compileSummaryBundle({
   const filesDegradedCount = degradedMods.length;
   truncatedSections.files = {
     total: modules.length,
-    shown: filesFullCount + filesCompactCount + thinShownCount,
+    shown: filesFullCount + filesCompactCount + thinShownCount + testOrScriptMods.length,
     omitted: filesDegradedCount,
-    truncated: filesDegradedCount > 0 || dirTreeBudget.truncated,
+    truncated: filesDegradedCount > 0 || folderBudget.truncated,
   };
 
   const fileSections = [
-    `# File Index (${filesFullCount} full, ${filesCompactCount} compact, ${thinShownCount} thin pass-throughs, ${filesDegradedCount} folder-summarised; total ${modules.length} code modules)`,
+    `# File Index (${filesFullCount} full, ${filesCompactCount} compact, ${thinShownCount} thin, ${testOrScriptMods.length} folder-summarised test/script, ${filesDegradedCount} overflow; total ${modules.length} code modules)`,
     "",
   ];
   if (filesDegradedCount > 0) {
@@ -385,6 +487,7 @@ function compileSummaryBundle({
     );
   }
   fileSections.push(dirTreeText);
+  if (testScriptsSummaryText) fileSections.push("", testScriptsSummaryText);
   if (thinTableText) fileSections.push("", thinTableText);
 
   fileSections.push("", "## Module-by-Module Code-to-MD Specifications");
@@ -580,10 +683,9 @@ function compileSummaryBundle({
   }
   const dataMd = dataLines.join("\n");
 
-  // ---- 00_index.md (Layer A — Answer Layer, hard token cap, stable first / volatile last) ----
-  const headerWarning = secretsRedacted > 0 ? `\n> SECURITY NOTICE: ${secretsRedacted} secret pattern(s) redacted; ${coverage.secretsNotRead?.length || 0} secret file(s) excluded without reading.` : "";
+  // ---- Tier 0 Router Card (00_router.md — 2–3k ideal tokens, 5k hard cap) + Tier 1 Feature Cards ----
+  const genDate = mainComp.headDate || new Date().toISOString().slice(0, 10);
 
-  // Stack & System Purpose synthesis (#12)
   const langCounts = new Map();
   for (const m of modules) {
     if (m.language) langCounts.set(m.language, (langCounts.get(m.language) || 0) + 1);
@@ -600,123 +702,109 @@ function compileSummaryBundle({
       ? `[stated] ${cutAtWord(rootReadme.summary, 220)}`
       : `[derived] ${repoName} comprises ${components.length} component(s) and ${modules.length} code modules across ${topLangs.join(", ") || "source files"}.`;
 
-  const rootRunScripts = scripts.filter((s) => s.isComponentRoot && /^(?:dev|start|serve|build|test|lint|typecheck)/i.test(s.name));
+  const rootRunScripts = scripts.filter((s) => s.isComponentRoot && /^(?:dev|start|serve|build|test|lint|typecheck|docker-entry|pytest|cargo|go )/i.test(s.name));
   const deployList = dataAndConfig.deployFiles || [];
-  const runDeployLines = [];
-  if (rootRunScripts.length > 0) {
-    runDeployLines.push(`- **Commands:** ${rootRunScripts.slice(0, 6).map((s) => `\`${s.name}\` (\`${cutAtWord(s.command, 45)}\`)`).join(" · ")}`);
+
+  // Map doc paths & components to Fid/stacks for Tier 0 Router Card
+  const docToFid = new Map();
+  for (const f of stableFeatures) {
+    for (const d of f.docs || []) {
+      if (d.relPath && !docToFid.has(d.relPath)) docToFid.set(d.relPath, f.fid || f.id);
+    }
   }
-  if (deployList.length > 0 || ciJobs.length > 0) {
-    runDeployLines.push(`- **Build / CI / Deploy:** ${[...deployList.map((f) => `\`${f}\``), ...ciJobs.slice(0, 4).map((j) => `${j.name} (\`${j.file}\`)`)].join(", ")}`);
-  }
 
-  const layerAStable = [
-    `# ${repoName} — Context Index (Layer A)`,
-    `> Coverage: ${totalFound} discovered · ${fullCount} code · ${docFacts.length} docs · ${configsIndexed} configs · ${skippedCount} skipped · ${failedCount} failed${filesDegradedCount > 0 ? ` · TRUNCATED (${filesDegradedCount} folder-summarised in 30_files.md)` : ""}${headerWarning}`,
-    "",
-    `## Question Routing Guide (Fast vs Deep)`,
-    `- **Answer from Layer A (Fast):** overview, component roles, feature rules/status, glossary terms, high-level architecture. Prefer \`[stated]\` facts over \`[derived]\` or \`[auto]\`.`,
-    `- **Escalate to Deep (read targeted \`Lstart-Lend\` slices via Layer B):** exact validation thresholds, error messages, branch conditions, step-by-step control flow, "what happens when", impact analysis.`,
-    `- **Not in summary:** state clearly what is missing and offer to inspect the code.`,
-    "",
-    `## System Overview`,
-    sysLead,
-    `- **Architecture:** ${components.length} component(s) (${components.map((c) => `\`${c.id}\``).join(", ")}), ${modules.length} modules, ${docFacts.length} docs, ${contracts.length} contracts.`,
-    ...(topLangs.length ? [`- **Primary stack:** ${topLangs.join(", ")}`] : []),
-    ...runDeployLines,
-    buildSystemDiagram(components, features),
-    "",
-    `## Components`,
-    `| Component | VCS / Branch | Revision | Entry / Test |`,
-    `| :--- | :--- | :--- | :--- |`,
-    ...components.map((c) => {
-      const compRootScripts = scripts.filter((s) => s.isComponentRoot && (s.component === c.id || (c.id === mainComp.id && s.component === "root")));
-      const poolScripts = compRootScripts.length > 0 ? compRootScripts : scripts.filter((s) => s.component === c.id || (c.id === mainComp.id && s.component === "root"));
-      const compScripts = poolScripts.slice(0, 4).map((s) => `\`${s.name}\``).join(", ") || "-";
-      return `| \`${c.id}\` | ${c.vcs}${c.branch ? ` (${c.branch})` : ""} | \`${c.revision || "-"}\` | ${compScripts} |`;
-    }),
-  ].join("\n");
-
-  // Feature catalogue for Layer A (#9-#11, #18 confidence tag)
-  const layerAFeatRows = features.map((f) => {
-    const tag = f.confidence === "auto" ? "[auto]" : f.source === "overridden" ? "[stated]" : "[derived]";
-    const primaryRef = f.primary.slice(0, 3).map((p) => `\`${p.relPath}\``).join(", ") || "-";
-    return `- **${f.name}** ${tag} (${f.status}): ${cutAtWord(f.description, 170)} Primary: ${primaryRef}. *Does not cover:* ${cutAtWord(f.notCovered, 90)}`;
-  });
-  const featCatBudget = budgetRows(layerAFeatRows, Math.floor(b.index * 4 * 0.42), 100);
-  const featCatLines = [
-    `## Feature Catalogue (${featCatBudget.truncated ? `showing ${featCatBudget.shown} of ${features.length}` : features.length} features — see 10_features.md for slices)`,
-    ...featCatBudget.kept,
-    ...(featCatBudget.truncated ? [`> TRUNCATED: omitted ${featCatBudget.omitted} smaller features; see \`10_features.md\`.`] : []),
-  ].join("\n");
-
-  // Stated rules & decisions from docs sorted by docTier (CLAUDE/OKF/ARCHITECTURE first, CHANGELOG/templates excluded) (#14)
+  // Stated rules & decisions ranked by docTier (CLAUDE/OKF/ARCHITECTURE first, CHANGELOG/templates excluded)
   const rankedRuleEntries = [];
   for (const d of docFacts) {
     if (d.excludeFromRules) continue;
     const tier = d.docTier ?? (d.isPriority ? 1 : 2);
+    const fid = docToFid.get(d.relPath) || stableFeatures[0]?.fid || "";
     for (const r of d.rules || []) {
       rankedRuleEntries.push({
         tier,
         relPath: d.relPath,
         line: r.line,
-        rendered: `- [stated] ${cutAtWord(r.text, 160)} (\`${d.relPath}:L${r.line}\`)`,
+        fid,
+        rawText: r.text,
+        confidence: r.confidence || "stated",
+        rendered: `- [${r.confidence || "stated"}] ${cutAtWord(r.text, 160)} (\`${d.relPath}:L${r.line}\`)`,
       });
     }
   }
   rankedRuleEntries.sort((x, y) => x.tier - y.tier || x.relPath.localeCompare(y.relPath) || x.line - y.line);
-  const ruleBudget = budgetRows(rankedRuleEntries.map((x) => x.rendered), Math.floor(b.index * 4 * 0.22), 80);
-  const rulesSection = rankedRuleEntries.length
-    ? [
-        `## Rules & Decisions (${ruleBudget.truncated ? `showing ${ruleBudget.shown} of ${rankedRuleEntries.length}` : rankedRuleEntries.length} — see 50_docs.md)`,
-        ...ruleBudget.kept,
-      ].join("\n")
-    : "";
 
-  // Meeting glossary & spoken aliases (#15)
-  const glossaryRows = glossary.map((g) => `| ${g.spoken}${g.mishearings.length ? ` (aka ${g.mishearings.join(", ")})` : ""} | ${g.targetType} | \`${g.target}\` |`);
-  const glossaryBudget = budgetRows(glossaryRows, Math.floor(b.index * 4 * 0.20), 80);
-  const glossarySection = glossary.length
-    ? [
-        `## Meeting Glossary & Spoken Aliases (${glossaryBudget.truncated ? `showing ${glossaryBudget.shown} of ${glossary.length}` : glossary.length})`,
-        `| Spoken / Term | Maps To | Target |`,
-        `| :--- | :--- | :--- |`,
-        ...glossaryBudget.kept,
-      ].join("\n")
-    : "";
-
-  // Volatile section last for prompt-cache friendliness (+ TODO/FIXME scan #12)
-  const allTodos = [];
+  // Per-component primary scripts and stack for Tier 0 Components section
+  const scriptsByComp = new Map();
+  const compLangs = new Map();
   for (const m of modules) {
-    for (const td of m.todos || []) allTodos.push(td);
+    const cid = m.componentId || mainComp.id;
+    if (!compLangs.has(cid)) compLangs.set(cid, new Map());
+    if (m.language) compLangs.get(cid).set(m.language, (compLangs.get(cid).get(m.language) || 0) + 1);
   }
-  allTodos.sort((x, y) => x.relPath.localeCompare(y.relPath) || x.line - y.line);
-
-  const gaps = [];
-  if (dirtyCount > 0) gaps.push(`- **Uncommitted changes (${dirtyCount} files):** ${components.flatMap((c) => [...(c.dirtyFiles || [])]).slice(0, 8).map((p) => `\`${p}\``).join(", ")}`);
-  if (allTodos.length > 0) {
-    gaps.push(`- **In-flight TODO/FIXME (${allTodos.length}):** ${allTodos.slice(0, 5).map((td) => `${td.tag} "${cutAtWord(td.text, 55)}" (\`${td.relPath}:L${td.line}\`)`).join("; ")}`);
-  }
-  if (mismatches.length > 0) gaps.push(`- **Contract mismatches (${mismatches.length}):** ${mismatches.slice(0, 4).map((m) => `${m.type} \`${m.path}\``).join("; ")} (see \`20_contracts.md\`)`);
-  if (staleDocRefs.length > 0) gaps.push(`- **Stale doc references (${staleDocRefs.length}):** see \`50_docs.md\``);
-  if ((dataAndConfig.migrationHeads || []).length > 1) gaps.push(`- **Multiple migration heads:** see \`70_data.md\``);
-  const gapsSection = gaps.length ? [`## Known Gaps & In-Flight Work`, ...gaps].join("\n") : "";
-
-  const commitLines = commits.slice(0, 10).map((c) => {
-    const cleanMsg = redactSecrets(String(c.message || "")).text;
-    const areasTag = Array.isArray(c.areas) && c.areas.length ? ` [${c.areas.slice(0, 3).join(", ")}]` : "";
-    return `- \`${c.sha}\` (${c.date}): ${cutAtWord(cleanMsg, 80)}${areasTag}`;
+  const enrichedComponents = components.map((c) => {
+    const compRootScripts = scripts.filter((s) => s.isComponentRoot && (s.component === c.id || (c.id === mainComp.id && s.component === "root")));
+    const poolScripts = compRootScripts.length > 0 ? compRootScripts : scripts.filter((s) => s.component === c.id || (c.id === mainComp.id && s.component === "root"));
+    scriptsByComp.set(
+      c.id,
+      poolScripts.slice(0, 3).map((s) => `\`${s.name}\``).join(", ") || "-"
+    );
+    const lc = compLangs.get(c.id);
+    const stack = lc
+      ? [...lc.entries()].sort((a, bL) => bL[1] - a[1]).slice(0, 3).map(([l]) => l).join("/")
+      : c.vcs || "code";
+    return { ...c, primaryStack: stack };
   });
-  const commitsSection = commitLines.length ? [`## Recent Commits`, ...commitLines].join("\n") : "";
 
-  const layerABlocks = [layerAStable, featCatLines, rulesSection, glossarySection, gapsSection, commitsSection].filter(Boolean);
-  const layerABudgeted = budgetJoin(layerABlocks, b.index, "Layer A sections trimmed to stay under fast-path token cap; see Layer B files");
-  const indexMd = layerABudgeted.text;
-  truncatedSections.index = {
-    total: layerABudgeted.total,
-    shown: layerABudgeted.shown,
-    omitted: layerABudgeted.dropped,
-    truncated: layerABudgeted.truncated,
+  // Feature IDs touched by uncommitted dirty files
+  const dirtyFeatureIds = [];
+  if (dirtyCount > 0) {
+    for (const f of stableFeatures) {
+      if ((f.files || []).some((pf) => pf.dirty)) dirtyFeatureIds.push(f.fid || f.id);
+    }
+  }
+
+  // Tier 1 Feature Cards (complete — all features, cached incrementally by feature contentHash)
+  const tier1Res = buildTier1FeatureCards({
+    features: stableFeatures,
+    modules,
+    compIdMap,
+    compRevMap,
+    dataAndConfig,
+    recentCommits: commits,
+    absRoot,
+    cacheDir,
+    maxTokensPerCard: b.tier1_max_per_card,
+  });
+
+  const routerAnyTruncated = Object.values(truncatedSections).some((s) => s.truncated);
+  const routerVocabulary = glossary.map((g) => ({
+    term: g.spoken,
+    fid: g.fid || g.featureId || stableFeatures[0]?.fid || "",
+  }));
+  const routerRes = buildTier0RouterCard({
+    repoName,
+    genDate,
+    components: enrichedComponents,
+    features: stableFeatures,
+    compIdMap,
+    systemSummary: sysLead,
+    totalDiscovered: totalFound,
+    accountedTotal: totalIndexed + skippedCount + failedCount,
+    truncatedAny: routerAnyTruncated,
+    secretsRedacted,
+    keyFacts: rankedRuleEntries.slice(0, 12).map((r) => ({ text: r.rawText, fid: r.fid })),
+    vocabulary: routerVocabulary,
+    dirtyFeatureIds,
+    scriptsByComp,
+    targetTokens: b.router_target,
+    hardCapTokens: b.router_hard_cap,
+    failOnCap,
+  });
+  truncatedSections.router = {
+    total: stableFeatures.length,
+    shown: routerRes.metrics?.featuresShown ?? stableFeatures.length,
+    omitted: routerRes.metrics?.featuresOmitted ?? 0,
+    truncated: false, // Tier 0 summarizes domains to 2-3k; full cards live in Tier 1 features/
   };
 
   // ---- 90_coverage.md (built last so header accounting & truncation summary match 100% of body) ----
@@ -739,8 +827,11 @@ function compileSummaryBundle({
     `- **Skipped (accounted with reason):** ${skippedCount}`,
     `- **Failed / unreadable:** ${failedCount}`,
     `- **Accounted total:** ${totalIndexed + skippedCount + failedCount} / ${totalFound}`,
+    `- **Tier 0 router card tokens:** ${routerRes.tokens} / ${b.router_hard_cap} (${routerRes.tokenizer.engine}${routerRes.metrics.stepsApplied.length ? `; compression: ${routerRes.metrics.stepsApplied.join(", ")}` : ""})`,
+    `- **Tier 1 feature cards:** ${tier1Res.cards.length} (max ${Math.max(0, ...tier1Res.cards.map((c) => c.tokens))} tokens)`,
     `- **Secrets not opened (deny-list):** ${coverage.secretsNotRead?.length || 0}`,
     `- **Secrets redacted inside content:** ${secretsRedacted}${sortedRedactionEntries.length ? ` (${sortedRedactionEntries.map(([k, v]) => `${k}:${v}`).join(", ")})` : ""}`,
+    ...(contractSelfCheck ? [`- **Contract extraction self-check:** ${contractSelfCheck.falseNegatives}/${contractSelfCheck.sampled} false negatives (lowConfidence: ${contractSelfCheck.lowConfidence})`] : []),
     `- **Out-of-root symlinks refused:** ${coverage.outOfRootSymlinks || 0} · **Symlink loops skipped:** ${coverage.symlinkLoops || 0}`,
     "",
     `## Truncated Sections Summary`,
@@ -798,11 +889,23 @@ function compileSummaryBundle({
       covLines.push(`| \`${bin.dir}\` | ${bin.count} | ${bin.bytes} | ${bin.exts.join(", ")} |`);
     }
   }
+  if (redactionLocations.length > 0) {
+    covLines.push("", `## Secret Redaction Audit (${redactionLocations.length} sites)`, "| Type | Location |", "| :--- | :--- |");
+    for (const loc of redactionLocations.slice(0, 60)) {
+      covLines.push(`| \`${loc.type}\` | \`${loc.relPath}:L${loc.line}\` |`);
+    }
+    if (redactionLocations.length > 60) {
+      covLines.push(`| ... | (${redactionLocations.length - 60} more sites omitted) |`);
+    }
+  }
   const coverageMd = covLines.join("\n");
 
-  // ---- manifest.json & JSONL twins ----
+  // ---- manifest.json & Tier 1 + Tier 2 JSONL twins ----
+  const tier1FilesMap = Object.fromEntries(
+    tier1Res.cards.map((c) => [c.fileName.startsWith("features/") ? c.fileName : `features/${c.fileName}`, c.markdown])
+  );
   const filesMap = {
-    "00_index.md": indexMd,
+    "00_router.md": routerRes.markdown,
     "10_features.md": featuresMd,
     "20_contracts.md": contractsMd,
     "30_files.md": filesMd,
@@ -811,15 +914,21 @@ function compileSummaryBundle({
     "60_config.md": configMd,
     "70_data.md": dataMd,
     "90_coverage.md": coverageMd,
+    ...tier1FilesMap,
   };
 
   const anyTruncated = Object.values(truncatedSections).some((s) => s.truncated);
   const manifest = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     repoName,
     root: ".",
+    tokenizer: routerRes.tokenizer,
+    routerTokens: routerRes.tokens,
+    routerHardCap: b.router_hard_cap,
+    routerMetrics: routerRes.metrics,
     components: components.map((c) => ({
       id: c.id,
+      shortId: compIdMap.get(c.id) || c.id,
       kind: c.kind,
       relDir: c.relDir || ".",
       vcs: c.vcs,
@@ -837,14 +946,17 @@ function compileSummaryBundle({
       configs: configsIndexed,
       contracts: contracts.length,
       mismatches: mismatches.length,
+      unresolvedDynamicCalls: unresolvedDynamicCalls.length,
       symbols: totalSymbolsCount,
       symbolsShown: keptSymbolObjs.length,
-      features: features.length,
+      features: stableFeatures.length,
+      tier1Cards: tier1Res.cards.length,
       skipped: skippedCount,
       failed: failedCount,
       secretsNotRead: coverage.secretsNotRead?.length || 0,
       secretsRedacted,
     },
+    contractSelfCheck: contractSelfCheck || null,
     truncated: anyTruncated,
     truncatedSections,
     sections: Object.fromEntries(
@@ -882,14 +994,40 @@ function compileSummaryBundle({
   };
 
   const jsonlTwins = {
+    "features.jsonl": stableFeatures.map((f) => JSON.stringify({
+      fid: f.fid,
+      slug: f.slug,
+      id: f.id,
+      name: f.name,
+      status: f.status,
+      confidence: f.confidence,
+      description: f.description,
+      flags: f.flags || [],
+      ownerCompIds: f.ownerCompIds || [],
+      primary: (f.primary || []).map((p) => p.relPath),
+      supportingCount: (f.supporting || []).length,
+      docs: (f.docs || []).map((d) => d.relPath),
+      contractsCount: (f.contracts || []).length,
+      mismatchesCount: (f.mismatches || []).length,
+      cardFile: `features/${f.fid}-${f.slug || f.id}.md`,
+    })).join("\n"),
     "symbols.jsonl": symbols.map((s) => JSON.stringify(s)).join("\n"),
     "contracts.jsonl": contracts.map((c) => JSON.stringify(c)).join("\n"),
     "files.jsonl": manifest.files.map((f) => JSON.stringify(f)).join("\n"),
+    "docs.jsonl": docFacts.map((d) => JSON.stringify({
+      relPath: d.relPath,
+      title: d.title,
+      docTier: d.docTier,
+      summary: d.summary,
+      headings: d.headings,
+      rules: d.rules,
+    })).join("\n"),
+    "glossary.jsonl": glossary.map((g) => JSON.stringify(g)).join("\n"),
   };
 
-  // Single-file view keeping exact section order + TOC
+  // Convenience single-file view (human/export convenience only — tiered 00_router.md + features/ + JSONL is canonical)
   const toc = [
-    `- [Layer A: Context Index](#${safeAnchor("00_index.md")})`,
+    `- [Tier 0: Router Card](#${safeAnchor("00_router.md")})`,
     `- [Feature Map](#${safeAnchor("10_features.md")})`,
     `- [Contracts](#${safeAnchor("20_contracts.md")})`,
     `- [Files](#${safeAnchor("30_files.md")})`,
@@ -901,9 +1039,10 @@ function compileSummaryBundle({
   ].join("\n");
 
   const singleMarkdown = [
+    `<!-- CONVENIENCE EXPORT: Canonical machine format is tiered (00_router.md + features/ + JSONL twins). -->`,
     `# Repository Context: ${repoName}`,
     `## Table of Contents\n${toc}`,
-    `<a id="${safeAnchor("00_index.md")}"></a>\n${indexMd}`,
+    `<a id="${safeAnchor("00_router.md")}"></a>\n${routerRes.markdown}`,
     `<a id="${safeAnchor("10_features.md")}"></a>\n${featuresMd}`,
     `<a id="${safeAnchor("20_contracts.md")}"></a>\n${contractsMd}`,
     `<a id="${safeAnchor("30_files.md")}"></a>\n${filesMd}`,
@@ -916,11 +1055,16 @@ function compileSummaryBundle({
 
   return {
     files: filesMap,
+    tier1Cards: tier1Res.cards,
+    stableFeatures,
     manifest,
     jsonlTwins,
     singleMarkdown,
-    layerA: indexMd,
-    layerATokens: estTokens(indexMd),
+    router: routerRes.markdown,
+    routerTokens: routerRes.tokens,
+    tokenizer: routerRes.tokenizer,
+    layerA: routerRes.markdown,
+    layerATokens: routerRes.tokens,
   };
 }
 
@@ -964,8 +1108,22 @@ function writeSummaryBundleAtomic(outDir, bundle, { writeJsonTwins = true, lockS
       "manifest.json": JSON.stringify(bundle.manifest, null, 2),
       ...(writeJsonTwins ? bundle.jsonlTwins : {}),
     };
+    const featuresDir = path.join(absOut, "features");
+    if (fs.existsSync(featuresDir)) {
+      const keepNames = new Set(
+        Object.keys(allWrites)
+          .filter((k) => k.startsWith("features/"))
+          .map((k) => k.slice("features/".length))
+      );
+      for (const existing of fs.readdirSync(featuresDir)) {
+        if (existing.endsWith(".md") && !keepNames.has(existing)) {
+          try { fs.unlinkSync(path.join(featuresDir, existing)); } catch {}
+        }
+      }
+    }
     for (const [name, content] of Object.entries(allWrites)) {
       const target = path.join(absOut, name);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
       const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
       fs.writeFileSync(tmp, String(content ?? ""), "utf8");
       fs.renameSync(tmp, target);

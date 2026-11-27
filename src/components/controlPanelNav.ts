@@ -2,20 +2,20 @@ import type React from "react";
 import { useTranslation } from "react-i18next";
 import {
   Home,
-  BarChart3,
-  MessageSquare,
+  // BarChart3,
+  // MessageSquare,
   NotebookPen,
   // BookOpen,
   Folder,
   Blocks,
 } from "./icons";
-import { isAgentAllowed } from "../stores/policyRules";
-import { usePolicyStore } from "../stores/policyStore";
+// import { isAgentAllowed } from "../stores/policyRules";
+// import { usePolicyStore } from "../stores/policyStore";
 
 export type ControlPanelView =
   | "home"
-  | "insights"
-  | "chat"
+  // | "insights"
+  // | "chat"
   | "personal-notes"
   | "projects"
   // | "dictionary"
@@ -34,14 +34,14 @@ export interface ControlPanelNavItem {
  */
 export function useControlPanelNavItems(): ControlPanelNavItem[] {
   const { t } = useTranslation();
-  const agentAllowed = usePolicyStore(isAgentAllowed);
+  // const agentAllowed = usePolicyStore(isAgentAllowed);
 
   return [
     { id: "home", label: t("sidebar.home"), icon: Home },
-    { id: "insights", label: t("sidebar.insights"), icon: BarChart3 },
-    ...(agentAllowed
-      ? [{ id: "chat" as const, label: t("sidebar.chat"), icon: MessageSquare }]
-      : []),
+    // { id: "insights", label: t("sidebar.insights"), icon: BarChart3 },
+    // ...(agentAllowed
+    //   ? [{ id: "chat" as const, label: t("sidebar.chat"), icon: MessageSquare }]
+    //   : []),
     { id: "personal-notes", label: t("sidebar.notes"), icon: NotebookPen },
     { id: "projects", label: "Projects", icon: Folder },
     // { id: "dictionary", label: t("sidebar.dictionary"), icon: BookOpen },

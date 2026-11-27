@@ -105,13 +105,13 @@ const SIDEBAR_WIDTH_PX = 192;
 const SettingsModal = React.lazy(() => import("./SettingsModal"));
 const ReferralModal = React.lazy(() => import("./ReferralModal"));
 const PersonalNotesView = React.lazy(() => import("./notes/PersonalNotesView"));
-const InsightsView = React.lazy(() => import("./InsightsView"));
+// const InsightsView = React.lazy(() => import("./InsightsView"));
 // const DictionaryView = React.lazy(() => import("./DictionaryView"));
 const CopilotProjectsView = React.lazy(() =>
   import("./copilot/CopilotSettingsSections").then((m) => ({ default: m.CopilotProjectsView }))
 );
 const IntegrationsView = React.lazy(() => import("./IntegrationsView"));
-const ChatView = React.lazy(() => import("./chat/ChatView"));
+// const ChatView = React.lazy(() => import("./chat/ChatView"));
 const CommandSearch = React.lazy(() => import("./CommandSearch"));
 
 interface ControlPanelProps {
@@ -1099,7 +1099,7 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
                 <div className="flex items-center gap-2">
                   <NewNoteMenu
                     onNewNote={handleNewNote}
-                    onNewChat={agentAllowedByPolicy ? () => setActiveView("chat") : undefined}
+                    // onNewChat={agentAllowedByPolicy ? () => setActiveView("chat") : undefined}
                   />
                   <ProfileMenu
                     onOpenSettings={(section) => {
@@ -1236,7 +1236,7 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
                   }}
                 />
               )}
-              {activeView === "insights" && (
+              {/* {activeView === "insights" && (
                 <Suspense fallback={null}>
                   <InsightsView
                     onSignIn={() => {
@@ -1250,7 +1250,7 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
                 <Suspense fallback={null}>
                   <ChatView />
                 </Suspense>
-              )}
+              )} */}
               {activeView === "personal-notes" && (
                 <Suspense fallback={null}>
                   <PersonalNotesView

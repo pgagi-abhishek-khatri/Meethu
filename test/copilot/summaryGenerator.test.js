@@ -183,7 +183,9 @@ export function BillingScreen() {
   assert.equal(entry.includes("express"), false, "third-party imports must not appear in file entries");
 
   const bundle = idx.getSummaryBundle();
-  assert.match(bundle.files["00_index.md"], /Daily limit MUST NEVER exceed 100 credits/);
+  assert.match(bundle.files["00_router.md"], /Daily limit MUST NEVER exceed 100 credits/);
+  assert.ok(bundle.routerTokens <= 5000, "Tier 0 router card must stay under 5000 tokens");
+  assert.ok(bundle.tier1Cards.length >= 1, "Must emit Tier 1 feature cards");
   assert.match(bundle.files["20_contracts.md"], /\/api\/billing\/charge/);
   assert.match(bundle.files["20_contracts.md"], /called_not_served.*\/api\/billing\/missing/);
   assert.match(bundle.files["20_contracts.md"], /served_not_called.*\/api\/billing\/unused/);
@@ -234,8 +236,8 @@ test("compiler: determinism, priority degradation without silent cuts, and CLI -
   const idx2 = await createLocalCodeIndexAsync(root, { useCache: false });
   const b1 = idx1.getSummaryBundle();
   const b2 = idx2.getSummaryBundle();
-  assert.equal(b1.files["00_index.md"], b2.files["00_index.md"], "Layer A must be deterministic");
-  assert.equal(b1.files["30_files.md"], b2.files["30_files.md"], "Layer B must be deterministic");
+  assert.equal(b1.files["00_router.md"], b2.files["00_router.md"], "Tier 0 router must be deterministic");
+  assert.equal(b1.files["30_files.md"], b2.files["30_files.md"], "Tier 2 files must be deterministic");
 
   // Force tight files budget to verify explicit truncation marker & priority ordering
   const tight = idx1.getSummaryBundle({ budgets: { files_per_component: 10 } });
@@ -244,7 +246,9 @@ test("compiler: determinism, priority degradation without silent cuts, and CLI -
   // CLI write + --check
   const outDir = path.join(root, "summary-out");
   assert.equal(await runCli(["node", "cli", root, "--out", outDir]), 0);
-  assert.ok(fs.existsSync(path.join(outDir, "00_index.md")));
+  assert.ok(fs.existsSync(path.join(outDir, "00_router.md")));
+  const featFiles = fs.readdirSync(path.join(outDir, "features")).filter((n) => /^F\d+.*\.md$/.test(n));
+  assert.ok(featFiles.length >= 1, "Tier 1 feature cards must be written directly in features/");
   assert.ok(fs.existsSync(path.join(outDir, "manifest.json")));
   assert.equal(await runCli(["node", "cli", root, "--out", outDir, "--check"]), 0);
 

@@ -68,6 +68,7 @@ contextBridge.exposeInMainWorld("copilot", {
     getSummaryBundle: (repoDir) => call("code-summary-bundle", repoDir),
     exportSummaryBundle: (repoDir) => call("code-summary-export", repoDir),
     readSlices: (repoDir, sliceRequests) => call("code-read-slices", repoDir, sliceRequests),
+    queryTool: (repoDir, toolName, ...args) => call("code-tool-query", repoDir, toolName, ...args),
   },
   openWindow: undefined,
   openReference: (ref) => call("open-reference", ref),
