@@ -824,13 +824,15 @@ function buildAnswerMessages({
   plan = "", // what the USER wrote about this meeting (agenda, to-dos, goals)
   reference = "", // project files that are not indexed (small ones, inlined)
   behavior = "", // learned guide on how the copilot should behave (global)
-  catalog = "", // one line per indexed project file: what it holds
+  catalog = "", // one line per indexed project file or Tier 0 static prefix
+  catalogVolatile = "", // volatile git/dirty state kept after static prefix for KV cache reuse
   passages = "", // the matching pieces of those files for this moment, already worded
   caveat = "", // one line after the question, e.g. when the files only partly cover it
   evidenceResolution = null, // Phase 6 & 7: structured Evidence Precedence Resolver result
   temporalContext = null, // Phase 7: optional direct temporal context assembly
   budget = ANSWER_BUDGET,
 }) {
+  // Static prefix ordered FIRST (instructions -> behavior -> static catalog) for KV prompt-cache reuse across turns.
   const parts = [];
   if (instructions)
     parts.push(
@@ -840,6 +842,7 @@ function buildAnswerMessages({
     parts.push(
       `How the USER wants this copilot to behave (learned from their feedback; applies to every project and meeting):\n${clip(behavior, budget.behavior)}`
     );
+  if (catalog) parts.push(clip(catalog, budget.catalog));
   if (meeting.title) parts.push(`Meeting: ${clip(oneLine(meeting.title), budget.meeting)}`);
   if (plan)
     parts.push(
@@ -849,7 +852,7 @@ function buildAnswerMessages({
     parts.push(
       `Reference files the USER attached (use when relevant, name the file when you rely on it):\n${clip(reference, budget.reference)}`
     );
-  if (catalog) parts.push(clip(catalog, budget.catalog));
+  if (catalogVolatile) parts.push(clip(catalogVolatile, 600));
 
   let effectivePassages = passages;
   if (temporalContext && typeof temporalContext.text === "string") {

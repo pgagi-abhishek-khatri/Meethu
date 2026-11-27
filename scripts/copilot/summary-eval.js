@@ -237,6 +237,7 @@ async function evaluateRepo(repoDir, { checkDeterminism = true } = {}) {
     tier1CardsCount: bundle.manifest.counts?.tier1Cards || 0,
     layerATokens,
     layerAWithinCap: layerATokens <= 5000,
+    withinV3Target: layerATokens <= 1400,
     tier1ZeroDropped: (bundle.manifest.counts?.tier1Cards || 0) === (bundle.manifest.counts?.features || 0),
     duplicateAnchors,
     truncationParityIssues,

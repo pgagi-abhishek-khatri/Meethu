@@ -34,20 +34,28 @@ function routeFromTier0Card(routerMd, question) {
   const isFastOverview =
     /\b(what is|system overview|architecture|components|primary stack|build command|how do i run|what rules|routing rules|coverage)\b/i.test(qLow);
 
-  // Extract Feature rows from Tier 0 Markdown: F01 Name · desc · status · C1
+  // Extract Feature rows from Tier 0 Markdown: V3 pipe-delimited (F08|Name|status|comp|what) or V2 dot-separated
   const featRows = [];
   for (const line of lines) {
+    const pipe = /^(F\d{2,3})\|([^|]+)\|([^|]+)\|([^|]+)\|(.+)$/.exec(line.trim());
+    if (pipe) {
+      featRows.push({ fid: pipe[1], name: pipe[2].trim(), status: pipe[3].trim(), comps: pipe[4].trim(), purpose: pipe[5].trim(), raw: line });
+      continue;
+    }
     const m = /^(F\d{2,3})\s+([^·]+)·\s*([^·]+)·\s*([^·]+)·\s*(.+)$/.exec(line.trim());
     if (m) {
       featRows.push({ fid: m[1], name: m[2].trim(), purpose: m[3].trim(), status: m[4].trim(), comps: m[5].trim(), raw: line });
     }
   }
 
-  // Extract Vocabulary & Key Fact chips from Tier 0 Markdown: term → F01
+  // Extract Vocabulary & Key Fact chips (supports prefix-folded `analytics.*→F31,F43` and single `term→F01`)
   const vocabRows = [];
   for (const line of lines) {
-    for (const vm of line.matchAll(/([^·\n]+?)\s*→\s*(F\d{2,3})/g)) {
-      vocabRows.push({ term: vm[1].replace(/^K\d+\s+/, "").trim(), fid: vm[2].trim() });
+    for (const vm of line.matchAll(/([^·\n]+?)\s*→\s*(F\d{2,3}(?:,F\d{2,3})*)/g)) {
+      const term = vm[1].replace(/^K\d+\s+/, "").replace(/\.\*$/, "").trim();
+      for (const fid of vm[2].split(",")) {
+        vocabRows.push({ term, fid: fid.trim() });
+      }
     }
   }
 
@@ -200,7 +208,7 @@ async function runRouterBenchmark(repoDir) {
     tokenizer: tokenizerInfo,
     routerTokens: realTokens,
     withinHardCap: realTokens <= 5000,
-    withinIdealRange: realTokens <= 3200,
+    withinIdealRange: realTokens <= 1400,
     tier1CardsCount: bundle.tier1Cards?.length || 0,
     questionsTotal: questions.length,
     questionsPassed: passed,

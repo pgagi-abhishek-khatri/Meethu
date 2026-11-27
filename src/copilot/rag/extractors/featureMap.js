@@ -119,9 +119,9 @@ function buildFeatureMap({
   }
   for (const [k, mods] of [...rawBucket.entries()]) {
     if (mods.length <= 2 && !matchOverrideKey(mods[0]?.relPath, overrides)) {
-      const hasDoc = docFacts.some((d) => d.relPath.toLowerCase().includes(k));
-      const hasRoute = contracts.some((c) => mods.some((m) => m.relPath === c.handlerFile));
-      if (!hasDoc && !hasRoute) {
+      const hasDoc = docFacts.some((d) => !d.excludeFromRules && d.relPath.toLowerCase().includes(k));
+      const routeCount = contracts.filter((c) => mods.some((m) => m.relPath === c.handlerFile)).length;
+      if (!hasDoc && (routeCount === 0 || mods.length === 1)) {
         let targetKey = "core";
         if (graph) {
           const neighborCounts = new Map();
@@ -291,7 +291,7 @@ function buildFeatureMap({
         feat.description = rootDoc.summary;
         feat.confidence = "stated";
       } else {
-        const routes = feat.contracts.slice(0, 2).map((c) => `${c.method} ${c.path}`);
+        const routes = [...new Set(feat.contracts.map((c) => `${c.method} ${c.path}`))].slice(0, 2);
         const topNames = primary.slice(0, 3).map((f) => path.basename(f.relPath));
         const roles = [...new Set(primary.map((f) => f.role))].slice(0, 3).join(", ") || "modules";
         if (routes.length > 0) {
@@ -299,7 +299,7 @@ function buildFeatureMap({
         } else if (primary.length > 0) {
           feat.description = `${feat.name}: ${feat.files.length} files (${roles}; key: ${topNames.join(", ")}).`;
         } else {
-          feat.description = `purpose unknown (${feat.files.length} supporting files, no docs or entry routes).`;
+          feat.description = `purpose unknown (${feat.files.length} supporting files).`;
         }
       }
     }

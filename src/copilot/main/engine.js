@@ -569,9 +569,10 @@ function createEngine({
         plan: st.plan ?? "",
         reference: getReference() ?? "",
         behavior: st.behavior ?? "",
-        catalog: [hasIndex() ? rag.catalog() : "", hasLocalCode() ? localCode.catalog?.() : ""]
+        catalog: [hasIndex() ? rag.catalog() : "", hasLocalCode() ? (localCode.catalogPrefix?.() || localCode.catalog?.()) : ""]
           .filter(Boolean)
           .join("\n\n"),
+        catalogVolatile: hasLocalCode() ? (localCode.catalogVolatile?.() || "") : "",
       },
       // The moment needs project or canonical documents: find and route the matching passages before the model is called.
       // Runs inside the card's own time; the question's embedding was usually warmed while the decider ran.
@@ -1096,7 +1097,10 @@ function createEngine({
       ),
       running,
       settings: decisionSettings(),
-      projectFiles: hasIndex() ? (rag.catalogLines?.() ?? []) : [],
+      projectFiles: [
+        ...(hasIndex() ? (rag.catalogLines?.() ?? []) : []),
+        ...(hasLocalCode() ? (localCode.deciderCatalogLines?.() ?? []) : []),
+      ],
       profileBlocks: rag?.catalogMode?.() === "profile",
       signals: {
         endpoint: true,

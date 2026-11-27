@@ -8,7 +8,7 @@ const DEFAULT_CONFIG = {
   exclude: [],
   secret_patterns_extra: [],
   budgets: {
-    router_target: 2800, // Tier 0 router card target (2-3k ideal)
+    router_target: 1200, // V3 Tier 0 router card target (~750-1200 BPE ideal)
     router_hard_cap: 5000, // Tier 0 hard cap — build fails if real tokenizer count exceeds this
     tier1_max_per_card: 1500, // Tier 1 per-feature card cap (400-1500t)
     index: 8000, // Legacy Layer A token cap (4-10k target)

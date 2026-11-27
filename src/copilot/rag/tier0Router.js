@@ -64,6 +64,69 @@ function sanitizeRuleLine(ruleText, maxChars = 120) {
   return s;
 }
 
+/**
+ * Folds verbose multi-word IPC/contract phrases sharing a namespace root (>= 3 entries)
+ * into compact wildcard chips (`analytics.* → F31,F43`) while preserving high-signal
+ * domain names, acronyms, and model terms intact.
+ */
+function foldVocabulary(vocabulary = [], maxChips = 28) {
+  const highSignal = [];
+  const foldBuckets = new Map(); // prefix -> { fids: Set, terms: [] }
+
+  for (const v of vocabulary) {
+    const term = String(v.term || "").trim();
+    const fid = String(v.fid || "").trim();
+    if (!term || !fid) continue;
+    const isRouteOrIpc = v.targetType === "contract";
+    if (!isRouteOrIpc) {
+      highSignal.push({ term, fid, priority: v.targetType === "term" || v.targetType === "feature" ? 2 : 1 });
+      continue;
+    }
+    const firstTok = term.split(/\s+/)[0].toLowerCase();
+    if (!firstTok || firstTok.length < 3) continue;
+    if (!foldBuckets.has(firstTok)) foldBuckets.set(firstTok, { fids: new Set(), terms: [] });
+    const b = foldBuckets.get(firstTok);
+    b.fids.add(fid);
+    b.terms.push({ term, fid });
+  }
+
+  const chips = [];
+  const seen = new Set();
+  for (const h of highSignal) {
+    const key = `${h.term.toLowerCase()}::${h.fid}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    chips.push(`${h.term}→${h.fid}`);
+    if (chips.length >= maxChips) return { kept: chips, foldedCount: 0, total: vocabulary.length };
+  }
+
+  for (const [pfx, bucket] of [...foldBuckets.entries()].sort((a, b) => b[1].terms.length - a[1].terms.length || a[0].localeCompare(b[0]))) {
+    if (chips.length >= maxChips) break;
+    if (bucket.terms.length >= 2) {
+      const fidList = [...bucket.fids].sort().slice(0, 3).join(",");
+      chips.push(`${pfx}.*→${fidList}`);
+    } else {
+      const only = bucket.terms[0];
+      chips.push(`${only.term}→${only.fid}`);
+    }
+  }
+
+  return { kept: chips, total: vocabulary.length };
+}
+
+function formatCompactFeatureRow(f, compIdMap, maxDesc = 82) {
+  const owners = (f.ownerCompIds || []).map((id) => compIdMap.get(id) || id).join(",") || "C1";
+  let raw = f.routerDescription || f.description || "";
+  raw = raw
+    .replace(/^purpose unknown\s*\((\d+)[^)]*\)\.?/i, "$1f unknown")
+    .replace(new RegExp(`^${f.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:\\s*`, "i"), "")
+    .replace(/\b(\d+)\s+files\s+\(([^)]*)\)/i, "$1f ($2)")
+    .replace(/;\s*endpoints\s+/i, "; ")
+    .replace(/\(\);?/g, "");
+  const desc = cutSentence(raw, maxDesc) || `${f.files?.length || 0}f`;
+  return `${f.fid}|${f.name}|${f.status || "unknown"}|${owners}|${desc}`;
+}
+
 function buildTier0RouterCard({
   repoName,
   genDate,
@@ -79,86 +142,80 @@ function buildTier0RouterCard({
   vocabulary = [],
   dirtyFeatureIds = [],
   scriptsByComp = new Map(),
-  targetTokens = 2800,
+  targetTokens = 1200,
   hardCapTokens = 5000,
   failOnCap = true,
 } = {}) {
   const dateStr = genDate || new Date().toISOString().slice(0, 10);
   const compRefs = components.map((c) => `${compIdMap.get(c.id) || c.id}@${c.revision || "no-git"}`).join(" ");
+  // Keep staticPrefix free of volatile dirty/runtime lines so LLM KV prefix caching hits across turns (V3 Prompt Caching).
   const headerLines = [
-    `# ${repoName} · gen ${dateStr} · ${compRefs}`,
-    `Coverage: ${accountedTotal}/${totalDiscovered} files · ${truncatedAny ? "Detail truncated (Tier 2 full)" : "0 truncated"} · ${secretsRedacted} redactions`,
+    `# ${repoName} · ${dateStr} · ${compRefs}`,
+    `Coverage: ${accountedTotal}/${totalDiscovered} · ${truncatedAny ? "Tier2 full" : "complete"} · ${secretsRedacted} redacted`,
   ];
-  if (dirtyFeatureIds.length > 0) {
-    headerLines.push(`Dirty: uncommitted changes in ${dirtyFeatureIds.slice(0, 8).join(", ")}`);
-  }
 
-  const sysBlock = systemSummary || `${repoName} multi-component codebase with ${components.length} component(s) and ${features.length} domains.`;
+  const sysBlock = systemSummary || `${repoName}: ${components.length} comp(s), ${features.length} domains.`;
 
   const compRows = components.map((c) => {
     const cid = compIdMap.get(c.id) || c.id;
     const stack = c.primaryStack || c.vcs || "code";
     const entry = scriptsByComp.get(c.id) || "-";
-    const role = c.componentSummary || c.name || c.id;
-    return `${cid} ${c.name || c.id} · ${stack} · run: ${entry} · ${cutSentence(role, 72)}`;
+    return `${cid}|${c.name || c.id}|${stack}|${entry}`;
   });
 
   const componentsBlock = ["## Components", ...compRows].join("\n");
   const rulesBlock = [
     "## Escalation Rules",
-    "Answer directly from this card: overview, roles, feature status, high-level architecture.",
-    "Fetch feature(<id>) or Tier 2 tools for: exact limits, validation errors, step-by-step flow, edge cases, callers, impact.",
-    "If nothing matches, say \"not covered\". Never guess file paths, numbers, or symbol names.",
-    "Tools: feature(id) · find(term) · symbol(name) · endpoint(path) · file(path, lines) · doc(path, section)",
+    "Answer from card: overview, roles, status, architecture.",
+    "Escalate via tools for limits, flow, callers, impact: feature(id) · find(term) · symbol(name) · endpoint(path) · file(path,lines) · doc(path,sec)",
+    "Never guess missing paths/numbers.",
   ].join("\n");
 
+  const volatileSuffix = dirtyFeatureIds.length > 0
+    ? `## Dirty State\nUncommitted edits in: ${dirtyFeatureIds.slice(0, 8).join(", ")}`
+    : "";
+  const volatileTokens = volatileSuffix ? countTokens(volatileSuffix) : 0;
+
   const mandatorySections = [headerLines.join("\n"), sysBlock, componentsBlock, rulesBlock];
-  const mandatoryTokens = countTokens(mandatorySections.join("\n\n"));
+  const mandatoryTokens = countTokens(mandatorySections.join("\n\n")) + volatileTokens;
   if (failOnCap && mandatoryTokens > hardCapTokens) {
     throw new RouterCapExceededError(mandatoryTokens, hardCapTokens);
   }
 
-  // Format feature rows and compress progressively (§3.1 ladder: cluster -> rank & cap)
-  const formatFeatureLine = (f, maxDesc = 105) => {
-    const owners = (f.ownerCompIds || []).map((id) => compIdMap.get(id) || id).join(",") || "C1";
-    const desc = cutSentence(f.routerDescription || f.description || "purpose unknown", maxDesc) || `purpose unknown (${f.files?.length || 0} files)`;
-    return `${f.fid} ${f.name} · ${desc} · ${f.status || "unknown"} · ${owners}`;
-  };
-
-  let chosenFeatures = clusterOverCapFeatures(features, 26);
-  let descWidth = 105;
+  // Format TOON-compact feature rows (id|name|status|comp|what) and tighten inside targetTokens
+  let chosenFeatures = clusterOverCapFeatures(features, 22);
+  let descWidth = 82;
   let featSection = "";
   let omittedFeatures = features.length - chosenFeatures.length;
 
   const rebuildFeatSection = () => {
-    const rows = chosenFeatures.map((f) => formatFeatureLine(f, descWidth));
-    const tail = omittedFeatures > 0 ? `+${omittedFeatures} smaller domains via find()` : "";
-    featSection = ["## Features (id · what · status · comp)", ...rows, ...(tail ? [tail] : [])].join("\n");
+    const rows = chosenFeatures.map((f) => formatCompactFeatureRow(f, compIdMap, descWidth));
+    const tail = omittedFeatures > 0 ? `+${omittedFeatures} domains via find()` : "";
+    featSection = ["## Features (id|name|status|comp|what)", ...rows, ...(tail ? [tail] : [])].join("\n");
   };
   rebuildFeatSection();
 
-  // If mandatory + features exceed ~72% of targetTokens, shrink feature list cleanly
+  const featureCeiling = Math.max(hardCapTokens - 350, Math.floor((targetTokens - volatileTokens) * 0.72));
   while (
-    countTokens([headerLines.join("\n"), sysBlock, componentsBlock, featSection, rulesBlock].join("\n\n")) >
-      Math.max(hardCapTokens - 550, Math.floor(targetTokens * 0.78)) &&
-    (chosenFeatures.length > 10 || descWidth > 55)
+    countTokens([headerLines.join("\n"), sysBlock, componentsBlock, featSection, rulesBlock].join("\n\n")) > featureCeiling &&
+    (chosenFeatures.length > 10 || descWidth > 48)
   ) {
-    if (descWidth > 65) {
-      descWidth -= 20;
+    if (descWidth > 52) {
+      descWidth -= 14;
     } else {
-      chosenFeatures = chosenFeatures.slice(0, Math.max(10, chosenFeatures.length - 4));
+      chosenFeatures = chosenFeatures.slice(0, Math.max(10, chosenFeatures.length - 3));
       omittedFeatures = features.length - chosenFeatures.length;
     }
     rebuildFeatSection();
   }
 
-  // Remaining token budget for Key Facts (~10 max) & Top Vocabulary (30-60 target)
+  // Remaining budget for Key Facts (~8 max) & Prefix-Folded Vocabulary
   const keyFactLines = [];
-  for (let i = 0; i < keyFacts.length && keyFactLines.length < 10; i++) {
+  for (let i = 0; i < keyFacts.length && keyFactLines.length < 8; i++) {
     const kf = keyFacts[i];
-    const clean = sanitizeRuleLine(kf.text, 105);
+    const clean = sanitizeRuleLine(kf.text, 92);
     if (!clean || clean.length < 16) continue;
-    const candidateLines = [...keyFactLines, `K${keyFactLines.length + 1} ${clean} → ${kf.fid || "find()"}`];
+    const candidateLines = [...keyFactLines, `K${keyFactLines.length + 1} ${clean}→${kf.fid || "find()"}`];
     const probe = [
       headerLines.join("\n"),
       sysBlock,
@@ -167,7 +224,7 @@ function buildTier0RouterCard({
       ["## Key Facts", ...candidateLines].join("\n"),
       rulesBlock,
     ].join("\n\n");
-    if (countTokens(probe) <= Math.min(hardCapTokens - 400, Math.floor(targetTokens * 0.90))) {
+    if (countTokens(probe) + volatileTokens <= Math.min(hardCapTokens - 220, Math.floor(targetTokens * 0.88))) {
       keyFactLines.push(candidateLines[candidateLines.length - 1]);
     } else {
       break;
@@ -175,14 +232,10 @@ function buildTier0RouterCard({
   }
   const keyFactsBlock = keyFactLines.length > 0 ? ["## Key Facts", ...keyFactLines].join("\n") : "";
 
+  const folded = foldVocabulary(vocabulary, 28);
   const vocabKept = [];
-  let vocabDropped = 0;
-  for (const v of vocabulary) {
-    if (vocabKept.length >= 50) {
-      vocabDropped += 1;
-      continue;
-    }
-    const chip = `${v.term} → ${v.fid}`;
+  let vocabDropped = Math.max(0, vocabulary.length - folded.kept.length);
+  for (const chip of folded.kept) {
     const candidateVocab = [...vocabKept, chip].join(" · ");
     const probe = [
       headerLines.join("\n"),
@@ -195,30 +248,18 @@ function buildTier0RouterCard({
     ]
       .filter(Boolean)
       .join("\n\n");
-    if (countTokens(probe) <= Math.min(hardCapTokens - 80, targetTokens)) {
+    if (countTokens(probe) + volatileTokens <= Math.min(hardCapTokens - 60, targetTokens)) {
       vocabKept.push(chip);
     } else {
-      vocabDropped += vocabulary.length - vocabKept.length;
+      vocabDropped += folded.kept.length - vocabKept.length;
       break;
-    }
-  }
-  if (vocabDropped > 0 && vocabKept.length > 0) {
-    // Re-check keeping room for "+N more via find()" note
-    const suffix = ` (+${vocabDropped} more via find())`;
-    const baseVocabBlock = `## Vocabulary\n${vocabKept.join(" · ")}${suffix}`;
-    const probe = [headerLines.join("\n"), sysBlock, componentsBlock, featSection, keyFactsBlock, baseVocabBlock, rulesBlock]
-      .filter(Boolean)
-      .join("\n\n");
-    if (countTokens(probe) > hardCapTokens && vocabKept.length > 5) {
-      vocabKept.pop();
-      vocabDropped += 1;
     }
   }
   const vocabBlock = vocabKept.length
     ? `## Vocabulary\n${vocabKept.join(" · ")}${vocabDropped > 0 ? ` · +${vocabDropped} via find()` : ""}`
     : "";
 
-  const finalSections = [
+  const staticSections = [
     headerLines.join("\n"),
     sysBlock,
     componentsBlock,
@@ -228,7 +269,8 @@ function buildTier0RouterCard({
     rulesBlock,
   ].filter(Boolean);
 
-  const markdown = finalSections.join("\n\n");
+  const staticPrefix = staticSections.join("\n\n");
+  const markdown = volatileSuffix ? `${staticPrefix}\n\n${volatileSuffix}` : staticPrefix;
   const tokens = countTokens(markdown);
   if (failOnCap && tokens > hardCapTokens) {
     throw new RouterCapExceededError(tokens, hardCapTokens);
@@ -236,9 +278,12 @@ function buildTier0RouterCard({
 
   const stepsApplied = [];
   if (features.length > chosenFeatures.length) stepsApplied.push(`rank_cap(${chosenFeatures.length}/${features.length})`);
-  if (descWidth < 105) stepsApplied.push(`trim_desc(${descWidth}c)`);
+  if (descWidth < 82) stepsApplied.push(`trim_desc(${descWidth}c)`);
+  if (vocabulary.length > folded.kept.length) stepsApplied.push(`prefix_fold(${folded.kept.length}/${vocabulary.length})`);
 
   return {
+    staticPrefix,
+    volatileSuffix,
     markdown,
     tokens,
     tokenizer: getTokenizerInfo(),

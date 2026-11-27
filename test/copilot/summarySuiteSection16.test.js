@@ -273,3 +273,60 @@ test("V2 Compression & Accuracy: BPE cap enforcement, indirection contracts, red
   assert.equal(bench.inventedPaths, 0);
   assert.ok(bench.accuracy >= 0.75);
 });
+
+test("V3 Ultra-Compact & Speed: zero-read warm cache, comment/regex contract guard, static KV prefix & Agentless synthesis", async () => {
+  const { createScientistSynthesizerAsync } = require("../../src/copilot/core/answer/scientistSynthesizer");
+  const { extractFileContractSignals } = require("../../src/copilot/rag/extractors/contractMap");
+
+  // 1. Comment & regex self-match noise guard in contractMap
+  const sigNoise = extractFileContractSignals({
+    relPath: "src/extractor.ts",
+    text: `// router.get("/v1/fake_comment", fn)\nconst re = /router\\.post\\("/;\napp.post("/api/real/endpoint", handler);\n`,
+  });
+  assert.equal(sigNoise.served.length, 1);
+  assert.equal(sigNoise.served[0].path, "/api/real/endpoint");
+
+  const root = mk("v3-speed-");
+  const cacheDir = path.join(root, ".cache");
+  write(root, "package.json", JSON.stringify({ name: "v3-app", description: "Fast sync desktop app", scripts: { test: "node --test" } }));
+  write(root, "docs/ARCHITECTURE.md", "# Arch\n- Sync tokens MUST expire after 1 hour.\n");
+  write(root, "src/sync/engine.ts", `export function reconcileSyncStateXYZ(id: string) { return id; }\n`);
+  write(root, "src/sync/routes.ts", `import { Router } from "express";\nconst r = Router();\nr.get("/api/v3/health", () => {});\n`);
+  git(root, "init", "-q");
+  git(root, "add", ".");
+  git(root, "commit", "-qm", "init");
+
+  // Cold run populates cache
+  const synthCold = await createScientistSynthesizerAsync({ repoDir: root, useCache: true, cacheDir });
+  const coldBundle = synthCold.compileSummaryBundle();
+  assert.equal(synthCold.codeIndex.stats.cachedFiles, 0);
+
+  // Warm run must perform zero file reads for unchanged files and preserve exact determinism
+  const origReadSync = fs.readFileSync;
+  const readTargets = [];
+  fs.readFileSync = function spyRead(p, ...rest) {
+    const sp = String(p || "");
+    if (sp.startsWith(root) && (sp.endsWith(".ts") || sp.endsWith(".md")) && !sp.includes(".cache")) {
+      readTargets.push(path.relative(root, sp));
+    }
+    return origReadSync.call(this, p, ...rest);
+  };
+  let synthWarm;
+  try {
+    synthWarm = await createScientistSynthesizerAsync({ repoDir: root, useCache: true, cacheDir });
+  } finally {
+    fs.readFileSync = origReadSync;
+  }
+  assert.equal(synthWarm.codeIndex.stats.parsedFiles, 0, "Warm run must not re-parse unchanged docs or code");
+  assert.deepEqual(readTargets, [], `Warm cache run should perform 0 disk reads on unchanged files, saw: ${readTargets.join(", ")}`);
+  const warmBundle = synthWarm.compileSummaryBundle();
+  assert.equal(warmBundle.router, coldBundle.router, "Warm cache Tier 0 must match cold run byte-for-byte");
+
+  // KV static prefix invariance across dirty edit vs clean
+  assert.ok(warmBundle.routerStatic && !warmBundle.routerStatic.includes("Dirty State"));
+
+  // Agentless exact symbol lookup in scientistSynthesizer
+  const ans = synthWarm.analyze("where is reconcileSyncStateXYZ defined?");
+  assert.equal(ans.evidence.codeHits[0]?.relPath, "src/sync/engine.ts");
+  assert.equal(ans.evidence.codeHits[0]?.type, "symbol_direct");
+});

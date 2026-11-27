@@ -441,7 +441,7 @@ function createCopilot({
       const fp = await repoFingerprint(abs);
       const stale = force || !codeSynths.has(abs) || (fp !== null && codeFingerprints.get(abs) !== fp);
       if (!stale) return codeSynths.get(abs);
-      const synth = await createScientistSynthesizerAsync({ repoDir: abs, maxFiles: 1500, db: store.db || null, log: ragLog });
+      const synth = await createScientistSynthesizerAsync({ repoDir: abs, maxFiles: 4000, db: store.db || null, log: ragLog });
       try {
         if (typeof synth.codeIndex?.writeSummaryBundle === "function") {
           const commits = gitLocalAdapter.getGitLog({ count: 15 }, { cwd: abs });
@@ -488,6 +488,48 @@ function createCopilot({
     },
     localCode: {
       hasRepos: () => store.codeRepos.list().length > 0,
+      catalogPrefix: () => {
+        const repos = store.codeRepos.list();
+        if (!repos.length) return "";
+        const sections = [
+          "Connected local code repositories (Tier 0 Static Router Prefix — escalate via tools to Tier 1 cards / Tier 2 slices):",
+        ];
+        for (const r of repos) {
+          const exists = fs.existsSync(r.path);
+          const header = `- ${r.name} (${r.path})`;
+          sections.push(header);
+          if (exists) {
+            freshSynth(r.path).catch((error) => logError("Background repo refresh failed", error));
+            const synth = cachedSynth(r.path);
+            if (synth?.codeIndex) {
+              const bundle = typeof synth.compileSummaryBundle === "function" ? synth.compileSummaryBundle({ failOnCap: false }) : null;
+              sections.push(bundle?.routerStatic || bundle?.router || bundle?.layerA || synth.codeIndex.generateRepoMapMarkdown({ maxModules: 25 }));
+            }
+          }
+        }
+        return sections.join("\n");
+      },
+      catalogVolatile: () => {
+        const repos = store.codeRepos.list();
+        if (!repos.length) return "";
+        const out = [];
+        for (const r of repos) {
+          const synth = cachedSynth(r.path);
+          const bundle = typeof synth?.compileSummaryBundle === "function" ? synth.compileSummaryBundle({ failOnCap: false }) : null;
+          if (bundle?.routerVolatile) out.push(`${r.name}: ${bundle.routerVolatile}`);
+        }
+        return out.join("\n");
+      },
+      deciderCatalogLines: () => {
+        const repos = store.codeRepos.list();
+        const lines = [];
+        for (const r of repos.slice(0, 3)) {
+          const synth = cachedSynth(r.path);
+          const feats = (synth?.codeIndex?.features || []).slice(0, 8).map((f) => `${f.fid || f.id}:${f.name}`).join(", ");
+          lines.push(`code:${r.name} [${feats || `${r.stats?.codeModules ?? 0} modules`}]`);
+        }
+        return lines;
+      },
       catalog: () => {
         const repos = store.codeRepos.list();
         if (!repos.length) return "";

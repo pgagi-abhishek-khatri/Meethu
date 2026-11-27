@@ -214,7 +214,7 @@ function compileSummaryBundle({
   formatCompactFileEntry,
 } = {}) {
   const b = {
-    router_target: budgets.router_target || 2800,
+    router_target: budgets.router_target || 1200,
     router_hard_cap: budgets.router_hard_cap || 5000,
     tier1_max_per_card: budgets.tier1_max_per_card || 1500,
     index: budgets.index || 8000,
@@ -779,6 +779,7 @@ function compileSummaryBundle({
   const routerAnyTruncated = Object.values(truncatedSections).some((s) => s.truncated);
   const routerVocabulary = glossary.map((g) => ({
     term: g.spoken,
+    targetType: g.targetType || "feature",
     fid: g.fid || g.featureId || stableFeatures[0]?.fid || "",
   }));
   const routerRes = buildTier0RouterCard({
@@ -1061,6 +1062,8 @@ function compileSummaryBundle({
     jsonlTwins,
     singleMarkdown,
     router: routerRes.markdown,
+    routerStatic: routerRes.staticPrefix,
+    routerVolatile: routerRes.volatileSuffix,
     routerTokens: routerRes.tokens,
     tokenizer: routerRes.tokenizer,
     layerA: routerRes.markdown,

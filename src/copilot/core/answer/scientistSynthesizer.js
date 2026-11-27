@@ -102,8 +102,117 @@ function createScientistSynthesizer({
       }
     }
 
-    const bm25Result = codeIndex.search(searchQuery, { topK, maxChunksPerFile: deep ? 2 : 1 });
-    codeHits.push(...bm25Result.hits);
+    // RepoFormer selective gate + Agentless 3-Stage Direct Localization (tools BEFORE brute-force BM25):
+    const tools = codeIndex.tools;
+    const directHits = [];
+    const seenDirect = new Set();
+    const modByRel = new Map((codeIndex.modules || []).map((m) => [m.relPath, m]));
+
+    if (tools) {
+      // Stage 2a: Exact symbol definitions (fixes exact identifier localization across large repos)
+      const idents = String(query || "").match(/[A-Za-z_][A-Za-z0-9_]{3,}/g) || [];
+      for (const idTok of idents) {
+        if (/^(?:where|what|which|when|does|defined|locate|located|handle|handles|exact|control|flow|files|with|from|this|that|about|system|module|feature|project)$/i.test(idTok)) continue;
+        const symRes = tools.symbol(idTok, { limit: 6 });
+        for (const m of symRes.matches || []) {
+          if (m.symbol.toLowerCase() !== idTok.toLowerCase()) continue;
+          if (seenDirect.has(m.relPath)) continue;
+          seenDirect.add(m.relPath);
+          const modObj = modByRel.get(m.relPath);
+          directHits.push({
+            id: `sym:${m.relPath}`,
+            type: "symbol_direct",
+            relPath: m.relPath,
+            heading: m.symbol,
+            lineStart: m.line || 1,
+            lineEnd: m.endLine || m.line || 1,
+            score: m.symbol.toLowerCase() === idTok.toLowerCase() ? 250 : 120,
+            matchedTerms: [m.symbol],
+            text: modObj?.markdown || `Symbol \`${m.symbol}\` (${m.kind}) at ${m.relPath}:L${m.line}`,
+          });
+        }
+      }
+
+      // Stage 2b: Endpoint / IPC route lookup
+      const epTokens = String(query || "").match(/(?:\/[A-Za-z0-9_./{}-]{3,}|[a-z0-9_-]+:[a-z0-9_-]+)/gi) || [];
+      for (const ep of epTokens) {
+        const epRes = tools.endpoint(ep, { limit: 5 });
+        for (const c of epRes.contracts || []) {
+          if (seenDirect.has(c.handlerFile)) continue;
+          seenDirect.add(c.handlerFile);
+          const modObj = modByRel.get(c.handlerFile);
+          directHits.push({
+            id: `ep:${c.handlerFile}`,
+            type: "contract_direct",
+            relPath: c.handlerFile,
+            heading: `${c.method} ${c.path}`,
+            lineStart: c.handlerLine || 1,
+            lineEnd: (c.handlerLine || 1) + 15,
+            score: 220,
+            matchedTerms: [c.path],
+            text: modObj?.markdown || `${c.method} ${c.path} at ${c.handlerFile}:L${c.handlerLine}`,
+          });
+        }
+      }
+
+      // Stage 2c: Tier 1 Feature card match (resolves domain queries -> exact primary files without BM25 drift)
+      for (const f of codeIndex.features || []) {
+        const fNameLow = String(f.name || "").toLowerCase();
+        if (fNameLow.length >= 4 && qLower.includes(fNameLow)) {
+          const cardInfo = tools.feature(f.fid || f.id);
+          for (const rel of (cardInfo.primaryFiles || []).slice(0, Math.min(4, topK))) {
+            if (seenDirect.has(rel)) continue;
+            seenDirect.add(rel);
+            const modObj = modByRel.get(rel);
+            directHits.push({
+              id: `feat:${rel}`,
+              type: "tier1_feature",
+              relPath: rel,
+              heading: `${f.fid || f.id} ${f.name}`,
+              lineStart: 1,
+              lineEnd: 60,
+              score: 180,
+              matchedTerms: [f.name],
+              text: cardInfo.markdown || modObj?.markdown || `Primary file of ${f.name}: ${rel}`,
+            });
+          }
+        }
+      }
+    }
+
+    const isOverviewOnly =
+      directHits.length === 0 &&
+      /\b(?:system overview|primary stack|architecture|what are the components|routing rules)\b/i.test(query) &&
+      !/\b[a-z0-9_./-]+\.[a-z]{1,5}\b/i.test(query);
+
+    let bm25Result = { hits: [], ms: 0 };
+    if (isOverviewOnly && typeof codeIndex.getSummaryBundle === "function") {
+      const bundle = codeIndex.getSummaryBundle({ failOnCap: false });
+      directHits.push({
+        id: "tier0:router",
+        type: "tier0_router",
+        relPath: "00_router.md",
+        heading: "Tier 0 Router Card",
+        lineStart: 1,
+        lineEnd: 40,
+        score: 300,
+        matchedTerms: ["overview"],
+        text: bundle.routerStatic || bundle.router || "",
+      });
+    } else {
+      const bm25Need = Math.max(topK, topK - directHits.length + 2);
+      bm25Result = codeIndex.search(searchQuery, { topK: bm25Need, maxChunksPerFile: deep ? 2 : 1 });
+    }
+
+    codeHits.push(...directHits);
+    for (const h of bm25Result.hits || []) {
+      if (codeHits.length >= topK) break;
+      if (!seenDirect.has(h.relPath)) {
+        seenDirect.add(h.relPath);
+        codeHits.push(h);
+      }
+    }
+    if (codeHits.length > topK) codeHits.length = topK;
 
     // On Deep path, enrich top hits with bounded Lstart-Lend slices + dependency closure
     let deepSlices = [];

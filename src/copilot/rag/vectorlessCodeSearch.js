@@ -28,18 +28,18 @@ const {
 const { discoverRepoSteps, DEFAULT_IGNORE_DIRS } = require("./repoDiscovery");
 const { loadSummaryConfig } = require("./summaryConfig");
 const { extractDocFacts, findStaleDocReferences } = require("./extractors/docExtractor");
-const { extractContractsFromFiles } = require("./extractors/contractMap");
+const { extractFileContractSignals, correlateContractSignals } = require("./extractors/contractMap");
 const { buildSymbolIndex } = require("./extractors/symbolIndex");
 const { buildFeatureMap } = require("./extractors/featureMap");
 const { buildGlossary } = require("./extractors/glossaryBuilder");
-const { extractDataAndConfig } = require("./extractors/dataAndConfig");
+const { extractFileConfigSignals, extractDataAndConfig } = require("./extractors/dataAndConfig");
 const { compileSummaryBundle, writeSummaryBundleAtomic } = require("./summaryCompiler");
 const { applyModelFeatureSummaries } = require("./modelSummaries");
 const { assignStableFeatureIds } = require("./featureIds");
 const { createSummaryTools } = require("./summaryTools");
 
 // Bump when the extractor or token shape changes: cached entries from an older version are re-parsed.
-const EXTRACTOR_VERSION = 10;
+const EXTRACTOR_VERSION = 11;
 const MAX_FILE_BYTES = 512 * 1024;
 const SLICE_MS = 8;
 
@@ -135,7 +135,9 @@ function* indexSteps(
   const modules = [];
   const documents = [];
   const docFacts = [];
-  const fileSources = []; // for contracts & data/config extraction
+  const contractSignalEntries = [];
+  const configSignalEntries = [];
+  const tsAliases = [];
   const lockfileVersions = new Map();
   const binaryByDir = new Map();
   const translationFiles = [];
@@ -253,10 +255,11 @@ function* indexSteps(
         for (const loc of modData.redactionLocations || []) {
           redactionLocations.push({ type: loc.type, relPath: file.relPath, line: loc.line });
         }
-        const readForMaps = readSafeText(file.absPath, MAX_FILE_BYTES);
-        if (readForMaps.ok) {
-          const red = redactSecrets(readForMaps.text, { extraPatterns: extraSecretPatterns });
-          fileSources.push({ relPath: file.relPath, text: red.text, structure: modData.structure, specialKind: file.specialKind, componentId: file.componentId });
+        if (modData.contractSignals) {
+          contractSignalEntries.push({ relPath: file.relPath, signals: modData.contractSignals });
+        }
+        if (modData.configSignals) {
+          configSignalEntries.push(modData.configSignals);
         }
       } else {
         const readRes = readSafeText(file.absPath, MAX_FILE_BYTES);
@@ -307,6 +310,8 @@ function* indexSteps(
         );
         const profileTokens = [...symbolPathTokens, ...rawBodyUnique];
         const todos = extractInlineTodos(sourceText, file.relPath);
+        const contractSignals = extractFileContractSignals({ relPath: file.relPath, text: sourceText, structure });
+        const configSignals = extractFileConfigSignals({ relPath: file.relPath, text: sourceText, specialKind: file.specialKind, componentId: file.componentId, lockfileVersions });
         modData = {
           v: EXTRACTOR_VERSION,
           relPath: file.relPath,
@@ -317,6 +322,8 @@ function* indexSteps(
           redactionTypes: redacted.types || {},
           redactionLocations: redacted.locations || [],
           todos,
+          contractSignals,
+          configSignals,
           language: structure.language,
           structure,
           markdown,
@@ -325,7 +332,8 @@ function* indexSteps(
         const cacheRecord = { mtimeMs: file.mtimeMs, sizeBytes: file.bytes, module: modData };
         dirtyEntries.set(file.relPath, cacheRecord);
         fullCacheEntries.set(file.relPath, cacheRecord);
-        fileSources.push({ relPath: file.relPath, text: sourceText, structure, specialKind: file.specialKind, componentId: file.componentId });
+        contractSignalEntries.push({ relPath: file.relPath, signals: contractSignals });
+        configSignalEntries.push(configSignals);
       }
 
       rawCodeChars += modData.rawCodeChars || 0;
@@ -355,6 +363,37 @@ function* indexSteps(
         structure: modData.structure,
       });
     } else if (isDoc || isConfig || file.specialKind === "translation" || file.specialKind === "patch") {
+      if (isFresh && cached?.module && cached.module.kind === "non_code_v3") {
+        const cm = cached.module;
+        cachedFiles++;
+        fullCacheEntries.set(file.relPath, cached);
+        secretsRedacted += cm.secretsRedacted || 0;
+        for (const [k, v] of Object.entries(cm.redactionTypes || {})) {
+          redactionTypes[k] = (redactionTypes[k] || 0) + v;
+        }
+        for (const loc of cm.redactionLocations || []) {
+          redactionLocations.push({ type: loc.type, relPath: file.relPath, line: loc.line });
+        }
+        if (cm.subKind === "translation") {
+          if (cm.translationSummary) translationFiles.push({ relPath: file.relPath, ...cm.translationSummary });
+          recordSkip(file, "translation_summary_only");
+          continue;
+        }
+        if (cm.subKind === "config" || cm.subKind === "patch") {
+          configsIndexed += 1;
+          indexedConfigsMeta.push({ ...cm.meta, dirty: Boolean(file.dirty), componentId: file.componentId });
+          if (cm.contractSignals) contractSignalEntries.push({ relPath: file.relPath, signals: cm.contractSignals });
+          if (cm.configSignals) configSignalEntries.push(cm.configSignals);
+          for (const al of cm.tsAliases || []) tsAliases.push(al);
+        }
+        if (cm.subKind === "doc") {
+          docFacts.push(cm.facts);
+          indexedDocsMeta.push({ ...cm.meta, dirty: Boolean(file.dirty), componentId: file.componentId });
+          documents.push(cm.docRecord);
+        }
+        continue;
+      }
+
       const readRes = readSafeText(file.absPath, MAX_FILE_BYTES);
       if (!readRes.ok) {
         if (readRes.isBinary) recordSkip(file, "binary_null_bytes");
@@ -381,6 +420,21 @@ function* indexSteps(
       if (file.specialKind === "translation") {
         const tSum = summarizeTranslationFile(file.relPath, content);
         if (tSum) translationFiles.push({ relPath: file.relPath, ...tSum });
+        const cacheRec = {
+          mtimeMs: file.mtimeMs,
+          sizeBytes: file.bytes,
+          module: {
+            v: EXTRACTOR_VERSION,
+            kind: "non_code_v3",
+            subKind: "translation",
+            translationSummary: tSum,
+            secretsRedacted: redacted.count,
+            redactionTypes: redacted.types || {},
+            redactionLocations: redacted.locations || [],
+          },
+        };
+        dirtyEntries.set(file.relPath, cacheRec);
+        fullCacheEntries.set(file.relPath, cacheRec);
         recordSkip(file, "translation_summary_only");
         continue;
       }
@@ -388,30 +442,69 @@ function* indexSteps(
       if (isConfig || file.specialKind === "patch") {
         configsIndexed += 1;
         const cfgHash = crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
-        indexedConfigsMeta.push({
+        const cfgMeta = {
           relPath: file.relPath,
           componentId: file.componentId,
           dirty: Boolean(file.dirty),
           estTokens: Math.max(1, Math.round(content.length / 4)),
           hash: cfgHash,
-        });
-        fileSources.push({ relPath: file.relPath, text: content, structure: null, specialKind: file.specialKind, componentId: file.componentId });
+        };
+        indexedConfigsMeta.push(cfgMeta);
+        const contractSignals = extractFileContractSignals({ relPath: file.relPath, text: content, structure: null });
+        const configSignals = extractFileConfigSignals({ relPath: file.relPath, text: content, specialKind: file.specialKind, componentId: file.componentId, lockfileVersions });
+        contractSignalEntries.push({ relPath: file.relPath, signals: contractSignals });
+        configSignalEntries.push(configSignals);
+        const fileTsAliases = [];
+        if (/(?:^|\/)(?:tsconfig|jsconfig)(?:\.[^.]+)?\.json$/i.test(file.relPath)) {
+          try {
+            const cleanJson = content.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+            const parsed = JSON.parse(cleanJson);
+            const pathsObj = parsed?.compilerOptions?.paths || {};
+            const baseDir = path.posix.join(path.posix.dirname(file.relPath) === "." ? "" : path.posix.dirname(file.relPath), parsed?.compilerOptions?.baseUrl || "");
+            for (const [aliasKey, targets] of Object.entries(pathsObj)) {
+              const prefix = aliasKey.replace(/\*$/, "");
+              const targetBase = Array.isArray(targets) && targets[0] ? String(targets[0]).replace(/\*$/, "").replace(/^\.\//, "") : "";
+              const al = { prefix, targetRoot: path.posix.normalize(path.posix.join(baseDir, targetBase)) };
+              fileTsAliases.push(al);
+              tsAliases.push(al);
+            }
+          } catch {}
+        }
+        const cacheRec = {
+          mtimeMs: file.mtimeMs,
+          sizeBytes: file.bytes,
+          module: {
+            v: EXTRACTOR_VERSION,
+            kind: "non_code_v3",
+            subKind: isConfig ? "config" : "patch",
+            meta: cfgMeta,
+            contractSignals,
+            configSignals,
+            tsAliases: fileTsAliases,
+            secretsRedacted: redacted.count,
+            redactionTypes: redacted.types || {},
+            redactionLocations: redacted.locations || [],
+          },
+        };
+        dirtyEntries.set(file.relPath, cacheRec);
+        fullCacheEntries.set(file.relPath, cacheRec);
       }
 
       if (isDoc) {
         parsedFiles++;
         const docHash = crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
-        indexedDocsMeta.push({
+        const docMeta = {
           relPath: file.relPath,
           componentId: file.componentId,
           dirty: Boolean(file.dirty),
           estTokens: Math.max(1, Math.round(content.length / 4)),
           hash: docHash,
-        });
+        };
+        indexedDocsMeta.push(docMeta);
         const facts = extractDocFacts(file.relPath, content);
         docFacts.push(facts);
         const docTokens = tokenize(`${file.relPath} ${content.slice(0, 8000)}`);
-        documents.push({
+        const docRecord = {
           id: `doc:${file.relPath}`,
           type: "markdown_doc",
           relPath: file.relPath,
@@ -419,7 +512,25 @@ function* indexSteps(
           text: content.slice(0, 3000),
           tokens: docTokens,
           length: docTokens.length,
-        });
+        };
+        documents.push(docRecord);
+        const cacheRec = {
+          mtimeMs: file.mtimeMs,
+          sizeBytes: file.bytes,
+          module: {
+            v: EXTRACTOR_VERSION,
+            kind: "non_code_v3",
+            subKind: "doc",
+            meta: docMeta,
+            facts,
+            docRecord,
+            secretsRedacted: redacted.count,
+            redactionTypes: redacted.types || {},
+            redactionLocations: redacted.locations || [],
+          },
+        };
+        dirtyEntries.set(file.relPath, cacheRec);
+        fullCacheEntries.set(file.relPath, cacheRec);
       } else if (!isConfig && file.specialKind !== "patch") {
         recordSkip(file, file.specialKind || "unindexed_other");
       }
@@ -454,23 +565,6 @@ function* indexSteps(
   }
 
   // Resolve internal Uses: import specifiers (relative & tsconfig paths aliases) to canonical repo-relative paths (#20)
-  const tsAliases = [];
-  for (const src of fileSources) {
-    if (/(?:^|\/)(?:tsconfig|jsconfig)(?:\.[^.]+)?\.json$/i.test(src.relPath) && src.text) {
-      try {
-        const cleanJson = src.text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-        const parsed = JSON.parse(cleanJson);
-        const pathsObj = parsed?.compilerOptions?.paths || {};
-        const baseDir = path.posix.join(path.posix.dirname(src.relPath) === "." ? "" : path.posix.dirname(src.relPath), parsed?.compilerOptions?.baseUrl || "");
-        for (const [aliasKey, targets] of Object.entries(pathsObj)) {
-          const prefix = aliasKey.replace(/\*$/, "");
-          const targetBase = Array.isArray(targets) && targets[0] ? String(targets[0]).replace(/\*$/, "").replace(/^\.\//, "") : "";
-          tsAliases.push({ prefix, targetRoot: path.posix.normalize(path.posix.join(baseDir, targetBase)) });
-        }
-      } catch {}
-    }
-  }
-
   const CODE_EXT_TRY = ["", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".swift", "/index.ts", "/index.tsx", "/index.js", "/index.jsx"];
   const resolveImportTarget = (fromRel, spec) => {
     if (!spec) return spec;
@@ -522,9 +616,9 @@ function* indexSteps(
     for (const p of defs) symbolDefsLower.get(low).add(p);
   }
 
-  const contractsRes = extractContractsFromFiles(fileSources);
+  const contractsRes = correlateContractSignals(contractSignalEntries);
   const { contracts, mismatches, events, unresolvedDynamicCalls = [], selfCheck: contractSelfCheck = null } = contractsRes;
-  const dataAndConfig = extractDataAndConfig({ fileSources, lockfileVersions, modules });
+  const dataAndConfig = extractDataAndConfig({ cachedSignals: configSignalEntries, lockfileVersions, modules });
   const symbols = buildSymbolIndex(modules, { contracts, flags: dataAndConfig.featureFlags, graph });
   const features = assignStableFeatureIds({
     features: buildFeatureMap({ modules, docFacts, contracts, mismatches, graph, overrides: featuresOverride }),
