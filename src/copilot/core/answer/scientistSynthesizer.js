@@ -1,7 +1,6 @@
 // src/copilot/core/answer/scientistSynthesizer.js
-// Milestone 5: Scientist-Grade Local Code & Git Synthesis Engine.
+// Milestone 5 + Context Summary v2: Scientist-Grade Local Code & Git Synthesis Engine.
 // 100% Vectorless, 100% Offline Local Execution (zero GitHub API calls, zero vector embeddings).
-// Combines When-to-Call Routing + GitRegistry + gitLocalAdapter + Code-to-MD BM25 Search.
 
 const path = require("path");
 const { classifyIntent, ROUTES } = require("../trigger/whenToCallRouter");
@@ -9,20 +8,14 @@ const { getGitRegistry } = require("../okf/gitRegistry");
 const gitLocalAdapter = require("../../../helpers/connectors/gitLocalAdapter");
 const { createLocalCodeIndex, createLocalCodeIndexAsync } = require("../../rag/vectorlessCodeSearch");
 
-/**
- * Extracts branch names from a comparison query like "compare branch credit with main"
- */
 function parseBranchCompare(query) {
-  const m = /\b(?:compare|diff)\s+(?:branch\s+)?([a-z0-9_\-\.\/]+)\s+(?:with|to|against)\s+(?:branch\s+)?([a-z0-9_\-\.\/]+)/i.exec(
+  const m = /\b(?:compare|diff)\s+(?:branch\s+)?([a-z0-9_.\-/]+)\s+(?:with|to|against)\s+(?:branch\s+)?([a-z0-9_.\-/]+)/i.exec(
     query
   );
   if (!m) return null;
   return { head: m[1], base: m[2] };
 }
 
-/**
- * Creates a reusable Scientist Synthesizer bound to a local repository directory.
- */
 function createScientistSynthesizer({
   repoDir = process.cwd(),
   maxFiles = 250,
@@ -33,16 +26,11 @@ function createScientistSynthesizer({
   log = () => {},
 } = {}) {
   const absRepo = path.resolve(repoDir);
-  // A new synthesizer means the repo moved (or was just added): never reuse a registry cached before that.
   const gitRegistry = getGitRegistry(absRepo, { refresh: true });
   const codeIndex =
     prebuiltIndex || createLocalCodeIndex(absRepo, { maxFiles, useCache, cacheDir, db, log });
 
-  /**
-   * Analyzes a user query with full scientist rigor, returning structured Markdown
-   * and machine-readable verification telemetry.
-   */
-  function analyze(query, { topK = 6 } = {}) {
+  function analyze(query, { topK = 6, deep = false } = {}) {
     const t0 = Date.now();
     const intent = classifyIntent(query, { localCodeMode: true });
     const gitFacts = [];
@@ -50,13 +38,9 @@ function createScientistSynthesizer({
     let branchComparison = null;
     let commitMatches = [];
 
-    // 1. Canonical Local Git Lookup (OKF)
     const okfGit = gitRegistry.lookup(query);
-    if (okfGit.matched) {
-      gitFacts.push(okfGit);
-    }
+    if (okfGit.matched) gitFacts.push(okfGit);
 
-    // Fast-path isolation for OKF_CANONICAL: < 2ms deterministic answer without scanning commits/code
     if (intent.route === ROUTES.OKF_CANONICAL && okfGit.matched) {
       const totalMs = Date.now() - t0;
       const md = renderScientistReport({
@@ -92,7 +76,6 @@ function createScientistSynthesizer({
       };
     }
 
-    // 2. Branch comparison diff if requested
     const cmp = parseBranchCompare(query);
     if (cmp) {
       branchComparison = {
@@ -102,7 +85,6 @@ function createScientistSynthesizer({
       };
     }
 
-    // 3. Lexical Commit History Search (if query mentions commit/history/why/change/revert/branch)
     if (
       intent.route === ROUTES.LOCAL_CODE_VECTORLESS ||
       /\b(?:commit|history|revert|change|why|added|updated|fix|feat|branch)\b/i.test(query)
@@ -110,13 +92,38 @@ function createScientistSynthesizer({
       commitMatches = gitRegistry.searchCommits(query, { count: 60 }).slice(0, 5);
     }
 
-    // 4. Vectorless BM25 + cAST Code-to-MD Search (0 vectors)
-    const bm25Result = codeIndex.search(query, { topK });
+    // Glossary expansion: if query mentions a spoken alias, include mapped target tokens
+    let searchQuery = query;
+    const qLower = String(query || "").toLowerCase();
+    for (const g of codeIndex.glossary || []) {
+      const sp = g.spoken.toLowerCase();
+      if (sp.length >= 4 && (qLower.includes(sp) || g.mishearings.some((m) => qLower.includes(m.toLowerCase())))) {
+        searchQuery += ` ${g.target}`;
+      }
+    }
+
+    const bm25Result = codeIndex.search(searchQuery, { topK, maxChunksPerFile: deep ? 2 : 1 });
     codeHits.push(...bm25Result.hits);
 
-    const totalMs = Date.now() - t0;
+    // On Deep path, enrich top hits with bounded Lstart-Lend slices + dependency closure
+    let deepSlices = [];
+    if (deep && codeHits.length > 0 && typeof codeIndex.readFileSlices === "function") {
+      const sliceReqs = codeHits.slice(0, 5).map((h) => ({
+        relPath: h.relPath,
+        lineStart: h.lineStart,
+        lineEnd: Math.max(h.lineEnd || h.lineStart, h.lineStart + 45),
+      }));
+      // Add direct dependency closure neighbors if budget allows
+      const topFile = codeHits[0]?.relPath;
+      if (topFile && codeIndex.graph?.outEdges?.has(topFile)) {
+        for (const dep of [...codeIndex.graph.outEdges.get(topFile)].slice(0, 2)) {
+          sliceReqs.push({ relPath: dep, lineStart: 1, lineEnd: 50 });
+        }
+      }
+      deepSlices = codeIndex.readFileSlices(sliceReqs, { maxTokens: 3200 });
+    }
 
-    // 5. Render Scientist-Grade Milestone & Evidence Report
+    const totalMs = Date.now() - t0;
     const md = renderScientistReport({
       query,
       repoDir: absRepo,
@@ -126,6 +133,7 @@ function createScientistSynthesizer({
       branchComparison,
       commitMatches,
       codeHits,
+      deepSlices,
       codeStats: codeIndex.stats,
       totalMs,
     });
@@ -140,6 +148,7 @@ function createScientistSynthesizer({
         branchComparison,
         commitMatches,
         codeHits,
+        deepSlices,
       },
       telemetry: {
         totalMs,
@@ -166,12 +175,18 @@ function createScientistSynthesizer({
     });
   }
 
+  function compileSummaryBundle(opts = {}) {
+    const recentCommits = gitLocalAdapter.getGitLog({ count: 15 }, { cwd: absRepo });
+    return codeIndex.getSummaryBundle({ recentCommits, ...opts });
+  }
+
   return {
     repoDir: absRepo,
     gitRegistry,
     codeIndex,
     analyze,
     compileContextFile,
+    compileSummaryBundle,
   };
 }
 
@@ -184,6 +199,7 @@ function renderScientistReport({
   branchComparison,
   commitMatches,
   codeHits,
+  deepSlices = [],
   codeStats,
   totalMs,
 }) {
@@ -198,7 +214,6 @@ function renderScientistReport({
   );
   lines.push("");
 
-  // Section 1: Ground Truth & Git Facts
   lines.push(`## 1. Executive Ground Truth (Deterministic Local Git / OKF)`);
   if (gitFacts.length > 0) {
     for (const fact of gitFacts) {
@@ -209,14 +224,11 @@ function renderScientistReport({
     lines.push(`- **Indexed Code Modules**: ${codeStats.codeModules} files (${codeStats.indexedDocuments} AST/MD units)`);
   }
 
-  // Section 2: Branch Diff / Commit Timeline
   if (branchComparison || commitMatches.length > 0) {
     lines.push("");
     lines.push(`## 2. Local Commit & Diff Decomposition`);
     if (branchComparison) {
-      lines.push(
-        `### Branch Comparison: \`${branchComparison.base}\` ... \`${branchComparison.head}\``
-      );
+      lines.push(`### Branch Comparison: \`${branchComparison.base}\` ... \`${branchComparison.head}\``);
       lines.push(
         `- **Files Changed**: ${branchComparison.stats.filesChanged} (Kept: ${branchComparison.stats.keptFiles}, Filtered Noise/Lockfiles: ${branchComparison.stats.droppedFiles.length})`
       );
@@ -227,34 +239,36 @@ function renderScientistReport({
     if (commitMatches.length > 0) {
       lines.push(`### Relevant Local Commits (BM25 Lexical Match)`);
       for (const c of commitMatches) {
-        lines.push(`- **\`${c.sha}\`** (${c.date}, ${c.author}) [score: ${c.score}]: ${c.message}`);
-        if (c.files.length) {
-          lines.push(`  - Files: \`${c.files.slice(0, 5).join("`, `")}\``);
-        }
+        lines.push(`- **\`${c.sha}\`** (${c.date}): ${c.message}`);
+        if (c.files.length) lines.push(`  - Files: \`${c.files.slice(0, 5).join("`, `")}\``);
       }
     }
   }
 
-  // Section 3: Code-to-MD & AST Evidence Matrix
   lines.push("");
   lines.push(`## 3. Code-to-MD & cAST Evidence Matrix`);
   if (codeHits.length === 0) {
     lines.push(`- No matching source code blocks found for query terms.`);
   } else {
     for (const hit of codeHits) {
-      lines.push(
-        `### \`${hit.relPath}\` (${hit.type}, BM25 score: ${hit.score}, L${hit.lineStart})`
-      );
+      lines.push(`### \`${hit.relPath}\` (${hit.type}, BM25 score: ${hit.score}, L${hit.lineStart}${hit.lineEnd ? `-L${hit.lineEnd}` : ""})`);
       lines.push(`- Matched terms: \`${hit.matchedTerms.join("`, `")}\``);
       const preview = hit.text.length > 1500 ? hit.text.slice(0, 1500).trimEnd() + "\n..." : hit.text;
       lines.push("```markdown\n" + preview + "\n```");
     }
   }
 
+  if (deepSlices.length > 0) {
+    lines.push("", `## 4. Deep Bounded File Slices`);
+    for (const sl of deepSlices) {
+      lines.push(`### \`${sl.relPath}\` (L${sl.lineStart}-L${sl.lineEnd})`);
+      lines.push("```\n" + sl.text.slice(0, 2000) + "\n```");
+    }
+  }
+
   return lines.join("\n");
 }
 
-// Builds the index in time slices (see createLocalCodeIndexAsync) so a big repo never freezes the app.
 async function createScientistSynthesizerAsync(options = {}) {
   const absRepo = path.resolve(options.repoDir || process.cwd());
   const codeIndex = await createLocalCodeIndexAsync(absRepo, {
@@ -262,6 +276,7 @@ async function createScientistSynthesizerAsync(options = {}) {
     useCache: options.useCache ?? true,
     cacheDir: options.cacheDir,
     db: options.db ?? null,
+    outputDir: options.outputDir,
     log: options.log,
   });
   return createScientistSynthesizer({ ...options, repoDir: absRepo, codeIndex });

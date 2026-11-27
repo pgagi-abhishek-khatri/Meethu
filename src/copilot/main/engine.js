@@ -619,7 +619,7 @@ function createEngine({
                 codeIntent?.route !== ROUTES.DIRECT_ANSWER
               ) {
                 try {
-                  localCodeResult = await localCode.search(spec.focus);
+                  localCodeResult = await localCode.search(spec.focus, { deep: Boolean(spec.deep) });
                 } catch {
                   localCodeResult = null;
                 }

@@ -101,28 +101,54 @@ function listLocalBranches(options = {}) {
 /**
  * Gets recent local commit history with author, SHA, date, and message.
  */
-function getGitLog({ count = 20, branch = "HEAD" } = {}, options = {}) {
+function getGitLog({ count = 20, branch = "HEAD", includeAreas = true } = {}, options = {}) {
   const n = String(Math.max(1, Math.min(Number(count) || 20, 200)));
-  const res = runGit(
-    ["log", "-n", n, "--format=%H|%h|%an|%ad|%s", "--date=short", isSafeRef(branch) ? branch : "HEAD", "--"],
-    options
-  );
+  const args = includeAreas
+    ? ["log", "-n", n, "--name-only", "--format=@@C@@%H|%h|%an|%ad|%s", "--date=short", isSafeRef(branch) ? branch : "HEAD", "--"]
+    : ["log", "-n", n, "--format=%H|%h|%an|%ad|%s", "--date=short", isSafeRef(branch) ? branch : "HEAD", "--"];
+  const res = runGit(args, options);
   if (!res.ok || !res.output) return [];
 
   const commits = [];
-  for (const line of res.output.split("\n")) {
-    const [fullSha, sha, author, date, ...msgParts] = line.split("|");
-    if (sha) {
-      commits.push({
-        sha: sha.trim(),
-        fullSha: fullSha.trim(),
-        author: author.trim(),
-        date: date.trim(),
-        message: msgParts.join("|").trim(),
-      });
+  let cur = null;
+  for (const rawLine of res.output.split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (includeAreas && line.startsWith("@@C@@")) {
+      const payload = line.slice(5);
+      const [fullSha, sha, author, date, ...msgParts] = payload.split("|");
+      if (sha) {
+        cur = {
+          sha: sha.trim(),
+          fullSha: fullSha.trim(),
+          author: author.trim(),
+          date: date.trim(),
+          message: msgParts.join("|").trim(),
+          areas: new Set(),
+        };
+        commits.push(cur);
+      }
+      continue;
+    }
+    if (!includeAreas) {
+      const [fullSha, sha, author, date, ...msgParts] = line.split("|");
+      if (sha) {
+        commits.push({
+          sha: sha.trim(),
+          fullSha: fullSha.trim(),
+          author: author.trim(),
+          date: date.trim(),
+          message: msgParts.join("|").trim(),
+          areas: [],
+        });
+      }
+    } else if (cur) {
+      const parts = line.split("/");
+      const area = parts.length > 1 ? parts.slice(0, 2).join("/") : parts[0];
+      if (area && cur.areas.size < 4) cur.areas.add(area);
     }
   }
-  return commits;
+  return commits.map((c) => ({ ...c, areas: c.areas instanceof Set ? [...c.areas] : c.areas }));
 }
 
 /**

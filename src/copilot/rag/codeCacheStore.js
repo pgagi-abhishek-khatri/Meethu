@@ -7,7 +7,7 @@ const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 
-const CACHE_SCHEMA_VERSION = 3;
+const CACHE_SCHEMA_VERSION = 4;
 const DEFAULT_CACHE_DIR = path.join(os.tmpdir(), "meethu-code-cache");
 
 function repoKey(repoDir) {

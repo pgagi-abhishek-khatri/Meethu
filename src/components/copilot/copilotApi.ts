@@ -127,6 +127,11 @@ export interface ProjectFilePreview {
 export interface LocalCodeRepoStats {
   filesScanned: number;
   codeModules: number;
+  docsIndexed?: number;
+  contractsCount?: number;
+  mismatchesCount?: number;
+  symbolsCount?: number;
+  featuresCount?: number;
   indexedDocuments: number;
   indexMs: number;
   vectorCalls: number;
@@ -134,6 +139,7 @@ export interface LocalCodeRepoStats {
   truncated?: boolean; // the file cap was reached: part of the repo is not indexed
   skippedLarge?: number; // files over the size limit, left out
   secretsRedacted?: number; // credentials replaced in place before indexing
+  secretsNotRead?: number; // secret files denied before opening
 }
 
 export interface LocalCodeRepo {
@@ -210,6 +216,22 @@ export interface SingleCodeContextResult {
     vectorCalls: number;
     githubApiCalls: number;
   };
+  error?: string;
+}
+
+export interface SummaryBundleResult {
+  ok: boolean;
+  repoName?: string;
+  files?: Record<string, string>;
+  manifest?: {
+    schemaVersion: number;
+    repoName: string;
+    counts: Record<string, number>;
+    truncated: boolean;
+    sections: Record<string, { chars: number; estTokens: number }>;
+  };
+  layerA?: string;
+  layerATokens?: number;
   error?: string;
 }
 
@@ -315,6 +337,14 @@ export interface CopilotBridge {
     downloadContextFile(
       repoDir: string
     ): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>;
+    getSummaryBundle?(repoDir: string): Promise<SummaryBundleResult>;
+    exportSummaryBundle?(
+      repoDir: string
+    ): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>;
+    readSlices?(
+      repoDir: string,
+      sliceRequests: { relPath: string; lineStart: number; lineEnd?: number }[]
+    ): Promise<{ ok: boolean; slices: { relPath: string; lineStart: number; lineEnd: number; text: string }[] }>;
   };
   openWindow?(): Promise<void>; // control panel only: show the live window
   closeWindow?(): Promise<void>; // control panel only: hide the live window

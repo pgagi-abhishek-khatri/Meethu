@@ -1,27 +1,26 @@
 // src/copilot/rag/codeGraph.js
-// Directed Import/Symbol Dependency Graph + Personalized PageRank + Directory Authority Tiers.
-// Implements RepoGraph / LocAgent / Aider RepoMap topological ranking in pure JS (< 5ms).
-// Zero vector embeddings, zero external API calls.
+// Directed Import/Symbol Dependency Graph + Personalized PageRank + Directory Authority Tiers
+// with tsconfig/jsconfig path alias resolution. Zero vectors, zero external API calls.
 
+const fs = require("fs");
 const path = require("path");
 
-/**
- * Directory authority multipliers prevent migrations, tests, and docs
- * from outscoring core production modules unless explicitly requested.
- */
 function directoryAuthority(relPath, queryLower = "") {
   const p = String(relPath || "").toLowerCase();
 
-  // Explicit intent overrides
   const wantsMigrations = /\b(?:alembic|migration|migrate|schema\s+upgrade|0\d\d_)\b/.test(queryLower);
   const wantsTests = /\b(?:test|tests|spec|pytest|mocha|assert)\b/.test(queryLower);
   const wantsDocs = /\b(?:readme|docs|documentation|changelog|guide|proposal)\b/.test(queryLower);
+  const wantsScripts = /\b(?:script|scripts|eval|bench|benchmark|cli)\b/.test(queryLower);
 
   if (/^(?:alembic|migrations)\//.test(p) || /\/migrations\//.test(p)) {
     return wantsMigrations ? 1.45 : 0.45;
   }
   if (/^(?:test|tests|__tests__)\//.test(p) || /\.(?:test|spec)\.[a-z]+$/.test(p)) {
-    return wantsTests ? 1.4 : 0.65;
+    return wantsTests ? 1.4 : 0.55;
+  }
+  if (/^(?:scripts)\//.test(p)) {
+    return wantsScripts ? 1.35 : 0.55;
   }
   if (/^(?:docs|carzilla-docs|examples)\//.test(p) || p.endsWith(".md")) {
     return wantsDocs ? 1.4 : 0.65;
@@ -35,20 +34,38 @@ function directoryAuthority(relPath, queryLower = "") {
   return 1.0;
 }
 
-/**
- * Extracts normalized module stem / import targets from raw import strings.
- */
+function loadPathAliases(rootDir) {
+  const aliases = []; // { prefix, targetPrefix }
+  if (!rootDir) return aliases;
+  for (const cfgName of ["tsconfig.json", "jsconfig.json"]) {
+    const cfgPath = path.join(rootDir, cfgName);
+    if (!fs.existsSync(cfgPath)) continue;
+    try {
+      // Strip single-line comments before parsing JSON
+      const raw = fs.readFileSync(cfgPath, "utf8").replace(/^\s*\/\/.*$/gm, "");
+      const parsed = JSON.parse(raw);
+      const baseUrl = parsed.compilerOptions?.baseUrl ? parsed.compilerOptions.baseUrl.replace(/^\.\//, "") : "";
+      const pathsObj = parsed.compilerOptions?.paths || {};
+      for (const [pat, targets] of Object.entries(pathsObj)) {
+        if (!Array.isArray(targets) || !targets.length) continue;
+        const prefix = pat.replace(/\*$/, "");
+        const targetPrefix = path.posix.join(baseUrl, targets[0].replace(/\*$/, "").replace(/^\.\//, ""));
+        aliases.push({ prefix, targetPrefix });
+      }
+    } catch {}
+  }
+  return aliases;
+}
+
 function extractImportTargets(imports = []) {
   const targets = [];
   for (const imp of imports) {
-    // Python: from app.services.credit_service import ... OR import app.config
     const pyFrom = /^\s*from\s+([a-zA-Z0-9_.]+)\s+import\b(.*)$/.exec(imp);
     if (pyFrom) {
       const spec = pyFrom[1];
       if (!spec.startsWith(".")) {
         targets.push(spec.replace(/\./g, "/"));
       } else {
-        // Relative: one dot is this package, each further dot is one level up. `from . import util` names the module.
         const dots = spec.match(/^\.+/)[0].length;
         const rest = spec.slice(dots).replace(/\./g, "/");
         const prefix = dots === 1 ? "./" : "../".repeat(dots - 1);
@@ -65,7 +82,6 @@ function extractImportTargets(imports = []) {
       targets.push(pyImp[1].replace(/\./g, "/"));
       continue;
     }
-    // JS/TS: require("./foo") or import ... from "../bar/baz"
     const jsImp = /(?:from|require\()\s*['"]([^'"]+)['"]/.exec(imp);
     if (jsImp) {
       targets.push(jsImp[1]);
@@ -74,14 +90,11 @@ function extractImportTargets(imports = []) {
   return targets;
 }
 
-/**
- * Builds a directed repository dependency graph G = (V, E) over parsed modules.
- */
-function buildCodeGraph(modules = []) {
+function buildCodeGraph(modules = [], { rootDir = null } = {}) {
+  const aliases = loadPathAliases(rootDir);
   const nodePaths = modules.map((m) => m.relPath);
   const nodeSet = new Set(nodePaths);
 
-  // Fast stem/suffix lookup for resolving relative & dotted imports
   const byBasenameNoExt = new Map();
   const byPathNoExt = new Map();
   for (const m of modules) {
@@ -92,7 +105,6 @@ function buildCodeGraph(modules = []) {
     byBasenameNoExt.get(base).push(m.relPath);
   }
 
-  // Adjacency lists: outEdges (A -> B), inEdges (B <- A)
   const outEdges = new Map();
   const inEdges = new Map();
   for (const p of nodePaths) {
@@ -100,7 +112,6 @@ function buildCodeGraph(modules = []) {
     inEdges.set(p, new Set());
   }
 
-  // Symbol definition map: symbolName -> Set<relPath>
   const symbolDefs = new Map();
   for (const m of modules) {
     for (const c of m.structure?.classes || []) {
@@ -115,26 +126,32 @@ function buildCodeGraph(modules = []) {
     }
   }
 
-  // Resolve import edges
+  const resolveLookup = (candidate) =>
+    byPathNoExt.get(candidate) ||
+    byPathNoExt.get(`${candidate}/index`) ||
+    byPathNoExt.get(`${candidate}/__init__`) ||
+    (nodeSet.has(candidate) ? candidate : null);
+
   for (const m of modules) {
     const fromDir = path.dirname(m.relPath);
     const targets = extractImportTargets(m.structure?.imports || []);
-    for (const rawTarget of targets) {
+    for (let rawTarget of targets) {
       let resolved = null;
 
-      if (rawTarget.startsWith(".")) {
+      // Apply tsconfig/jsconfig path alias if matching
+      for (const al of aliases) {
+        if (rawTarget.startsWith(al.prefix)) {
+          const mapped = path.posix.normalize(al.targetPrefix + rawTarget.slice(al.prefix.length));
+          resolved = resolveLookup(mapped);
+          if (resolved) break;
+        }
+      }
+
+      if (!resolved && rawTarget.startsWith(".")) {
         const joined = path.posix.normalize(path.posix.join(fromDir === "." ? "" : fromDir, rawTarget));
-        resolved =
-          byPathNoExt.get(joined) ||
-          byPathNoExt.get(`${joined}/index`) ||
-          byPathNoExt.get(`${joined}/__init__`) ||
-          (nodeSet.has(joined) ? joined : null);
-      } else {
-        resolved =
-          byPathNoExt.get(rawTarget) ||
-          byPathNoExt.get(`${rawTarget}/__init__`) ||
-          byPathNoExt.get(`${rawTarget}/index`) ||
-          null;
+        resolved = resolveLookup(joined);
+      } else if (!resolved) {
+        resolved = resolveLookup(rawTarget) || resolveLookup(`src/${rawTarget}`);
         if (!resolved) {
           const base = path.posix.basename(rawTarget);
           const candidates = byBasenameNoExt.get(base);
@@ -149,7 +166,6 @@ function buildCodeGraph(modules = []) {
     }
   }
 
-  // Precompute global architectural PageRank (unseeded) in ~2ms
   const globalRank = runPageRank(nodePaths, outEdges, inEdges);
 
   return {
@@ -159,24 +175,17 @@ function buildCodeGraph(modules = []) {
     inEdges,
     symbolDefs,
     globalRank,
-    /**
-     * Computes Personalized PageRank seeded around query-matched modules.
-     */
     personalizedRank(seedWeights = new Map(), iterations = 12) {
       return runPageRank(nodePaths, outEdges, inEdges, seedWeights, iterations);
     },
   };
 }
 
-/**
- * Fast power-iteration PageRank (undirected + directed import boost).
- */
 function runPageRank(nodes, outEdges, inEdges, seedWeights = null, iterations = 12, damping = 0.85) {
   const N = nodes.length;
   const scores = new Map();
   if (N === 0) return scores;
 
-  // Build normalized personalization vector
   const personal = new Map();
   let seedSum = 0;
   if (seedWeights && seedWeights.size > 0) {
@@ -193,32 +202,24 @@ function runPageRank(nodes, outEdges, inEdges, seedWeights = null, iterations = 
 
   for (let it = 0; it < iterations; it++) {
     const next = new Map();
-    for (const n of nodes) {
-      next.set(n, (1 - damping) * personal.get(n));
-    }
+    for (const n of nodes) next.set(n, (1 - damping) * personal.get(n));
 
     for (const u of nodes) {
       const s = scores.get(u);
-      // Propagate mostly to imported dependencies (what u depends on gets authority!)
       const outs = outEdges.get(u);
       const ins = inEdges.get(u);
       const totalDeg = outs.size * 2 + ins.size;
       if (totalDeg === 0) continue;
 
       const outShare = (damping * s * 2) / totalDeg;
-      for (const v of outs) {
-        next.set(v, next.get(v) + outShare);
-      }
+      for (const v of outs) next.set(v, next.get(v) + outShare);
       const inShare = (damping * s) / totalDeg;
-      for (const v of ins) {
-        next.set(v, next.get(v) + inShare);
-      }
+      for (const v of ins) next.set(v, next.get(v) + inShare);
     }
 
     for (const [k, v] of next.entries()) scores.set(k, v);
   }
 
-  // Normalize to [0, 1]
   let maxS = 0;
   for (const v of scores.values()) if (v > maxS) maxS = v;
   if (maxS > 0) {
@@ -230,6 +231,7 @@ function runPageRank(nodes, outEdges, inEdges, seedWeights = null, iterations = 
 
 module.exports = {
   directoryAuthority,
+  loadPathAliases,
   extractImportTargets,
   buildCodeGraph,
   runPageRank,

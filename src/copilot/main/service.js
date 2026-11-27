@@ -420,6 +420,12 @@ function createCopilot({
       codeFingerprints.delete(oldest);
     }
   };
+  const summaryDirFor = (abs) =>
+    path.join(
+      dir,
+      "copilot-code-summaries",
+      crypto.createHash("sha256").update(abs).digest("hex").slice(0, 16)
+    );
   // The index follows the repo: compare a cheap fingerprint first and rebuild (in time slices) only when it moved.
   const freshSynth = (repoDir, { force = false } = {}) => {
     const abs = path.resolve(String(repoDir || ""));
@@ -436,6 +442,14 @@ function createCopilot({
       const stale = force || !codeSynths.has(abs) || (fp !== null && codeFingerprints.get(abs) !== fp);
       if (!stale) return codeSynths.get(abs);
       const synth = await createScientistSynthesizerAsync({ repoDir: abs, maxFiles: 1500, db: store.db || null, log: ragLog });
+      try {
+        if (typeof synth.codeIndex?.writeSummaryBundle === "function") {
+          const commits = gitLocalAdapter.getGitLog({ count: 15 }, { cwd: abs });
+          synth.codeIndex.writeSummaryBundle(summaryDirFor(abs), { recentCommits: commits });
+        }
+      } catch (error) {
+        logError("Failed to persist tiered summary bundle", error);
+      }
       remember(abs, synth);
       codeFingerprints.set(abs, fp);
       return synth;
@@ -478,9 +492,9 @@ function createCopilot({
         const repos = store.codeRepos.list();
         if (!repos.length) return "";
         const sections = [
-          "Connected local code repositories (vectorless Code-to-MD + PageRank RepoMap + local git):",
+          "Connected local code repositories (Layer A Context Index — 0 vectors, 0 GitHub API):",
         ];
-        let remainingChars = 4800;
+        let remainingChars = 6200;
         for (const r of repos) {
           const exists = fs.existsSync(r.path);
           const branch = exists ? gitLocalAdapter.getCurrentBranch({ cwd: r.path }) : "unknown";
@@ -492,7 +506,8 @@ function createCopilot({
             freshSynth(r.path).catch((error) => logError("Background repo refresh failed", error));
             const synth = cachedSynth(r.path);
             if (synth?.codeIndex) {
-              const mapMd = synth.codeIndex.generateRepoMapMarkdown({ maxModules: 25 });
+              const bundle = typeof synth.compileSummaryBundle === "function" ? synth.compileSummaryBundle() : null;
+              const mapMd = bundle?.layerA || synth.codeIndex.generateRepoMapMarkdown({ maxModules: 25 });
               const trimmed =
                 mapMd.length > remainingChars
                   ? mapMd.slice(0, remainingChars).trimEnd() + "\n..."
@@ -504,7 +519,7 @@ function createCopilot({
         }
         return sections.join("\n");
       },
-      search: async (query) => {
+      search: async (query, { deep = false } = {}) => {
         const repos = store.codeRepos.list();
         if (!repos.length) return null;
         const sections = [];
@@ -512,7 +527,7 @@ function createCopilot({
         for (const r of repos) {
           const synth = await freshSynth(r.path);
           if (!synth) continue;
-          const res = synth.analyze(query, { topK: 6 });
+          const res = synth.analyze(query, { topK: deep ? 8 : 6, deep });
           if (res?.markdown) {
             sections.push(res.markdown);
             for (const hit of res.evidence?.codeHits || []) {
@@ -520,7 +535,13 @@ function createCopilot({
             }
           }
         }
-        return sections.length ? { passages: sections.join("\n\n---\n\n").slice(0, 12000), files } : null;
+        return sections.length ? { passages: sections.join("\n\n---\n\n").slice(0, deep ? 16000 : 12000), files } : null;
+      },
+      readSlices: async (repoDir, sliceRequests) => {
+        const root = registeredRepoDir(repoDir);
+        const synth = root ? await freshSynth(root) : null;
+        if (!synth?.codeIndex?.readFileSlices) return [];
+        return synth.codeIndex.readFileSlices(sliceRequests);
       },
     },
     okf:
@@ -1078,6 +1099,52 @@ function createCopilot({
       logError("Failed to download repository context file", error);
       return { ok: false, error: error?.message || "Could not save file." };
     }
+  });
+  handle("code-summary-bundle", async (repoDir) => {
+    try {
+      const root = registeredRepoDir(repoDir);
+      const synth = root ? await freshSynth(root) : null;
+      if (!synth) return { ok: false, error: "Repository folder not found." };
+      const bundle = synth.compileSummaryBundle();
+      return {
+        ok: true,
+        repoName: bundle.manifest.repoName,
+        files: bundle.files,
+        manifest: bundle.manifest,
+        layerA: bundle.layerA,
+        layerATokens: bundle.layerATokens,
+      };
+    } catch (error) {
+      logError("Failed to build tiered repository summary bundle", error);
+      return { ok: false, error: error?.message || "Failed to build summary bundle." };
+    }
+  });
+  handle("code-summary-export", async (repoDir) => {
+    try {
+      const root = registeredRepoDir(repoDir);
+      const synth = root ? await freshSynth(root) : null;
+      if (!synth) return { ok: false, error: "Repository folder not found." };
+      const targetWin = win.webContents() ? BrowserWindow.fromWebContents(win.webContents()) : null;
+      const r = await dialog.showOpenDialog(targetWin, {
+        title: "Choose folder to export summary/",
+        properties: ["openDirectory", "createDirectory"],
+      });
+      if (r.canceled || !r.filePaths?.length) return { ok: false, canceled: true };
+      const outDir = path.join(r.filePaths[0], `${path.basename(synth.repoDir)}-summary`);
+      const commits = gitLocalAdapter.getGitLog({ count: 15 }, { cwd: synth.repoDir });
+      synth.codeIndex.writeSummaryBundle(outDir, { recentCommits: commits });
+      return { ok: true, path: outDir };
+    } catch (error) {
+      logError("Failed to export tiered repository summary", error);
+      return { ok: false, error: error?.message || "Could not export summary folder." };
+    }
+  });
+  handle("code-read-slices", async (repoDir, sliceRequests = []) => {
+    const root = registeredRepoDir(repoDir);
+    const synth = root ? await freshSynth(root) : null;
+    if (!synth?.codeIndex?.readFileSlices) return { ok: false, slices: [] };
+    const safeReqs = Array.isArray(sliceRequests) ? sliceRequests.slice(0, 12) : [];
+    return { ok: true, slices: synth.codeIndex.readFileSlices(safeReqs, { maxTokens: 4000 }) };
   });
   handle("start-meeting", () => {
     if (typeof onStartMeeting === "function") void onStartMeeting();

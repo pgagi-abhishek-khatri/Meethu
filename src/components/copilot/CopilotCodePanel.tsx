@@ -16,7 +16,20 @@ import { ConfirmDialog } from "../ui/dialog";
 import { useToast } from "../ui/useToast";
 import { cn } from "../lib/utils";
 import { PaneHeader, Block } from "./CopilotPane";
-import type { LocalCodeRepo, SingleCodeContextResult } from "./copilotApi";
+import type { LocalCodeRepo, SingleCodeContextResult, SummaryBundleResult } from "./copilotApi";
+
+const SECTION_TABS: { key: string; label: string }[] = [
+  { key: "00_index.md", label: "Layer A Index" },
+  { key: "10_features.md", label: "Features" },
+  { key: "20_contracts.md", label: "Contracts" },
+  { key: "30_files.md", label: "Files" },
+  { key: "40_symbols.md", label: "Symbols" },
+  { key: "50_docs.md", label: "Docs" },
+  { key: "60_config.md", label: "Config" },
+  { key: "70_data.md", label: "Data" },
+  { key: "90_coverage.md", label: "Coverage" },
+  { key: "__full__", label: "Full .md" },
+];
 
 function formatSize(bytes?: number): string {
   if (!bytes || bytes <= 0) return "";
@@ -42,25 +55,40 @@ function CopyButton({ text, label = "Copy .md" }: { text: string; label?: string
 
 function SingleContextPreviewModal({
   contextFile,
+  summaryBundle,
   onClose,
   onDownload,
+  onExportFolder,
   downloading,
+  exporting,
 }: {
   contextFile: SingleCodeContextResult | null;
+  summaryBundle?: SummaryBundleResult | null;
   onClose: () => void;
   onDownload: () => void;
+  onExportFolder?: () => void;
   downloading: boolean;
+  exporting?: boolean;
 }) {
+  const [activeTab, setActiveTab] = useState<string>("00_index.md");
+
   useEffect(() => {
     if (!contextFile) return;
+    setActiveTab(summaryBundle?.files?.["00_index.md"] ? "00_index.md" : "__full__");
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [contextFile, onClose]);
+  }, [contextFile, summaryBundle, onClose]);
 
   if (!contextFile || !contextFile.markdown) return null;
+
+  const hasBundle = Boolean(summaryBundle?.ok && summaryBundle.files);
+  const activeText =
+    activeTab !== "__full__" && hasBundle && summaryBundle?.files?.[activeTab]
+      ? summaryBundle.files[activeTab]
+      : contextFile.markdown;
 
   return (
     <div
@@ -86,9 +114,26 @@ function SingleContextPreviewModal({
                 modules · {contextFile.metrics.compressionPct}% smaller
               </span>
             )}
+            {summaryBundle?.layerATokens != null && (
+              <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                Layer A: ~{summaryBundle.layerATokens.toLocaleString()} tokens
+              </span>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
-            <CopyButton text={contextFile.markdown} />
+            <CopyButton text={activeText} />
+            {onExportFolder && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1.5 px-2.5 text-xs"
+                disabled={exporting}
+                onClick={onExportFolder}
+              >
+                {exporting ? <Loader2 size={13} className="animate-spin" /> : <FolderOpen size={13} />}
+                Export folder
+              </Button>
+            )}
             <Button
               size="sm"
               variant="outline"
@@ -97,7 +142,7 @@ function SingleContextPreviewModal({
               onClick={onDownload}
             >
               {downloading ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
-              Download
+              Download .md
             </Button>
             <Button
               variant="ghost"
@@ -110,9 +155,28 @@ function SingleContextPreviewModal({
             </Button>
           </div>
         </div>
+        {hasBundle && (
+          <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border/50 px-4 py-1.5 dark:border-white/10">
+            {SECTION_TABS.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setActiveTab(t.key)}
+                className={cn(
+                  "shrink-0 rounded-md px-2 py-1 text-[11px] font-medium transition-colors",
+                  activeTab === t.key
+                    ? "bg-primary/15 text-primary"
+                    : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="flex min-h-0 flex-1 flex-col overflow-auto p-4">
           <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-foreground/90">
-            {contextFile.markdown}
+            {activeText}
           </pre>
         </div>
       </div>
@@ -306,10 +370,12 @@ export default function CopilotCodePanel({ embedded = false }: { embedded?: bool
 
   const [repos, setRepos] = useState<LocalCodeRepo[]>([]);
   const [contextMap, setContextMap] = useState<Record<string, SingleCodeContextResult>>({});
+  const [bundleMap, setBundleMap] = useState<Record<string, SummaryBundleResult>>({});
   const [errorMap, setErrorMap] = useState<Record<string, string>>({});
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({});
   const [refreshingPath, setRefreshingPath] = useState<string | null>(null);
   const [downloadingPath, setDownloadingPath] = useState<string | null>(null);
+  const [exportingPath, setExportingPath] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   const [previewRepoPath, setPreviewRepoPath] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<LocalCodeRepo | null>(null);
@@ -448,6 +514,11 @@ export default function CopilotCodePanel({ embedded = false }: { embedded?: bool
   };
 
   const handlePreviewRepo = async (repo: LocalCodeRepo) => {
+    if (typeof api?.getSummaryBundle === "function" && !bundleMap[repo.path]) {
+      void api.getSummaryBundle(repo.path).then((b) => {
+        if (b?.ok) setBundleMap((prev) => ({ ...prev, [repo.path]: b }));
+      }).catch(() => {});
+    }
     if (contextMap[repo.path]?.markdown) {
       setPreviewRepoPath(repo.path);
       return;
@@ -461,6 +532,26 @@ export default function CopilotCodePanel({ embedded = false }: { embedded?: bool
         description: "Try restarting the app or clicking refresh.",
         variant: "destructive",
       });
+    }
+  };
+
+  const handleExportFolder = async (repo: LocalCodeRepo) => {
+    if (!api?.exportSummaryBundle) return;
+    setExportingPath(repo.path);
+    try {
+      const res = await api.exportSummaryBundle(repo.path);
+      if (res?.canceled) return;
+      if (res?.ok && res.path) {
+        toast({ title: "Exported tiered summary", description: res.path });
+      } else {
+        toast({
+          title: "Could not export summary",
+          description: res?.error || "Export failed.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setExportingPath(null);
     }
   };
 
@@ -617,12 +708,22 @@ export default function CopilotCodePanel({ embedded = false }: { embedded?: bool
 
       <SingleContextPreviewModal
         contextFile={previewRepoPath ? contextMap[previewRepoPath] ?? null : null}
+        summaryBundle={previewRepoPath ? bundleMap[previewRepoPath] ?? null : null}
         onClose={() => setPreviewRepoPath(null)}
         onDownload={() => {
           const target = repos.find((r) => r.path === previewRepoPath);
           if (target) void handleDownloadRepo(target);
         }}
+        onExportFolder={
+          api?.exportSummaryBundle
+            ? () => {
+                const target = repos.find((r) => r.path === previewRepoPath);
+                if (target) void handleExportFolder(target);
+              }
+            : undefined
+        }
         downloading={previewRepoPath !== null && downloadingPath === previewRepoPath}
+        exporting={previewRepoPath !== null && exportingPath === previewRepoPath}
       />
     </div>
   );
