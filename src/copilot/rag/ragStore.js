@@ -199,7 +199,7 @@ function createRagStore(db, { addColumn, now = Date.now } = {}) {
       "SELECT id, project_id, name, kind FROM copilot_project_files WHERE status = 'ready' AND (profile_v IS NULL OR profile_v < ?)"
     ),
     unindexed: db.prepare(
-      "SELECT id, project_id, path, name FROM copilot_project_files WHERE status IS NULL OR status IN ('queued','reading','analysing','embedding')"
+      "SELECT id, project_id, path, name FROM copilot_project_files WHERE status IS NULL OR status IN ('queued','reading','analysing','indexing','embedding')"
     ),
   };
 

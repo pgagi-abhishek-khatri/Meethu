@@ -283,6 +283,17 @@ test("with a key but file search off, the reason says so", sqlite, async () => {
   assert.match((await invoke("projects-list"))[0].files[0].error, /search is off/);
 });
 
+test("code files cut off mid-indexing are also resumed on startup", sqlite, async () => {
+  const { copilot, invoke } = setup({ env: { COPILOT_QUERY_WRITER: "0" } });
+  const pid = await invoke("project-create", "Acme");
+  const f = copilot.store.projects.addFileRow(pid, "C:/x/app.ts", "app.ts");
+  copilot.store.rag.setFile(f.id, { status: "indexing", stage: "Indexing 4 code blocks" });
+  assert.equal(copilot.resumeIndexing(), 1);
+  const row = (await invoke("projects-list"))[0].files[0];
+  assert.equal(row.status, "error");
+  assert.equal(copilot.resumeIndexing(), 0);
+});
+
 test("the meeting count is the real total, past the list's 50", sqlite, async () => {
   const { copilot, invoke } = setup();
   for (let i = 0; i < 55; i++) copilot.store.startSession(`s${i}`, `Meeting ${i}`);

@@ -123,6 +123,7 @@ function SingleContextPreviewModal({
 function RepoFileRow({
   repo,
   contextFile,
+  contextError,
   loadingContext,
   refreshing,
   downloading,
@@ -133,6 +134,7 @@ function RepoFileRow({
 }: {
   repo: LocalCodeRepo;
   contextFile?: SingleCodeContextResult | null;
+  contextError?: string | null;
   loadingContext: boolean;
   refreshing: boolean;
   downloading: boolean;
@@ -156,16 +158,17 @@ function RepoFileRow({
   ].filter(Boolean);
 
   const detail = useMemo(() => {
+    if (contextError) return contextError;
     if (contextFile?.summary) {
       return expanded
-        ? `${contextFile.summary} Local path: ${repo.path}. Approx. ${contextFile.metrics?.estMarkdownTokens.toLocaleString() ?? 0} tokens (0 vectors, 0 GitHub API).`
+        ? `${contextFile.summary} Local path: ${repo.path}. Approx. ${contextFile.metrics?.estMarkdownTokens?.toLocaleString() ?? 0} tokens (0 vectors, 0 GitHub API).`
         : contextFile.summary;
     }
     const base = `Single offline Code-to-MD context for ${repo.name}${branch ? ` (${branch})` : ""}${modulesCount ? ` with ${modulesCount} indexed modules` : ""}.`;
     return expanded
       ? `${base} Local path: ${repo.path}. Searched automatically in meetings (0 vectors, 0 GitHub API).`
       : base;
-  }, [branch, contextFile, expanded, modulesCount, repo.name, repo.path]);
+  }, [branch, contextError, contextFile, expanded, modulesCount, repo.name, repo.path]);
 
   const busy = loadingContext || refreshing;
 
@@ -184,6 +187,10 @@ function RepoFileRow({
               <Loader2 size={11} className="animate-spin" />
               {refreshing ? "Refreshing" : "Preparing"}
             </span>
+          ) : contextError ? (
+            <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[11px] text-destructive">
+              Unavailable
+            </span>
           ) : (
             <span className="rounded-full bg-success/10 px-2 py-0.5 text-[11px] text-success">
               Ready
@@ -193,15 +200,22 @@ function RepoFileRow({
         {metaParts.length > 0 && (
           <p className="mt-0.5 text-[11px] text-muted-foreground/80">{metaParts.join(" · ")}</p>
         )}
-        <p className="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
+        <p
+          className={cn(
+            "mt-0.5 text-[11.5px] leading-relaxed",
+            contextError ? "text-destructive/90" : "text-muted-foreground"
+          )}
+        >
           {detail}
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="ms-1.5 inline font-medium text-primary hover:underline"
-          >
-            {expanded ? "less" : "more"}
-          </button>
+          {!contextError && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="ms-1.5 inline font-medium text-primary hover:underline"
+            >
+              {expanded ? "less" : "more"}
+            </button>
+          )}
         </p>
       </div>
       <div className="flex shrink-0 items-center gap-0.5 opacity-70 transition-opacity group-hover:opacity-100">
@@ -210,7 +224,7 @@ function RepoFileRow({
           size="icon"
           className="h-7 w-7"
           title="Preview context .md"
-          disabled={loadingContext}
+          disabled={busy}
           onClick={onPreview}
         >
           {loadingContext ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}
@@ -220,7 +234,7 @@ function RepoFileRow({
           size="icon"
           className="h-7 w-7"
           title="Download context .md"
-          disabled={downloading}
+          disabled={downloading || refreshing}
           onClick={onDownload}
         >
           {downloading ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
@@ -230,7 +244,7 @@ function RepoFileRow({
           size="icon"
           className="h-7 w-7"
           title="Rebuild context file"
-          disabled={refreshing}
+          disabled={busy}
           onClick={onRefresh}
         >
           <RotateCcw size={13} className={refreshing ? "animate-spin" : ""} />
@@ -292,6 +306,7 @@ export default function CopilotCodePanel({ embedded = false }: { embedded?: bool
 
   const [repos, setRepos] = useState<LocalCodeRepo[]>([]);
   const [contextMap, setContextMap] = useState<Record<string, SingleCodeContextResult>>({});
+  const [errorMap, setErrorMap] = useState<Record<string, string>>({});
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({});
   const [refreshingPath, setRefreshingPath] = useState<string | null>(null);
   const [downloadingPath, setDownloadingPath] = useState<string | null>(null);
@@ -303,44 +318,65 @@ export default function CopilotCodePanel({ embedded = false }: { embedded?: bool
     async (repo: LocalCodeRepo): Promise<SingleCodeContextResult | null> => {
       if (!api) return null;
       setLoadingPaths((prev) => ({ ...prev, [repo.path]: true }));
+      setErrorMap((prev) => {
+        if (!(repo.path in prev)) return prev;
+        const next = { ...prev };
+        delete next[repo.path];
+        return next;
+      });
+      let lastError: string | null = null;
       try {
-        if (typeof api.getContextFile === "function") {
-          const res = await api.getContextFile(repo.path);
-          if (res?.ok) {
-            setContextMap((prev) => ({ ...prev, [repo.path]: res }));
-            return res;
+        try {
+          if (typeof api.getContextFile === "function") {
+            const res = await api.getContextFile(repo.path);
+            if (res?.ok) {
+              setContextMap((prev) => ({ ...prev, [repo.path]: res }));
+              return res;
+            }
+            if (res?.error) lastError = res.error;
           }
+        } catch (err) {
+          lastError = err instanceof Error ? err.message : null;
+          // Fallback when running against a dev Electron main before restart
         }
-      } catch {
-        // Fallback when running against a dev Electron main before restart
-      }
-      try {
-        if (typeof api.modules === "function") {
-          const modRes = await api.modules(repo.path);
-          if (modRes?.ok && modRes.modules) {
-            const fallback = buildFallbackContextFromModules(repo, modRes.modules);
-            setContextMap((prev) => ({ ...prev, [repo.path]: fallback }));
-            return fallback;
+        try {
+          if (typeof api.modules === "function") {
+            const modRes = await api.modules(repo.path);
+            if (modRes?.ok && modRes.modules) {
+              const fallback = buildFallbackContextFromModules(repo, modRes.modules);
+              setContextMap((prev) => ({ ...prev, [repo.path]: fallback }));
+              return fallback;
+            }
           }
+        } catch (err) {
+          lastError = lastError || (err instanceof Error ? err.message : null);
         }
-      } catch {
-        // ignore fallback failure
+        setErrorMap((prev) => ({
+          ...prev,
+          [repo.path]: lastError || "Could not load repository context from disk.",
+        }));
+        return null;
       } finally {
         setLoadingPaths((prev) => ({ ...prev, [repo.path]: false }));
       }
-      return null;
     },
     [api]
   );
 
   const loadRepos = useCallback(async () => {
     if (!api) return;
-    const list = await api.listRepos();
-    setRepos(list);
-    for (const r of list) {
-      void fetchContextForRepo(r);
+    try {
+      const list = await api.listRepos();
+      setRepos(list);
+      await Promise.all(list.map((r) => fetchContextForRepo(r)));
+    } catch (err) {
+      toast({
+        title: "Could not load repositories",
+        description: err instanceof Error ? err.message : "Failed to list local repositories.",
+        variant: "destructive",
+      });
     }
-  }, [api, fetchContextForRepo]);
+  }, [api, fetchContextForRepo, toast]);
 
   useEffect(() => {
     void loadRepos();
@@ -365,6 +401,12 @@ export default function CopilotCodePanel({ embedded = false }: { embedded?: bool
         title: "Repository ready",
         description: `${res.repo.name}-context.md built offline (${res.repo.stats?.codeModules ?? 0} modules).`,
       });
+    } catch (err) {
+      toast({
+        title: "Could not add repository",
+        description: err instanceof Error ? err.message : "Failed to index selected folder.",
+        variant: "destructive",
+      });
     } finally {
       setPicking(false);
     }
@@ -375,13 +417,31 @@ export default function CopilotCodePanel({ embedded = false }: { embedded?: bool
     setRefreshingPath(repo.path);
     try {
       const res = await api.refreshRepo(repo.path);
-      if (res.ok) {
-        await fetchContextForRepo(res.repo ?? repo);
+      if (!res?.ok) {
         toast({
-          title: "Repository updated",
-          description: `${repo.name}-context.md rebuilt from local disk.`,
+          title: "Could not rebuild repository",
+          description: res?.error || "Repository folder not found on disk.",
+          variant: "destructive",
         });
+        return;
       }
+      const nextRepo = res.repo ?? repo;
+      if (res.repo) {
+        setRepos((prev) =>
+          prev.map((item) => (item.id === nextRepo.id || item.path === repo.path ? nextRepo : item))
+        );
+      }
+      await fetchContextForRepo(nextRepo);
+      toast({
+        title: "Repository updated",
+        description: `${nextRepo.name}-context.md rebuilt from local disk.`,
+      });
+    } catch (err) {
+      toast({
+        title: "Could not rebuild repository",
+        description: err instanceof Error ? err.message : "Failed to rebuild context file.",
+        variant: "destructive",
+      });
     } finally {
       setRefreshingPath(null);
     }
@@ -449,7 +509,9 @@ export default function CopilotCodePanel({ embedded = false }: { embedded?: bool
     );
   }
 
-  const readyCount = repos.length;
+  const readyCount = repos.filter(
+    (r) => !loadingPaths[r.path] && refreshingPath !== r.path && !errorMap[r.path]
+  ).length;
   const description = repos.length
     ? `${readyCount} of ${repos.length} ready. Searched automatically when a meeting needs your codebase.`
     : "Connect a local codebase folder so meetings search your code offline (0 vectors, 0 GitHub API).";
@@ -463,6 +525,7 @@ export default function CopilotCodePanel({ embedded = false }: { embedded?: bool
               key={repo.id}
               repo={repo}
               contextFile={contextMap[repo.path]}
+              contextError={errorMap[repo.path]}
               loadingContext={Boolean(loadingPaths[repo.path])}
               refreshing={refreshingPath === repo.path}
               downloading={downloadingPath === repo.path}
@@ -527,14 +590,28 @@ export default function CopilotCodePanel({ embedded = false }: { embedded?: bool
           const targetId = confirmRemove.id;
           const targetPath = confirmRemove.path;
           setConfirmRemove(null);
-          void api.removeRepo(targetId).then(() => {
-            setContextMap((prev) => {
-              const next = { ...prev };
-              delete next[targetPath];
-              return next;
+          void api
+            .removeRepo(targetId)
+            .then(() => {
+              setContextMap((prev) => {
+                const next = { ...prev };
+                delete next[targetPath];
+                return next;
+              });
+              setErrorMap((prev) => {
+                const next = { ...prev };
+                delete next[targetPath];
+                return next;
+              });
+              return loadRepos();
+            })
+            .catch((err) => {
+              toast({
+                title: "Could not remove repository",
+                description: err instanceof Error ? err.message : "Failed to remove repository.",
+                variant: "destructive",
+              });
             });
-            return loadRepos();
-          });
         }}
       />
 

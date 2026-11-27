@@ -539,7 +539,11 @@ function createEngine({
     if (s.specs.size > MAX_SPECS) s.specs.delete(s.specs.keys().next().value);
     const preOkfClass =
       !spec.ragGate && okf?.registry?.hasBundle?.() && okf?.router?.classifyQuery
-        ? okf.router.classifyQuery({ query: spec.focus, spec, registry: okf.registry })
+        ? okf.router.classifyQuery({
+            query: spec.focus,
+            spec: { ...spec, localCodeMode: hasLocalCode() },
+            registry: okf.registry,
+          })
         : null;
     const okfNeedsPrepare = preOkfClass
       ? preOkfClass.route === "okf" || preOkfClass.route === "mixed"
@@ -694,7 +698,7 @@ function createEngine({
               if (okf && okf.router && okf.registry) {
                 const routed = await okf.router.routeContext({
                   query: spec.focus,
-                  spec,
+                  spec: { ...spec, localCodeMode: hasLocalCode() },
                   registry: okf.registry,
                   ragResult,
                   budget: spec.deep ? 7000 : 2800,

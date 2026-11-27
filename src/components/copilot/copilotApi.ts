@@ -36,7 +36,7 @@ export interface CopilotSettings {
   keyError?: string; // the key just pasted was refused
 }
 
-export type FileStatus = "queued" | "reading" | "analysing" | "embedding" | "ready" | "error";
+export type FileStatus = "queued" | "reading" | "analysing" | "indexing" | "embedding" | "ready" | "error";
 export interface ProjectFile {
   id: number;
   path: string;

@@ -176,3 +176,112 @@ test("cancelling the save dialog writes nothing", sqlite, async () => {
   assert.equal(res.ok, false);
   assert.equal(res.canceled, true);
 });
+
+test("picking an unnormalized path and refreshing does not duplicate the repo", sqlite, async () => {
+  const r = repo();
+  const unnormalized = r + path.sep + ".";
+  const invoke = setup({ picked: unnormalized });
+  const picked = await invoke("code-repo-pick");
+  assert.equal(picked.ok, true);
+  assert.equal(picked.repo.path, path.resolve(r));
+  const refreshed = await invoke("code-repo-refresh", r);
+  assert.equal(refreshed.ok, true);
+  const list = await invoke("code-repos-list");
+  assert.equal(list.length, 1);
+  assert.equal(list[0].path, path.resolve(r));
+});
+
+test("end-to-end: picked repo flows through code-context and live ask() prompt", sqlite, async () => {
+  const r = repo();
+  const handlers = new Map();
+  const promptCalls = [];
+  const electron = {
+    BrowserWindow: class {
+      static fromWebContents() {
+        return null;
+      }
+      constructor() {
+        this.webContents = { send() {}, isDestroyed: () => false, on() {} };
+      }
+      setMenuBarVisibility() {}
+      setResizable() {}
+      setMinimumSize() {}
+      setBounds() {}
+      setOpacity() {}
+      setPosition() {}
+      getPosition() {
+        return [0, 0];
+      }
+      focus() {}
+      close() {}
+      once() {}
+      on() {}
+      isDestroyed() {
+        return false;
+      }
+      isVisible() {
+        return true;
+      }
+      showInactive() {}
+      show() {}
+      hide() {}
+      getBounds() {
+        return { x: 0, y: 0, width: 400, height: 600 };
+      }
+      isMinimized() {
+        return false;
+      }
+    },
+    screen: {
+      getCursorScreenPoint: () => ({ x: 10, y: 10 }),
+      getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
+      getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
+    },
+    ipcMain: { handle: (n, fn) => handlers.set(n, fn), on() {} },
+    dialog: {
+      showOpenDialog: async () => ({ canceled: false, filePaths: [r] }),
+    },
+    safeStorage: null,
+  };
+  const copilot = createCopilot({
+    dir: fs.mkdtempSync(path.join(os.tmpdir(), "copilot-e2e-")),
+    env: { OPENROUTER_API_KEY: "k", COPILOT_QUERY_WRITER: "0" },
+    electron,
+    loadRenderer: () => Promise.resolve(),
+    setupAlwaysOnTop: () => {},
+    getActiveEvents: () => [],
+    engineOptions: {
+      mainModel: async ({ messages }) => {
+        promptCalls.push(messages?.[1]?.content || "");
+        return {
+          text: "TITLE: Charge\nUses chargeCard.\nCONFIDENCE: high",
+          sources: [],
+          usage: null,
+          firstTokenMs: 1,
+          totalMs: 2,
+        };
+      },
+      client: { systemOne: async () => ({ answers: {}, inputTokens: 1 }) },
+      llm: async () => ({ text: "s" }),
+    },
+  });
+  try {
+    const invoke = (name, ...a) => handlers.get(`copilot:${name}`)({}, ...a);
+
+    const picked = await invoke("code-repo-pick");
+    assert.equal(picked.ok, true);
+
+    const ctx = await invoke("code-context", r);
+    assert.equal(ctx.ok, true);
+    assert.match(ctx.markdown, /chargeCard/);
+
+    const jobId = await invoke("ask", { text: "where is chargeCard implemented?" });
+    assert.ok(jobId);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(promptCalls.length, 1);
+    assert.match(promptCalls[0], /chargeCard/);
+    assert.match(promptCalls[0], /src\/pay\.js/);
+  } finally {
+    copilot.close();
+  }
+});

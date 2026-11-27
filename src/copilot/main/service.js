@@ -424,7 +424,13 @@ function createCopilot({
   const freshSynth = (repoDir, { force = false } = {}) => {
     const abs = path.resolve(String(repoDir || ""));
     if (!abs || !fs.existsSync(abs)) return Promise.resolve(null);
-    if (codeBuilds.has(abs)) return codeBuilds.get(abs);
+    if (codeBuilds.has(abs)) {
+      if (!force) return codeBuilds.get(abs);
+      return codeBuilds
+        .get(abs)
+        .catch(() => null)
+        .then(() => freshSynth(abs, { force: true }));
+    }
     const job = (async () => {
       const fp = await repoFingerprint(abs);
       const stale = force || !codeSynths.has(abs) || (fp !== null && codeFingerprints.get(abs) !== fp);
@@ -962,7 +968,11 @@ function createCopilot({
     const repoPath = r.filePaths[0];
     const synth = await freshSynth(repoPath, { force: true });
     if (!synth) return { ok: false, error: "Could not read selected folder." };
-    const saved = store.codeRepos.upsert(repoPath, path.basename(repoPath), synth.codeIndex.stats);
+    const saved = store.codeRepos.upsert(
+      synth.repoDir,
+      path.basename(synth.repoDir),
+      synth.codeIndex.stats
+    );
     return { ok: true, repo: saved ? enrichRepo(saved) : null };
   });
   handle("code-repo-refresh", async (repoDir) => {
@@ -975,7 +985,9 @@ function createCopilot({
   handle("code-repo-remove", (id) => {
     const target = store.codeRepos.list().find((r) => String(r.id) === String(id));
     if (!target) return false;
-    codeSynths.delete(path.resolve(target.path));
+    const abs = path.resolve(target.path);
+    codeSynths.delete(abs);
+    codeFingerprints.delete(abs);
     store.codeRepos.remove(target.id);
     return true;
   });
@@ -1127,7 +1139,7 @@ function createCopilot({
         rag: store.rag,
         ask,
         log: ragLog,
-        now,
+        now: Date.now,
       }).catch((error) => {
         ragLog({ event: "profile_backfill_failed", error: error?.message });
       });

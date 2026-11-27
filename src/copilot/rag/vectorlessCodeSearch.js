@@ -652,14 +652,14 @@ function* indexSteps(
     maxModules = 200,
     maxChars = 180000,
   } = {}) {
-    const repoName = path.basename(rootDir) || "Repository";
+    const repoName = path.basename(absRoot) || "Repository";
     const sorted = [...modules].sort((a, b) => a.relPath.localeCompare(b.relPath));
 
     const headerLines = [
       `# Repository Context: ${repoName}`,
       `> Generated offline as a single unified Code-to-MD context file for AI reasoning & future actions (0 vector calls, 0 GitHub API calls).`,
       "",
-      `- **Root Path**: \`${rootDir}\``,
+      `- **Root Path**: \`${absRoot}\``,
       ...(activeBranch ? [`- **Active Git Branch**: \`${activeBranch}\` (${branchesCount} branches tracked)`] : []),
       `- **Code Modules Indexed**: ${modules.length}`,
       `- **Total AST/MD Chunks**: ${documents.length}`,
@@ -694,7 +694,6 @@ function* indexSteps(
     let includedModules = 0;
 
     for (const mod of sorted.slice(0, maxModules)) {
-      const block = mod.markdown.replace(/^# Module:/, `### Module: \`${mod.relPath}\` (`) + "\n---\n\n";
       const cleanBlock = `### \`${mod.relPath}\`\n` + mod.markdown.split("\n").slice(1).join("\n") + "\n\n";
       if (body.length + cleanBlock.length > maxChars) break;
       body += cleanBlock;

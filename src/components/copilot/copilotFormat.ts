@@ -4,7 +4,7 @@ import { getCachedPlatform } from "../../utils/platform.ts";
 import { validateHotkey } from "../../utils/hotkeyValidator.ts";
 // Small helpers shared by the Copilot page and the live window.
 
-export const WORKING = new Set(["queued", "reading", "analysing", "embedding"]);
+export const WORKING = new Set(["queued", "reading", "analysing", "indexing", "embedding"]);
 
 export const when = (t: number) =>
   new Date(t).toLocaleString([], {
